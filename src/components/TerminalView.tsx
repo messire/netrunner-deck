@@ -59,12 +59,16 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
       fontFamily: '"Cascadia Mono", Consolas, "JetBrains Mono", monospace',
       fontSize: 13.5,
       lineHeight: 1.25,
-      cursorBlink: true,
-      cursorStyle: "block",
+      // Snapshot mode has no cursor position from the server; hide xterm's own
+      // cursor so it does not sit at the end of the text. Streaming attach restores it.
+      cursorBlink: false,
+      cursorStyle: "bar",
+      cursorInactiveStyle: "none",
+      cursorWidth: 1,
       scrollback: 5000,
       allowProposedApi: true,
       theme: {
-        background: "#080406", foreground: "#cfe9ea", cursor: "#67E0E3", cursorAccent: "#120A10",
+        background: "#080406", foreground: "#cfe9ea", cursor: "#080406", cursorAccent: "#080406",
         selectionBackground: "#143A3C",
         black: "#120A10", red: "#FF2B4A", green: "#3FA7AA", yellow: "#FCEE0A", blue: "#67E0E3",
         magenta: "#C0132A", cyan: "#67E0E3", white: "#9BE8EA",
