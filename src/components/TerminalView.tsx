@@ -2,7 +2,7 @@ import { createEffect, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type Tree } from "../api";
-import { classify, promptLine, stripAnsi, type LineKind } from "../dialogue";
+import { blockWidth, classify, promptLine, stripAnsi, type LineKind } from "../dialogue";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
   user: "\x1b[38;2;255;246;168m",
@@ -55,7 +55,7 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     decorations = [];
     term.reset();
     term.write(out, () => {
-      decorate(kinds);
+      decorate(kinds, plain);
       placeCursor(plain);
     });
   }
@@ -73,7 +73,7 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     return map;
   }
 
-  function decorate(kinds: LineKind[]) {
+  function decorate(kinds: LineKind[], plain: string[]) {
     const rows = rowsByLine();
     const buf = term.buffer.active;
     const cursorRow = buf.baseY + buf.cursorY;
@@ -86,10 +86,11 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
       const first = rows[i]?.[0];
       const last = rows[j]?.[rows[j].length - 1];
       if (first !== undefined && last !== undefined) {
+        const width = blockWidth(plain.slice(i, j + 1), term.cols);
         for (let r = first; r <= last; r++) {
           const marker = term.registerMarker(r - cursorRow);
           if (!marker) continue;
-          const deco = term.registerDecoration({ marker, x: 0, width: term.cols, layer: "bottom" });
+          const deco = term.registerDecoration({ marker, x: 0, width, layer: "bottom" });
           if (!deco) continue;
           const pos = r === first ? (r === last ? "only" : "top") : r === last ? "bottom" : "mid";
           deco.onRender((el) => {
@@ -111,7 +112,10 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     const buf = term.buffer.active;
     const viewportRow = row - buf.baseY;
     if (viewportRow < 0 || viewportRow >= term.rows) return;
-    const col = Math.min(term.cols - 1, (plain[idx].match(/^[❯›>]\s?/)?.[0].length ?? 0));
+    // The snapshot carries no cursor position; typing appends, so the end of the
+    // prompt line is the best estimate until the streaming attach lands.
+    const typed = [...plain[idx].replace(/\s+$/, "")].length;
+    const col = Math.min(term.cols - 1, Math.max(typed, 2));
     term.options.cursorStyle = "block";
     term.options.cursorInactiveStyle = "outline";
     term.write(`\x1b[${viewportRow + 1};${col + 1}H`);

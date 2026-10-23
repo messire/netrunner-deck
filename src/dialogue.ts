@@ -28,7 +28,10 @@ function startKind(line: string): LineKind {
   return null;
 }
 
-const isContinuation = (line: string) => /^\s{2,}\S/.test(line);
+// Indented lines continue a message, except tool summaries ("Ran 2 shell
+// commands"), tool results ("⎿ …") and status lines that Claude Code also indents.
+const isContinuation = (line: string) =>
+  /^\s{2,}\S/.test(line) && !TOOL_SUMMARY.test(line.trim()) && !/^\s*[⎿└├│]/.test(line) && !/^\s*[※✻✽✶✳·]\s/.test(line);
 const isBlank = (line: string) => line.trim() === "";
 
 export function classify(lines: string[]): LineKind[] {
@@ -55,6 +58,13 @@ export function classify(lines: string[]): LineKind[] {
 }
 
 /** Index of the line that carries the input prompt, if the CLI shows one. */
+/** Display width of a block: its widest line, in cells, capped at `cols`. */
+export function blockWidth(lines: string[], cols: number): number {
+  let w = 0;
+  for (const line of lines) w = Math.max(w, [...line.replace(/\s+$/, "")].length);
+  return Math.min(cols, w + 2);
+}
+
 export function promptLine(lines: string[]): number {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (/^[❯›>]\s*$/.test(lines[i]) || /^[❯›]\s/.test(lines[i])) return i;
