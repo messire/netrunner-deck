@@ -36,6 +36,18 @@ export default function Sidebar(p: Props) {
     const rank: Record<string, number> = { working: 0, blocked: 1, idle: 2, done: 3, unknown: 4 };
     return list.sort((a, b) => (rank[a.agent_status] ?? 9) - (rank[b.agent_status] ?? 9));
   });
+  // Session name as Herdr shows it: workspace (worktree branch), plus the tab
+  // when the workspace hosts more than one agent. `name` wins if the user renamed it.
+  const agentLabel = (a: Tree["agents"][number]) => {
+    const t = p.tree;
+    if (a.name) return a.name;
+    const ws = t?.workspaces.find((w) => w.workspace_id === a.workspace_id);
+    const wsName = ws?.worktree?.branch ?? ws?.label ?? a.workspace_id;
+    const siblings = t?.agents.filter((x) => x.workspace_id === a.workspace_id).length ?? 1;
+    if (siblings <= 1) return wsName;
+    const tab = t?.tabs.find((x) => x.tab_id === a.tab_id);
+    return `${wsName} · ${tab?.label ?? a.tab_id}`;
+  };
   const ctxOf = (tokens?: Record<string, string>) => {
     const raw = tokens?.ctx ?? "";
     const n = parseInt(raw, 10);
@@ -108,7 +120,8 @@ export default function Sidebar(p: Props) {
         {(a) => (
           <div class={`row ${a.pane_id === p.selectedPane ? "sel" : ""}`} onClick={() => p.onSelectPane(a.pane_id)}>
             <span class={`st ${statusClass(a.agent_status)}`} />
-            <span class="nm">{a.name ?? a.display_agent ?? a.agent ?? a.pane_id}</span>
+            <span class="nm">{agentLabel(a)}</span>
+            <span class="tag">{(a.display_agent ?? a.agent ?? "").toUpperCase()}</span>
             <Show when={ctxOf(a.tokens) !== null}>
               <span class="seg small"><i style={{ width: `${ctxOf(a.tokens)}%` }} /></span>
               <span class="pc">{ctxOf(a.tokens)}</span>
