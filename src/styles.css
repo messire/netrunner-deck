@@ -59,8 +59,8 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .tab.on{color:#120A10;background:var(--yel)}
 .tabs .right{margin-left:auto;display:flex;align-items:center;gap:14px;padding-right:14px;font:12px Consolas,monospace;white-space:nowrap}
 .glitch{color:var(--yel);font-weight:700;letter-spacing:1px;position:relative}
-.glitch:after{content:attr(data-text);position:absolute;left:1px;top:0;color:var(--red);clip-path:inset(0 0 100% 0);animation:glitch 4.5s infinite steps(1)}
-@keyframes glitch{0%,88%{clip-path:inset(0 0 100% 0)}89%{clip-path:inset(30% 0 40% 0);transform:translateX(-2px)}91%{clip-path:inset(60% 0 10% 0);transform:translateX(2px)}93%{clip-path:inset(10% 0 70% 0)}95%,100%{clip-path:inset(0 0 100% 0)}}
+.glitch:after{content:attr(data-text);position:absolute;left:1px;top:0;color:var(--red);clip-path:inset(0 0 100% 0);animation:glitch 11s infinite steps(1)}
+@keyframes glitch{0%,93%{clip-path:inset(0 0 100% 0)}93.5%{clip-path:inset(30% 0 40% 0);transform:translateX(-2px)}95%{clip-path:inset(60% 0 10% 0);transform:translateX(2px)}96.5%{clip-path:inset(10% 0 70% 0)}97.5%,100%{clip-path:inset(0 0 100% 0)}}
 .term{margin:8px;position:relative;border:1px solid var(--red);background:rgba(8,4,6,.85);display:grid;grid-template-rows:26px 1fr;min-height:0}
 .term:before,.term:after{content:"";position:absolute;width:14px;height:14px;border:2px solid var(--red);pointer-events:none}
 .term:before{left:-2px;top:-2px;border-right:0;border-bottom:0}.term:after{right:-2px;bottom:-2px;border-left:0;border-top:0}
@@ -75,10 +75,12 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .keys b{display:inline-block;min-width:20px;text-align:center;border:1px solid var(--cy);color:var(--cy);font-weight:700;padding:0 5px;margin-right:6px;font-size:10px}
 .keys .right{margin-left:auto;display:flex;gap:18px;font:11px Consolas,monospace;color:var(--mut)}
 /* dialogue frames drawn under the text by xterm decorations */
-.xterm .dlg{box-sizing:border-box;pointer-events:none;border-left:1px solid;border-right:1px solid;overflow:visible}
+.xterm .dlg{box-sizing:content-box;pointer-events:none;border-left:1px solid;border-right:1px solid;overflow:visible;padding:0 10px;margin-left:-11px}
+.xterm .dlg-top,.xterm .dlg-only{padding-top:3px;margin-top:-4px}
+.xterm .dlg-bottom,.xterm .dlg-only{padding-bottom:3px}
 .xterm .dlg-agent{border-color:#2BFF88;background:rgba(43,255,136,.06)}
 .xterm .dlg-user{border-color:#FCEE0A;background:rgba(252,238,10,.06)}
 .xterm .dlg-top,.xterm .dlg-only{border-top:1px solid}
 .xterm .dlg-bottom,.xterm .dlg-only{border-bottom:1px solid}
-.xterm .dlg-top:after,.xterm .dlg-only:after{content:attr(data-who);position:absolute;right:6px;top:-7px;padding:0 4px;font:8px Consolas,monospace;letter-spacing:1.5px;background:#080406;color:inherit}
+.xterm .dlg-top:after,.xterm .dlg-only:after{content:attr(data-who);position:absolute;right:8px;top:-7px;padding:0 4px;font:8px Consolas,monospace;letter-spacing:1.5px;background:#080406;color:inherit}
 .xterm .dlg-agent:after{color:#2BFF88}.xterm .dlg-user:after{color:#FCEE0A}
