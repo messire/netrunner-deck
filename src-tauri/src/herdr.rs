@@ -8,6 +8,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
+#[cfg(not(windows))]
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -25,7 +26,7 @@ pub enum HerdrError {
 }
 
 impl serde::Serialize for HerdrError {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         s.serialize_str(&self.to_string())
     }
 }
