@@ -1,13 +1,20 @@
 import { createEffect, on, onCleanup, onMount } from "solid-js";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type Tree } from "../api";
+import { classify, promptLine, stripAnsi, type LineKind } from "../dialogue";
+
+const COLOR: Record<Exclude<LineKind, null>, string> = {
+  user: "\x1b[38;2;255;246;168m",
+  agent: "\x1b[38;2;143;245;184m",
+};
 
 /**
  * Milestone 1 pane view: an xterm that shows Herdr's ANSI snapshot of the pane
  * (`pane.read`) and forwards keystrokes with `pane.send_text` / `pane.send_keys`.
  * Refreshes on `pane.updated` events (via `tick`) with a short debounce, plus a
- * slow fallback poll. Milestone 2 swaps the snapshot for a streaming attach.
+ * slow fallback poll. Dialogue blocks are recoloured and framed with xterm
+ * decorations; the cursor is placed on the CLI's prompt line.
  */
 export default function TerminalView(p: { paneId: string; tick: number; tree?: Tree }) {
   let host!: HTMLDivElement;
@@ -15,6 +22,7 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
   let fit: FitAddon;
   let lastText = "";
   let debounce: number | undefined;
+  let decorations: IDecoration[] = [];
 
   const pane = () => p.tree?.panes.find((x) => x.pane_id === p.paneId);
   const header = () => {
@@ -30,12 +38,82 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
       const { read } = await api.paneRead(p.paneId, Math.max(200, term.rows * 4));
       if (read.text === lastText) return;
       lastText = read.text;
-      term.reset();
-      term.write(read.text.replace(/\n/g, "\r\n"));
+      render(read.text);
     } catch {
       /* server went away; the offline banner covers it */
     }
   }
+
+  function render(text: string) {
+    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    const plain = lines.map(stripAnsi);
+    const kinds = classify(plain);
+    const out = lines
+      .map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${line}\x1b[39m` : line))
+      .join("\r\n");
+    for (const d of decorations) d.dispose();
+    decorations = [];
+    term.reset();
+    term.write(out, () => {
+      decorate(kinds);
+      placeCursor(plain);
+    });
+  }
+
+  // Logical line → buffer rows (long lines wrap in xterm).
+  function rowsByLine(): number[][] {
+    const buf = term.buffer.active;
+    const map: number[][] = [];
+    for (let r = 0; r < buf.length; r++) {
+      const line = buf.getLine(r);
+      if (!line) break;
+      if (line.isWrapped && map.length) map[map.length - 1].push(r);
+      else map.push([r]);
+    }
+    return map;
+  }
+
+  function decorate(kinds: LineKind[]) {
+    const rows = rowsByLine();
+    const buf = term.buffer.active;
+    const cursorRow = buf.baseY + buf.cursorY;
+    let i = 0;
+    while (i < kinds.length) {
+      const kind = kinds[i];
+      if (!kind) { i++; continue; }
+      let j = i;
+      while (j + 1 < kinds.length && kinds[j + 1] === kind) j++;
+      const first = rows[i]?.[0];
+      const last = rows[j]?.[rows[j].length - 1];
+      if (first !== undefined && last !== undefined) {
+        for (let r = first; r <= last; r++) {
+          const marker = term.registerMarker(r - cursorRow);
+          if (!marker) continue;
+          const deco = term.registerDecoration({ marker, x: 0, width: term.cols, layer: "bottom" });
+          if (!deco) continue;
+          const pos = r === first ? (r === last ? "only" : "top") : r === last ? "bottom" : "mid";
+          deco.onRender((el) => { el.className = `dlg dlg-${kind} dlg-${pos}`; });
+          decorations.push(deco);
+        }
+      }
+      i = j + 1;
+    }
+  }
+
+  function placeCursor(plain: string[]) {
+    const idx = promptLine(plain);
+    const rows = rowsByLine();
+    const row = idx >= 0 ? rows[idx]?.[0] : undefined;
+    if (row === undefined) { term.options.cursorStyle = "underline"; term.options.cursorInactiveStyle = "none"; return; }
+    const buf = term.buffer.active;
+    const viewportRow = row - buf.baseY;
+    if (viewportRow < 0 || viewportRow >= term.rows) return;
+    const col = Math.min(term.cols - 1, (plain[idx].match(/^[❯›>]\s?/)?.[0].length ?? 0));
+    term.options.cursorStyle = "block";
+    term.options.cursorInactiveStyle = "outline";
+    term.write(`\x1b[${viewportRow + 1};${col + 1}H`);
+  }
+
   const schedule = () => { clearTimeout(debounce); debounce = window.setTimeout(refresh, 120); };
 
   // Printable text goes as text; control sequences map to Herdr key names.
@@ -59,16 +137,12 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
       fontFamily: '"Cascadia Mono", Consolas, "JetBrains Mono", monospace',
       fontSize: 13.5,
       lineHeight: 1.25,
-      // Snapshot mode has no cursor position from the server; hide xterm's own
-      // cursor so it does not sit at the end of the text. Streaming attach restores it.
-      cursorBlink: false,
-      cursorStyle: "bar",
-      cursorInactiveStyle: "none",
-      cursorWidth: 1,
+      cursorBlink: true,
+      cursorStyle: "block",
       scrollback: 5000,
       allowProposedApi: true,
       theme: {
-        background: "#080406", foreground: "#cfe9ea", cursor: "#080406", cursorAccent: "#080406",
+        background: "#080406", foreground: "#cfe9ea", cursor: "#67E0E3", cursorAccent: "#120A10",
         selectionBackground: "#143A3C",
         black: "#120A10", red: "#FF2B4A", green: "#3FA7AA", yellow: "#FCEE0A", blue: "#67E0E3",
         magenta: "#C0132A", cyan: "#67E0E3", white: "#9BE8EA",
@@ -81,7 +155,7 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     term.open(host);
     fit.fit();
     term.onData(onData);
-    const ro = new ResizeObserver(() => fit.fit());
+    const ro = new ResizeObserver(() => { fit.fit(); if (lastText) render(lastText); });
     ro.observe(host);
     const poll = setInterval(refresh, 2500);
     onCleanup(() => { ro.disconnect(); clearInterval(poll); term.dispose(); });
