@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Netrunner Deck",
+  "version": "0.1.0",
+  "identifier": "dev.messire.netrunner-deck",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Netrunner Deck",
+        "width": 1600,
+        "height": 980,
+        "minWidth": 1100,
+        "minHeight": 700,
+        "decorations": false,
+        "transparent": false,
+        "backgroundColor": "#0B0609"
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": []
+  }
+}
