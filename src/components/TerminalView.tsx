@@ -92,7 +92,10 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
           const deco = term.registerDecoration({ marker, x: 0, width: term.cols, layer: "bottom" });
           if (!deco) continue;
           const pos = r === first ? (r === last ? "only" : "top") : r === last ? "bottom" : "mid";
-          deco.onRender((el) => { el.className = `dlg dlg-${kind} dlg-${pos}`; });
+          deco.onRender((el) => {
+            el.classList.add("dlg", `dlg-${kind}`, `dlg-${pos}`);
+            if (pos === "top" || pos === "only") el.dataset.who = kind === "user" ? "YOU" : (pane()?.display_agent ?? pane()?.agent ?? "AGENT").toUpperCase();
+          });
           decorations.push(deco);
         }
       }
