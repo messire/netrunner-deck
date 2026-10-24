@@ -188,7 +188,14 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     term.open(host);
     fit.fit();
     term.onData(onData);
-    const ro = new ResizeObserver(() => { fit.fit(); if (lastText) render(lastText); });
+    let lastSize = "";
+    const ro = new ResizeObserver(() => {
+      const size = `${host.clientWidth}x${host.clientHeight}`;
+      if (size === lastSize) return;
+      lastSize = size;
+      fit.fit();
+      if (lastText) render(lastText);
+    });
     ro.observe(host);
     const poll = setInterval(refresh, 2500);
     onCleanup(() => { ro.disconnect(); clearInterval(poll); term.dispose(); });
