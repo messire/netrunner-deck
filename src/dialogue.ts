@@ -17,13 +17,26 @@ const TOOL_CALL = /^[A-Za-z_][\w.-]*\s*\(/;
 // Collapsed tool lines ("Ran 2 shell commands", "Searched for …", "Called Slack …").
 const TOOL_SUMMARY = /^(Ran|Read|Wrote|Updated|Edited|Searched|Found|Listed|Fetched|Called|Created|Deleted|Checked|Queried|Opened|Viewed|Loaded|Executed|Invoked|Used)\b/;
 
-function startKind(line: string): LineKind {
-  const user = /^>\s+(\S.*)?$/.exec(line);
-  if (user) return "user";
+const DIM = /\x1b\[(?:2|90|38;5;(?:8|24[0-9]|25[0-5]))m/;
+const RED = /\x1b\[(?:31|91|38;5;(?:1|9|196|160|203)|38;2;(?:1[89]\d|2\d\d);(?:\d|[1-9]\d|1[01]\d);\d+)m/;
+
+/** Style of the first styled run of a line, before any printable text. */
+function leadStyle(raw: string | undefined, plain: string): { dim: boolean; red: boolean } {
+  if (!raw) return { dim: false, red: false };
+  const head = raw.slice(0, Math.max(0, raw.indexOf(plain.trim().slice(0, 1) || "\u0000")) + 8);
+  return { dim: DIM.test(head), red: RED.test(head) };
+}
+
+function startKind(line: string, raw: string | undefined, isPrompt: boolean): LineKind {
+  // Claude Code echoes the user's turn as "> text" (older) or "❯ text" (newer);
+  // the live input line also starts with "❯", so it is excluded by index.
+  if (!isPrompt && /^[>❯›]\s+\S/.test(line)) return "user";
   const agent = /^[●⏺]\s+(.*)$/.exec(line);
   if (agent) {
     const rest = agent[1] ?? "";
     if (TOOL_CALL.test(rest) || TOOL_SUMMARY.test(rest)) return null;
+    const style = leadStyle(raw, line);
+    if (style.dim || style.red) return null; // system notes and errors are not replies
     return "agent";
   }
   return null;
@@ -38,11 +51,12 @@ const isBlank = (line: string) => line.trim() === "";
 /** `raw` (with ANSI) is optional: dim-styled indented lines are tool summaries, never message text. */
 export function classify(lines: string[], raw?: string[]): LineKind[] {
   const kinds: LineKind[] = new Array(lines.length).fill(null);
+  const prompt = promptLine(lines);
   let current: LineKind = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const dim = raw ? /^(?:\s|\x1b\[[0-9;]*m)*\x1b\[(?:2|90|38;5;(?:8|24[0-9]|25[0-5]))m/.test(raw[i]) : false;
-    const start = startKind(line);
+    const dim = raw ? leadStyle(raw[i], line).dim : false;
+    const start = startKind(line, raw?.[i], i === prompt);
     if (start) {
       current = start;
       kinds[i] = start;
