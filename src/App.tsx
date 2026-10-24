@@ -6,6 +6,7 @@ import TabBar from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
 import KeyBar from "./components/KeyBar";
 import { createLatestGate } from "./latest";
+import { debounceTrailing, routeEvent } from "./events";
 
 export default function App() {
   const [selectedPane, setSelectedPane] = createSignal<string | null>(null);
@@ -14,7 +15,6 @@ export default function App() {
   // Account number of the `cswap switch` in flight (null = idle) and the last switch failure.
   const [switching, setSwitching] = createSignal<number | null>(null);
   const [switchError, setSwitchError] = createSignal<SwitchError | null>(null);
-  const [tick, setTick] = createSignal(0);
 
   // Fetchers never reject: a Solid resource in the errored state throws on read,
   // which would take the whole render down. Errors go to signals; the previous
@@ -70,18 +70,20 @@ export default function App() {
     return pane?.pane_id ?? null;
   };
 
+  // Every Herdr event is tree metadata (architecture.md F1–F3; there is no
+  // output event — TerminalView polls). A burst of events becomes one
+  // `herdr_tree` call 200 ms after the burst ends.
+  const refetchTreeSoon = debounceTrailing(() => { refetchTree(); }, 200);
+
   onMount(() => {
     let un1: (() => void) | undefined, un2: (() => void) | undefined;
     api.onEvent((ev) => {
       setOffline(null);
-      // Any structural event re-reads the tree; pane output bumps the terminal tick.
-      const kind = String(ev.event ?? ev.type ?? "");
-      if (kind.startsWith("pane.updated")) setTick((n) => n + 1);
-      else refetchTree();
+      if (routeEvent(ev, currentPane()) === "tree") refetchTreeSoon();
     }).then((u) => (un1 = u));
     api.onOffline((m) => setOffline(m)).then((u) => (un2 = u));
     const timer = setInterval(() => { refetchTree(); refetchAccounts(); }, 15000);
-    onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); });
+    onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); refetchTreeSoon.cancel(); });
   });
 
   const activeAccount = () => accounts()?.accounts.find((a) => a.active);
@@ -127,7 +129,7 @@ export default function App() {
       <main class="main">
         <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} />
         <Show when={currentPane()} fallback={<div class="empty">NO PANE SELECTED · open a workspace in Herdr</div>}>
-          {(id) => <TerminalView paneId={id()} tick={tick()} tree={tree()} />}
+          {(id) => <TerminalView paneId={id()} tree={tree()} />}
         </Show>
         <Show when={offline()}>{(m) => <div class="offline">◇ HERDR OFFLINE — {m()}</div>}</Show>
       </main>

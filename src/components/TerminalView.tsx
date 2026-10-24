@@ -3,6 +3,7 @@ import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type Tree } from "../api";
 import { blockWidth, classify, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
+import { mapInput } from "../keys";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
   user: "\x1b[38;2;255;246;168m",
@@ -11,12 +12,13 @@ const COLOR: Record<Exclude<LineKind, null>, string> = {
 
 /**
  * Milestone 1 pane view: an xterm that shows Herdr's ANSI snapshot of the pane
- * (`pane.read`) and forwards keystrokes with `pane.send_text` / `pane.send_keys`.
- * Refreshes on `pane.updated` events (via `tick`) with a short debounce, plus a
- * slow fallback poll. Dialogue blocks are recoloured and framed with xterm
- * decorations; the cursor is placed on the CLI's prompt line.
+ * (`pane.read`) and forwards keystrokes with `pane.send_text` / `pane.send_keys`
+ * (mapping in `src/keys.ts`). Herdr emits no output event (architecture.md F3),
+ * so the snapshot is refreshed by a 2.5 s poll and shortly after own input.
+ * Dialogue blocks are recoloured and framed with xterm decorations; the cursor
+ * is placed on the CLI's prompt line.
  */
-export default function TerminalView(p: { paneId: string; tick: number; tree?: Tree }) {
+export default function TerminalView(p: { paneId: string; tree?: Tree }) {
   let host!: HTMLDivElement;
   let term: Terminal;
   let fit: FitAddon;
@@ -171,20 +173,13 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     debounce = window.setTimeout(refresh, 120);
   };
 
-  // Printable text goes as text; control sequences map to Herdr key names.
-  const KEYS: Record<string, string> = {
-    "\r": "enter", "\x7f": "backspace", "\t": "tab", "\x1b": "esc",
-    "\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left",
-    "\x1b[H": "home", "\x1b[F": "end", "\x1b[5~": "pageup", "\x1b[6~": "pagedown", "\x1b[3~": "delete",
-  };
+  // Printable text → pane.send_text; control sequences → pane.send_keys names;
+  // anything Herdr cannot name is dropped (never pasted as text, F5).
   function onData(data: string) {
-    const key = KEYS[data];
-    if (key) return void api.sendKeys(p.paneId, [key]).then(schedule, (e) => setError(String(e)));
-    if (data.length === 1 && data.charCodeAt(0) < 32) {
-      const letter = String.fromCharCode(data.charCodeAt(0) + 96);
-      return void api.sendKeys(p.paneId, [`ctrl+${letter}`]).then(schedule, (e) => setError(String(e)));
-    }
-    api.sendText(p.paneId, data).then(schedule, (e) => setError(String(e)));
+    const input = mapInput(data);
+    if ("drop" in input) { console.debug("input dropped:", input.reason); return; }
+    const sent = "keys" in input ? api.sendKeys(p.paneId, input.keys) : api.sendText(p.paneId, input.text);
+    sent.then(schedule, (e) => setError(String(e)));
   }
 
   onMount(() => {
@@ -225,7 +220,6 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
   });
 
   createEffect(on(() => p.paneId, () => { lastText = ""; refresh(); }, { defer: true }));
-  createEffect(on(() => p.tick, schedule, { defer: true }));
 
   return (
     <div class="term">
