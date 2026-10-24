@@ -166,7 +166,8 @@ fn start_event_pump(app: AppHandle) {
                 "pane.updated",
                 "pane.focused",
                 "pane.agent_detected",
-                "pane.agent_status_changed",
+                // `pane.agent_status_changed` is per-pane (needs pane_id); status
+                // changes also arrive as `pane_updated`, so it is not subscribed here.
                 "layout.updated",
             ],
             |event| handle.emit("herdr://event", event).is_ok(),
