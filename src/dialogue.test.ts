@@ -48,7 +48,7 @@ describe("helpers", () => {
     expect(blockWidth(["ab   ", "abcd"], 80)).toBe(6);
     expect(blockWidth(["x".repeat(200)], 80)).toBe(80);
   });
-  it.fails("dim summary starting with a digit is not a continuation (audit #10)", () => {
+  it("256-colour dim summary starting with a digit is not a continuation (audit #10)", () => {
     const raw = ["\x1b[0m\x1b[38;2;155;232;234m● \x1b[0mReply", "  \x1b[1m\x1b[38;5;240m8 files changed\x1b[0m"];
     const kinds = classify(raw.map(stripAnsi), raw);
     expect(kinds[1]).toBeNull();
