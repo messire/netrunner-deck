@@ -78,7 +78,6 @@ export const api = {
   focus: (target: "workspace" | "tab" | "pane", id: string) => invoke("herdr_focus", { target, id }),
   cswapList: () => invoke<CswapList>("cswap_list"),
   cswapSwitch: (number: number) => invoke("cswap_switch", { number }),
-  debug: (line: string) => invoke("debug_log", { line }).catch(() => {}),
   onEvent: (cb: (event: Record<string, unknown>) => void): Promise<UnlistenFn> =>
     listen<Record<string, unknown>>("herdr://event", (e) => cb(e.payload)),
   onOffline: (cb: (message: string) => void): Promise<UnlistenFn> =>
