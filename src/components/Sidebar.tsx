@@ -1,9 +1,18 @@
 import { For, Show, createMemo } from "solid-js";
-import { accountLabel, usageOf, type CswapList, type Tree, type AgentStatus } from "../api";
+import { accountLabel, usageOf, type CswapList, type Tree, type Workspace, type Agent, type AgentStatus } from "../api";
+
+export interface SwitchError { number: number; message: string }
+interface Group { label: string; items: Workspace[] }
+interface Spaces { top: Workspace[]; groups: Group[] }
 
 interface Props {
   tree?: Tree;
   accounts?: CswapList;
+  /** Why `cswap list` failed; shown in the Accounts block, the rest of the UI stays alive. */
+  accountsError?: string | null;
+  /** Account number of the `cswap switch` in flight, null/undefined when idle. */
+  switching?: number | null;
+  switchError?: SwitchError | null;
   selectedPane: string | null;
   onSelectPane: (paneId: string) => void;
   onSwitchAccount: (number: number) => void;
@@ -14,11 +23,11 @@ const statusClass = (s: AgentStatus) => (s === "working" ? "w" : s === "blocked"
 
 export default function Sidebar(p: Props) {
   // Worktree children sit under their repo; everything else is a top-level space.
-  const spaces = createMemo(() => {
+  const spaces = createMemo((): Spaces => {
     const t = p.tree;
-    if (!t) return [];
-    const groups = new Map<string, { label: string; items: typeof t.workspaces }>();
-    const top: typeof t.workspaces = [];
+    if (!t) return { top: [], groups: [] };
+    const groups = new Map<string, Group>();
+    const top: Workspace[] = [];
     for (const w of t.workspaces) {
       if (w.worktree) {
         const key = w.worktree.repo_key;
@@ -38,7 +47,7 @@ export default function Sidebar(p: Props) {
   });
   // Session name as Herdr shows it: workspace (worktree branch), plus the tab
   // when the workspace hosts more than one agent. `name` wins if the user renamed it.
-  const agentLabel = (a: Tree["agents"][number]) => {
+  const agentLabel = (a: Agent) => {
     const t = p.tree;
     if (a.name) return a.name;
     const ws = t?.workspaces.find((w) => w.workspace_id === a.workspace_id);
@@ -58,7 +67,7 @@ export default function Sidebar(p: Props) {
     <aside class="side">
       <div class="plate">Spaces</div>
       <Show when={p.tree} fallback={<div class="row micro">connecting…</div>}>
-        <For each={(spaces() as any).top ?? []}>
+        <For each={spaces().top}>
           {(w) => (
             <>
               <div class={`row ${panesOf(w.workspace_id).some((x) => x.pane_id === p.selectedPane) ? "sel" : ""}`}
@@ -70,8 +79,8 @@ export default function Sidebar(p: Props) {
             </>
           )}
         </For>
-        <For each={(spaces() as any).groups ?? []}>
-          {(g: { label: string; items: Tree["workspaces"] }) => (
+        <For each={spaces().groups}>
+          {(g) => (
             <>
               <div class="row"><span class="st" /><span class="nm ws">{g.label}</span><span class="cnt">{g.items.length}</span></div>
               <For each={g.items}>
@@ -90,29 +99,38 @@ export default function Sidebar(p: Props) {
       </Show>
 
       <div class="plate" style="margin-top:14px">Accounts</div>
-      <Show when={p.accounts} fallback={<div class="row micro">cswap…</div>}>
-        <For each={p.accounts!.accounts}>
-          {(a, i) => {
-            const u = usageOf(a);
-            return (
-              <div class={`bio ${a.active ? "" : "off"}`} onDblClick={() => !a.active && p.onSwitchAccount(a.number)}
-                   title={a.active ? a.email : `${a.email} — double-click to switch`}>
-                <div class="hd"><span class="num">{String(i() + 1).padStart(2, "0")}</span><span class="acc">{accountLabel(a)}</span>
-                  <span class="tag">{a.active ? "ACTIVE" : "DBL-CLICK · SWITCH"}</span></div>
-                <Quota label="5H" pct={u.five} />
-                <Quota label="7D" pct={u.week} />
-                <For each={u.scoped}>{(s) => <Quota label={s.name.slice(0, 3).toUpperCase()} pct={s.pct} />}</For>
-                <Show when={a.active}>
-                  <div class="cool">
-                    <div><div class="ic">⟳</div><div class="t">{u.fiveReset ?? "--"}</div><div class="l">5H RESET</div></div>
-                    <div><div class="ic">⟳</div><div class="t">{u.weekReset ?? "--"}</div><div class="l">7D RESET</div></div>
-                    <For each={u.scoped}>{(s) => <div><div class="ic">◈</div><div class="t">{s.reset ?? "--"}</div><div class="l">{s.name.toUpperCase()}</div></div>}</For>
-                  </div>
-                </Show>
-              </div>
-            );
-          }}
-        </For>
+      <Show when={p.accountsError}>
+        {(e) => <div class="row micro" style="color:var(--red)" title={e()}>cswap недоступен: {e()}</div>}
+      </Show>
+      <Show when={p.accounts} fallback={<Show when={!p.accountsError}><div class="row micro">cswap…</div></Show>}>
+        {(acc) => (
+          <For each={acc().accounts}>
+            {(a, i) => {
+              const u = usageOf(a);
+              const busy = () => p.switching === a.number;
+              const failed = () => { const e = p.switchError; return e && e.number === a.number ? e.message : null; };
+              const canSwitch = () => !a.active && p.switching == null;
+              return (
+                <div class={`bio ${a.active ? "" : "off"}`} onDblClick={() => canSwitch() && p.onSwitchAccount(a.number)}
+                     title={a.active ? a.email : `${a.email} — double-click to switch`}>
+                  <div class="hd"><span class="num">{String(i() + 1).padStart(2, "0")}</span><span class="acc">{accountLabel(a)}</span>
+                    <span class="tag">{a.active ? "ACTIVE" : busy() ? "SWITCHING…" : "DBL-CLICK · SWITCH"}</span></div>
+                  <Show when={failed()}>{(m) => <div class="micro" style="color:var(--red)" title={m()}>switch failed: {m()}</div>}</Show>
+                  <Quota label="5H" pct={u.five} />
+                  <Quota label="7D" pct={u.week} />
+                  <For each={u.scoped}>{(s) => <Quota label={s.name.slice(0, 3).toUpperCase()} pct={s.pct} />}</For>
+                  <Show when={a.active}>
+                    <div class="cool">
+                      <div><div class="ic">⟳</div><div class="t">{u.fiveReset ?? "--"}</div><div class="l">5H RESET</div></div>
+                      <div><div class="ic">⟳</div><div class="t">{u.weekReset ?? "--"}</div><div class="l">7D RESET</div></div>
+                      <For each={u.scoped}>{(s) => <div><div class="ic">◈</div><div class="t">{s.reset ?? "--"}</div><div class="l">{s.name.toUpperCase()}</div></div>}</For>
+                    </div>
+                  </Show>
+                </div>
+              );
+            }}
+          </For>
+        )}
       </Show>
 
       <div class="plate" style="margin-top:8px">Agents <span class="tag lc">by recency</span></div>

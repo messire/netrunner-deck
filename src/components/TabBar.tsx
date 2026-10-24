@@ -1,4 +1,4 @@
-import { For, createMemo } from "solid-js";
+import { For, createMemo, createSignal, onCleanup } from "solid-js";
 import type { Tree } from "../api";
 
 export default function TabBar(p: { tree?: Tree; selectedPane: string | null; onSelectPane: (id: string) => void }) {
@@ -44,7 +44,8 @@ export default function TabBar(p: { tree?: Tree; selectedPane: string | null; on
 
 function Clock() {
   const fmt = () => new Date().toTimeString().slice(0, 5);
-  let el!: HTMLSpanElement;
-  setInterval(() => { if (el) el.textContent = fmt(); }, 10000);
-  return <span class="d" ref={el}>{fmt()}</span>;
+  const [now, setNow] = createSignal(fmt());
+  const timer = setInterval(() => setNow(fmt()), 10000);
+  onCleanup(() => clearInterval(timer));
+  return <span class="d">{now()}</span>;
 }
