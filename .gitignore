@@ -4,3 +4,10 @@ src-tauri/target/
 src-tauri/gen/
 *.log
 .DS_Store
+
+# Claude Code project agents/skills live only locally
+.claude/
+deck-debug.log
+probe.txt
+dev.log
+check.log
