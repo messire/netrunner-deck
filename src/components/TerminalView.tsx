@@ -45,9 +45,20 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
   }
 
   function render(text: string) {
-    const lines = text.replace(/\r\n?/g, "\n").split("\n");
-    const plain = lines.map(stripAnsi);
-    const kinds = classify(plain);
+    const raw = text.replace(/\r\n?/g, "\n").split("\n");
+    const rawPlain = raw.map(stripAnsi);
+    const rawKinds = classify(rawPlain);
+    // Give every dialogue block breathing room: a spacer row before and after
+    // it when the neighbouring line is not already blank, so frames never touch.
+    const lines: string[] = [], plain: string[] = [], kinds: LineKind[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const k = rawKinds[i];
+      const prevK = i > 0 ? rawKinds[i - 1] : null;
+      if (k && k !== prevK && i > 0 && rawPlain[i - 1].trim() !== "") { lines.push(""); plain.push(""); kinds.push(null); }
+      lines.push(raw[i]); plain.push(rawPlain[i]); kinds.push(k);
+      const nextK = i + 1 < raw.length ? rawKinds[i + 1] : null;
+      if (k && k !== nextK && i + 1 < raw.length && rawPlain[i + 1].trim() !== "") { lines.push(""); plain.push(""); kinds.push(null); }
+    }
     const out = lines
       .map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${line}\x1b[39m` : line))
       .join("\r\n");

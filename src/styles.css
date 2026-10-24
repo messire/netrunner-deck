@@ -58,9 +58,14 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .tab{padding:0 16px;display:flex;align-items:center;gap:8px;color:var(--tcy);font-weight:600;letter-spacing:.5px;font-size:12px;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 100%,0 100%);margin-right:-4px;white-space:nowrap;cursor:pointer}
 .tab.on{color:#120A10;background:var(--yel)}
 .tabs .right{margin-left:auto;display:flex;align-items:center;gap:14px;padding-right:14px;font:12px Consolas,monospace;white-space:nowrap}
-.glitch{color:var(--yel);font-weight:700;letter-spacing:1px;position:relative}
-.glitch:after{content:attr(data-text);position:absolute;left:1px;top:0;color:var(--red);clip-path:inset(0 0 100% 0);animation:glitch 11s infinite steps(1)}
-@keyframes glitch{0%,93%{clip-path:inset(0 0 100% 0)}93.5%{clip-path:inset(30% 0 40% 0);transform:translateX(-2px)}95%{clip-path:inset(60% 0 10% 0);transform:translateX(2px)}96.5%{clip-path:inset(10% 0 70% 0)}97.5%,100%{clip-path:inset(0 0 100% 0)}}
+.glitch{color:var(--yel);font-weight:700;letter-spacing:1px;position:relative;display:inline-block;animation:glitch-jitter 5s infinite steps(1)}
+.glitch:before,.glitch:after{content:attr(data-text);position:absolute;left:0;top:0;clip-path:inset(0 0 100% 0)}
+.glitch:before{color:var(--cy);animation:glitch-a 5s infinite steps(1)}
+.glitch:after{color:var(--red);animation:glitch-b 5s infinite steps(1)}
+/* ~0.7s of interference every 5s: the text itself jitters while red/cyan slices tear off it */
+@keyframes glitch-jitter{0%,85%{transform:none;opacity:1}86%{transform:translateX(-2px) skewX(-8deg)}88%{transform:translateX(2px)}90%{transform:none;opacity:.6}92%{transform:translateX(-1px) skewX(6deg);opacity:1}94%{transform:translateX(1px)}96%{transform:none;opacity:.8}98%,100%{transform:none;opacity:1}}
+@keyframes glitch-a{0%,85%{clip-path:inset(0 0 100% 0)}86%{clip-path:inset(10% 0 60% 0);transform:translateX(3px)}88%{clip-path:inset(50% 0 20% 0);transform:translateX(-3px)}90%{clip-path:inset(0 0 70% 0);transform:translateX(2px)}92%{clip-path:inset(60% 0 0 0);transform:translateX(-2px)}94%{clip-path:inset(30% 0 30% 0);transform:translateX(3px)}96%{clip-path:inset(0 0 85% 0);transform:translateX(-1px)}98%,100%{clip-path:inset(0 0 100% 0)}}
+@keyframes glitch-b{0%,85%{clip-path:inset(0 0 100% 0)}86%{clip-path:inset(60% 0 10% 0);transform:translateX(-3px)}88%{clip-path:inset(10% 0 50% 0);transform:translateX(3px)}90%{clip-path:inset(70% 0 0 0);transform:translateX(-2px)}92%{clip-path:inset(0 0 60% 0);transform:translateX(2px)}94%{clip-path:inset(40% 0 40% 0);transform:translateX(-3px)}96%{clip-path:inset(80% 0 0 0);transform:translateX(1px)}98%,100%{clip-path:inset(0 0 100% 0)}}
 .term{margin:8px;position:relative;border:1px solid var(--red);background:rgba(8,4,6,.85);display:grid;grid-template-rows:26px 1fr;min-height:0}
 .term:before,.term:after{content:"";position:absolute;width:14px;height:14px;border:2px solid var(--red);pointer-events:none}
 .term:before{left:-2px;top:-2px;border-right:0;border-bottom:0}.term:after{right:-2px;bottom:-2px;border-left:0;border-top:0}
@@ -76,8 +81,8 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .keys .right{margin-left:auto;display:flex;gap:18px;font:11px Consolas,monospace;color:var(--mut)}
 /* dialogue frames drawn under the text by xterm decorations */
 .xterm .dlg{box-sizing:content-box;pointer-events:none;border-left:1px solid;border-right:1px solid;overflow:visible;padding:0 10px;margin-left:-11px}
-.xterm .dlg-top,.xterm .dlg-only{padding-top:3px;margin-top:-4px}
-.xterm .dlg-bottom,.xterm .dlg-only{padding-bottom:3px}
+.xterm .dlg-top,.xterm .dlg-only{padding-top:4px;margin-top:-5px}
+.xterm .dlg-bottom,.xterm .dlg-only{padding-bottom:4px}
 .xterm .dlg-agent{border-color:#2BFF88;background:rgba(43,255,136,.06)}
 .xterm .dlg-user{border-color:#FCEE0A;background:rgba(252,238,10,.06)}
 .xterm .dlg-top,.xterm .dlg-only{border-top:1px solid}
