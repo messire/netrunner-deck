@@ -1,14 +1,15 @@
 /**
  * Routing of Herdr `events.subscribe` events (docs/architecture.md F1–F3).
  *
- * Every event is metadata about the tree (workspaces, tabs, panes, agents).
- * There is no output event: `pane_updated` carries `pane: PaneInfo` (F2) and
- * `pane_output_changed` exists in the schema but is never emitted (F3), so no
- * event may drive a terminal refresh — the pane view polls (TerminalView).
- * When the fork starts emitting `pane_output_changed` (M1.5) this is the place
- * to add a `"tick"` route gated on `currentPane`.
+ * Almost every event is metadata about the tree (workspaces, tabs, panes,
+ * agents): `pane_updated` carries `pane: PaneInfo` (F2), not output. The one
+ * output event is the fork's `pane_output_changed` (M1.5): coalesced per pane
+ * on the server, with the pane's content `revision`. It becomes a `"tick"`
+ * only for the pane on screen; other panes' output is irrelevant to the view
+ * (attention is shown on the session map from `pane_updated`). Upstream Herdr
+ * never sends it, so the pane view keeps a slow poll as fallback.
  */
-export type EventRoute = "tree" | "ignore";
+export type EventRoute = "tree" | "tick" | "ignore";
 
 const TREE_PREFIXES = ["workspace_", "worktree_", "tab_"];
 const TREE_EVENTS = new Set([
@@ -23,14 +24,18 @@ const TREE_EVENTS = new Set([
   "layout_updated",
 ]);
 
-/** Pure. `currentPane` is unused until a per-pane route exists (see above). */
-export function routeEvent(ev: unknown, _currentPane: string | null): EventRoute {
+/** Pure. `currentPane` gates the output tick to the pane on screen. */
+export function routeEvent(ev: unknown, currentPane: string | null): EventRoute {
   if (typeof ev !== "object" || ev === null || Array.isArray(ev)) return "ignore";
   const raw = (ev as { event?: unknown }).event;
   if (typeof raw !== "string" || raw === "") return "ignore";
   // The wire form is snake_case; subscriptions use dotted names (F1) — be
   // tolerant of the dotted spelling should it ever be echoed back.
   const name = raw.replace(/\./g, "_");
+  if (name === "pane_output_changed") {
+    const pane = (ev as { pane_id?: unknown }).pane_id;
+    return currentPane !== null && pane === currentPane ? "tick" : "ignore";
+  }
   if (TREE_EVENTS.has(name)) return "tree";
   if (TREE_PREFIXES.some((p) => name.startsWith(p))) return "tree";
   return "ignore";

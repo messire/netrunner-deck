@@ -116,22 +116,29 @@ M1b хвост: R16 (после R5, R7, R9, R15) → R17
 
 Порядок: M1.5 → M2 → M3 → M4 → M5.
 
-### M1.5 (дополнено R9)
+### M1.5 — **реализовано 2026-10-24** (форк: `pane.output_changed` + `revision` + навигационные клавиши; Deck: tick-маршрут, адаптивный поллинг, fallback-подписка)
 
-- **Патч форка: имена навигационных клавиш** в `parse_key_combo` (`home end pageup pagedown insert delete`) — без него Deck не может послать эти клавиши через `send_keys`; после патча убрать их из `UNNAMED_IN_HERDR` в `src/keys.ts`.
- — форк: `pane.output_changed` и настоящий `revision`
+**Форк** (ветка `feat/accounts-sidebar-section`, коммиты после `2d25924b`):
+- `src/app/output_events.rs` — `OutputEventTracker`: per-pane коалесцирование ≤ 1 события / 100 мс, хвостовая доставка, `revision = TerminalRuntime::content_seq()`; юнит-тесты (burst → последняя ревизия, независимость панелей, повтор ревизии не эмитится).
+- `src/server/headless.rs` — после `render_dirty.take()` источники PTY-damage попадают в трекер; флаш перед ожиданием цикла; дедлайн трекера учтён в `select!`.
+- `src/app/api/panes.rs` — `pane.read.revision = content_seq()` вместо `0`.
+- `src/api/schema/events.rs` + `src/api/subscriptions.rs` — `Subscription::PaneOutputChanged {}` (глобальная); схема `docs/next/api/herdr-api.schema.json` и `socket-api.mdx` дополнены; тест доставки.
+- `src/config/keybinds.rs` — `home end pageup|page_up|pgup pagedown|page_down|pgdn insert|ins delete|del`.
+- CI форка (`punk-windows.yml`) гоняет эти тесты перед публикацией сборки.
 
-**Цель.** Дать Deck честный триггер вместо поллинга 2.5 с: эмитить существующий `EventKind::PaneOutputChanged` (`pane_id`, `workspace_id`, `revision`) коалесцированно (≤ N/с на панель) и возвращать реальный `revision` в `pane.read` вместо `0` (F3, F4). Схема уже есть — изменений контракта нет, только эмиссия; диff в форке малый, стоимость rebase низкая.
+**Deck**:
+- `src-tauri/src/lib.rs` — подписка `pane.output_changed` добавляется к базовому набору; при `HerdrError::Api` (upstream не знает имя) pump переподключается без неё, без баннера OFFLINE.
+- `src/events.ts` — `routeEvent` → `"tick"` для `pane_output_changed` с `pane_id` панели на экране; `App` → `outputTick` → `TerminalView.schedule()`.
+- `src/components/TerminalView.tsx` — поллинг 2.5 с до первого tick, затем 10 с; чтение с уже применённой чётной `revision` пропускается.
+- `src/keys.ts` — навигационные клавиши больше не отбрасываются.
 
-**Зависимости.** M1a (R3/R4 — pump готов принимать); не блокирует M1b. В Deck — вернуть `tick` в `routeEvent` (R7) для `pane_output_changed` с совпадающим `pane_id`, сравнивать `revision` вместо текста.
-
-**DoD.** В форке: тест на эмиссию и коалесцирование по правилу CLAUDE.md форка («multiplicative paths»: один scalar per event, без формата снапшота внутри горячего цикла); в Deck: при молчащей выбранной панели `pane.read` не вызывается чаще поллинга-fallback (который можно поднять до 10 с).
+**Не сделано / отложено.** Фильтр подписки по `pane_id` на сервере (сейчас Deck получает события всех панелей и фильтрует сам — при 15 активных панелях это ≤ 150 маленьких событий/с, ring buffer 512 с опросом 100 мс не переполняется; пересмотреть в M2 по ADR).
 
 ### M2 — потоковое подключение к панели
 
 **Цель.** Убрать снапшоты: Deck получает начальное состояние + дельты, xterm ведёт реальный курсор, нет `term.reset()` и мерцания; прокрутка/выделение и ширины в ячейках решаются естественно (остатки п.8/п.11).
 
-**Шаг 0 — ADR `docs/adr/0001-pane-streaming.md` (architecture-documenter, до кода).** Сравнить:
+**Шаг 0 — ADR `docs/adr/0001-pane-stream.md` — ✅ написан 2026-10-24 (Status: Proposed; рекомендация: A сразу → B `pane.surface` как целевой M2, C отклонён).** Сравнивались:
 - (A) Deck как клиент **endpoint generation 1** (F7: `PaneSurface`/`PaneSurfacePatch`, bincode-кодек, уже с ресайзом, дельтами, реконнектом, multi-client);
 - (B) новый JSON-метод `pane.stream` в форке (вариант v1).
 
@@ -203,7 +210,7 @@ M1b хвост: R16 (после R5, R7, R9, R15) → R17
 **Неделя 2 — M1b**
 5. R2b (CI с Rust-шагами, clippy как предупреждения) и R5 — Rust-поток; R7, R9, R11 → R12, R13', R14' — UI-поток.
 6. R16 документация по итоговому состоянию, затем R17 (21×статус, clippy `-D`).
-7. После R17: открыть M1.5 в форке (эмиссия `pane.output_changed`) и шаг 0 ADR M2 — до любого кода стриминга.
+7. ✅ После R17: M1.5 в форке и Deck реализован (см. §6); шаг 0 ADR M2 — `docs/adr/0001-pane-stream.md` — до любого кода стриминга.
 
 Ранние сигналы (из критики): нет зелёного `npm run typecheck && npm test` к концу дня 1; R3 на второй итерации проверки; `src/__fixtures__/pane-read/` пуст к старту R12; в `architecture.md` всё ещё «[предположение]» у формата событий; ADR 0001 без упоминания `PaneSurfacePatch`.
 

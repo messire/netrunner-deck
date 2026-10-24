@@ -101,8 +101,10 @@ layout.updated
 agent_detected|agent_status_changed`, `layout_updated` и любого имени с префиксом
 `workspace_`/`worktree_`/`tab_`; остальное — `"ignore"`. Точечное написание терпимо
 (`.` → `_`). Все `"tree"`-события → один `herdr_tree` через `debounceTrailing(…, 200 мс)`.
-Маршрута `"tick"` (обновление панели) нет: события вывода у Herdr нет (F3); он появится
-вместе с `pane_output_changed` из M1.5. Любое событие также снимает баннер OFFLINE.
+`pane_output_changed` (форк, M1.5) → `"tick"`, только если `pane_id` совпадает с панелью
+на экране; для других панелей — `"ignore"` (метаданных оно не несёт). `"tick"` → счётчик
+`outputTick` в `App` → `TerminalView.schedule()` (тот же 120 мс debounce, что и у
+собственного ввода). Любое событие также снимает баннер OFFLINE.
 
 ### Pane view (`TerminalView.tsx`)
 
@@ -168,10 +170,10 @@ data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost`
 | F1 | События приходят в поле `event` в **snake_case** (`pane_updated`, `workspace_created`); подписка принимает точечные имена (`pane.updated`). | `src/api/schema/events.rs:115,193-194`; `tests/subscription_socket_tests.rs:171` |
 | F2 | `pane_updated` — событие **метаданных** (имя агента, токены, заголовок), payload `pane: PaneInfo`; на смену label/title приходит. | `events.rs:500-502`; `app/api.rs:696`; `terminal_titles.rs:73` |
 | F2a | Глобальных подписок на `pane.agent_status_changed`, `pane.scroll_changed`, `pane.output_matched` нет — они требуют `pane_id`; подписка с неизвестным/неполным именем отвергается целиком. | `events.rs:60-66`; проверено 2026-10-24 |
-| F3 | `pane.output_changed` (`pane_id`, `workspace_id`, `revision`) есть в схеме, но сервером **не эмитится**. События вывода нет. | `events.rs:521-525` |
-| F4 | `pane.read` → `{read:{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}}`; `revision` всегда `0`; `lines` ≤ 1000; `format=ansi` — отрендеренные строки экрана, не сырой поток. | `schema/panes.rs:729-738`; `app/api/panes.rs:1543-1548`; `api_helpers.rs:117` |
+| F3 | `pane.output_changed` (`pane_id`, `workspace_id`, `revision`): upstream **не эмитит** и не даёт подписки. **Форк (M1.5)**: подписка `pane.output_changed` (глобальная, без фильтра), эмиссия из headless-цикла по PTY-damage, коалесцирование ≤ 1 события / 100 мс / панель с хвостовой доставкой, `revision = TerminalRuntime::content_seq()`. Pump Deck пробует подписку с ним и при `Api`-ошибке переподключается без него (upstream-совместимость). | форк `src/app/output_events.rs`, `src/server/headless.rs`, `src/api/subscriptions.rs`; Deck `src-tauri/src/lib.rs` |
+| F4 | `pane.read` → `{read:{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}}`; `revision`: upstream всегда `0`, форк — `content_seq` (чётное = стабильное содержимое, нечётное = запись в процессе); `lines` ≤ 1000; `format=ansi` — отрендеренные строки экрана, не сырой поток. Deck пропускает чтение с уже применённой чётной ревизией. | `schema/panes.rs:729-738`; `app/api/panes.rs:1543-1548`; `api_helpers.rs:117` |
 | F5 | `pane.send_text` оборачивает текст в bracketed paste (`\x1b[200~…\x1b[201~`), если панель его включила (Claude Code включает). Escape-последовательности через `send_text` приходят как вставка. | `app/api_helpers.rs:25-32` |
-| F6 | `pane.send_keys` принимает имена `config::parse_key_combo` (`keybinds.rs:1281-1343`): модификаторы `ctrl/shift/alt/meta/super/hyper`, ключи `space enter return esc tab backspace left right up down minus comma period slash backslash quote semicolon colon percent ampersand backtick plus`, одиночный символ, `f<N>`; `shift+tab` → backtab. **Не знает** `home/end/pageup/pagedown/insert/delete` — на них сервер отвечает `invalid_key`; Deck такие клавиши отбрасывает (`src/keys.ts`) до патча форка. | `src/config/keybinds.rs:1281-1343`; `app/api/panes.rs:2046`; проверено R9 |
+| F6 | `pane.send_keys` принимает имена `config::parse_key_combo` (`keybinds.rs:1281-1343`): модификаторы `ctrl/shift/alt/meta/super/hyper`, ключи `space enter return esc tab backspace left right up down minus comma period slash backslash quote semicolon colon percent ampersand backtick plus`, одиночный символ, `f<N>`; `shift+tab` → backtab. Upstream **не знает** `home/end/pageup/pagedown/insert/delete` (`invalid_key`); форк (M1.5) принимает `home end pageup|page_up|pgup pagedown|page_down|pgdn insert|ins delete|del`, Deck шлёт канонические имена (`src/keys.ts`). | `src/config/keybinds.rs:1281-1343`; `app/api/panes.rs:2046`; проверено R9 |
 | F7 | У Herdr есть собственный thin-client протокол (`PaneSurface`/`PaneSurfacePatch`, ресайз, дельты, реконнект) — «endpoint generation 1», стабильный контракт. | `src/protocol/{endpoint,wire,surface_delta}.rs`; `tests/client_mode.rs` |
 | F8 | Серверный listener — `interprocess` local socket; параллельные подключения на Windows могут дать `ERROR_PIPE_BUSY`. | `src/api/server.rs:7` |
 | F9 | Есть `pane.wait_for_output` (long-poll по паттерну) и `events.wait`. | `schema.rs:133`; `events.rs:95-112` |
@@ -183,9 +185,10 @@ data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost`
 - Нет позиции курсора: Deck ставит курсор в конец строки промпта `❯` (оценка).
 - Каждый снапшот перерисовывается целиком (`term.reset()`): прокрутка/выделение сбрасываются —
   поэтому R14' откладывает снапшот, пока пользователь читает историю или держит выделение.
-- Триггер обновления — только поллинг и собственный ввод (см. F3). Задержка до 2,5 с.
+- Триггер обновления — собственный ввод, `pane_output_changed` (форк, ≤ 100 мс + 120 мс debounce)
+  и поллинг: 2,5 с, пока не пришёл первый tick, затем 10 с как страховка. На upstream — только поллинг.
 - Ширины символов для рамок — из таблицы `defaultWidthOf`, не из буфера xterm (остаток п.11).
-- Навигационные клавиши не доходят до панели (F6).
+- На upstream Herdr навигационные клавиши не доходят до панели (F6); на форке доходят.
 
 ## Переменные окружения
 

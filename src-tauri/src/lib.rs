@@ -277,44 +277,73 @@ fn truncate_chars(text: &str, max: usize) -> String {
 /// events; every other exit (refused subscription, closed stream, transport
 /// error) is an `Err` and is surfaced as `herdr://offline` with the error
 /// text, then retried after a short pause.
+/// Subscriptions every Herdr build accepts (names must match Herdr's
+/// `Subscription` enum exactly; one unknown name rejects the whole set).
+const BASE_SUBSCRIPTIONS: &[&str] = &[
+    "workspace.created",
+    "workspace.updated",
+    "workspace.renamed",
+    "workspace.closed",
+    "workspace.focused",
+    "tab.created",
+    "tab.closed",
+    "tab.focused",
+    "tab.renamed",
+    "tab.moved",
+    "pane.created",
+    "pane.closed",
+    "pane.updated",
+    "pane.focused",
+    "pane.agent_detected",
+    // `pane.agent_status_changed` is per-pane (needs pane_id); status
+    // changes also arrive as `pane_updated`, so it is not subscribed here.
+    "layout.updated",
+];
+
+/// Fork-only (M1.5): coalesced output notifications with a content revision.
+/// Upstream Herdr rejects the name, so the pump falls back to the base set.
+const OUTPUT_SUBSCRIPTION: &str = "pane.output_changed";
+
+fn subscription_set(with_output: bool) -> Vec<&'static str> {
+    let mut names = BASE_SUBSCRIPTIONS.to_vec();
+    if with_output {
+        names.push(OUTPUT_SUBSCRIPTION);
+    }
+    names
+}
+
+/// A subscription-set rejection (as opposed to a transport failure) is the
+/// server saying it does not know one of the names.
+fn is_subscription_rejection(err: &herdr::HerdrError) -> bool {
+    matches!(err, herdr::HerdrError::Api { .. })
+}
+
 fn start_event_pump(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        let handle = app.clone();
-        let result = herdr::subscribe(
-            // Names must match Herdr's `Subscription` enum exactly; an unknown
-            // one makes the server reject the whole subscription (R4 surfaces it).
-            &[
-                "workspace.created",
-                "workspace.updated",
-                "workspace.renamed",
-                "workspace.closed",
-                "workspace.focused",
-                "tab.created",
-                "tab.closed",
-                "tab.focused",
-                "tab.renamed",
-                "tab.moved",
-                "pane.created",
-                "pane.closed",
-                "pane.updated",
-                "pane.focused",
-                "pane.agent_detected",
-                // `pane.agent_status_changed` is per-pane (needs pane_id); status
-                // changes also arrive as `pane_updated`, so it is not subscribed here.
-                "layout.updated",
-            ],
-            |event| handle.emit("herdr://event", event).is_ok(),
-        );
-        match result {
-            Ok(()) => {
-                tracing::info!("herdr event consumer stopped accepting events; retrying");
+    std::thread::spawn(move || {
+        let mut with_output = true;
+        loop {
+            let handle = app.clone();
+            let names = subscription_set(with_output);
+            let result =
+                herdr::subscribe(&names, |event| handle.emit("herdr://event", event).is_ok());
+            match result {
+                Ok(()) => {
+                    tracing::info!("herdr event consumer stopped accepting events; retrying");
+                }
+                Err(err) if with_output && is_subscription_rejection(&err) => {
+                    // Older server without the fork's output event: drop it and
+                    // reconnect at once; the pane view keeps polling.
+                    tracing::warn!(%err, "server rejected {OUTPUT_SUBSCRIPTION}; subscribing without it");
+                    with_output = false;
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "herdr event stream ended; reconnecting");
+                    let _ = app.emit("herdr://offline", err.to_string());
+                }
             }
-            Err(err) => {
-                tracing::warn!(%err, "herdr event stream ended; reconnecting");
-                let _ = app.emit("herdr://offline", err.to_string());
-            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
         }
-        std::thread::sleep(std::time::Duration::from_secs(2));
     });
 }
 
@@ -415,6 +444,34 @@ mod tests {
         );
         assert_eq!(focus_method("tab").unwrap(), ("tab.focus", "tab_id"));
         assert_eq!(focus_method("pane").unwrap(), ("pane.focus", "pane_id"));
+    }
+
+    #[test]
+    fn subscription_set_adds_output_event_only_when_asked() {
+        let base = subscription_set(false);
+        assert!(!base.contains(&OUTPUT_SUBSCRIPTION));
+        assert!(!base.contains(&"tab.updated"), "not a Herdr event");
+        assert!(
+            !base.contains(&"pane.agent_status_changed"),
+            "per-pane only"
+        );
+        let full = subscription_set(true);
+        assert_eq!(full.len(), base.len() + 1);
+        assert_eq!(full.last(), Some(&OUTPUT_SUBSCRIPTION));
+    }
+
+    #[test]
+    fn only_api_errors_count_as_subscription_rejection() {
+        assert!(is_subscription_rejection(&herdr::HerdrError::Api {
+            method: "events.subscribe".into(),
+            message: "unknown variant `pane.output_changed`".into(),
+        }));
+        assert!(!is_subscription_rejection(&herdr::HerdrError::Io(
+            std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "closed")
+        )));
+        assert!(!is_subscription_rejection(&herdr::HerdrError::Shape(
+            "x".into()
+        )));
     }
 
     #[test]

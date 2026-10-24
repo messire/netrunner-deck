@@ -70,16 +70,19 @@ export default function App() {
     return pane?.pane_id ?? null;
   };
 
-  // Every Herdr event is tree metadata (architecture.md F1–F3; there is no
-  // output event — TerminalView polls). A burst of events becomes one
-  // `herdr_tree` call 200 ms after the burst ends.
+  // Tree events (architecture.md F1–F3) → one `herdr_tree` call 200 ms after
+  // the burst ends. The fork's `pane_output_changed` for the pane on screen →
+  // `outputTick`, which TerminalView turns into a debounced `pane.read`.
   const refetchTreeSoon = debounceTrailing(() => { refetchTree(); }, 200);
+  const [outputTick, setOutputTick] = createSignal(0);
 
   onMount(() => {
     let un1: (() => void) | undefined, un2: (() => void) | undefined;
     api.onEvent((ev) => {
       setOffline(null);
-      if (routeEvent(ev, currentPane()) === "tree") refetchTreeSoon();
+      const route = routeEvent(ev, currentPane());
+      if (route === "tree") refetchTreeSoon();
+      else if (route === "tick") setOutputTick((n) => n + 1);
     }).then((u) => (un1 = u));
     api.onOffline((m) => setOffline(m)).then((u) => (un2 = u));
     const timer = setInterval(() => { refetchTree(); refetchAccounts(); }, 15000);
@@ -129,7 +132,7 @@ export default function App() {
       <main class="main">
         <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} />
         <Show when={currentPane()} fallback={<div class="empty">NO PANE SELECTED · open a workspace in Herdr</div>}>
-          {(id) => <TerminalView paneId={id()} tree={tree()} />}
+          {(id) => <TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} />}
         </Show>
         <Show when={offline()}>{(m) => <div class="offline">◇ HERDR OFFLINE — {m()}</div>}</Show>
       </main>

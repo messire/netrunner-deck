@@ -13,16 +13,26 @@ const COLOR: Record<Exclude<LineKind, null>, string> = {
 /**
  * Milestone 1 pane view: an xterm that shows Herdr's ANSI snapshot of the pane
  * (`pane.read`) and forwards keystrokes with `pane.send_text` / `pane.send_keys`
- * (mapping in `src/keys.ts`). Herdr emits no output event (architecture.md F3),
- * so the snapshot is refreshed by a 2.5 s poll and shortly after own input.
+ * (mapping in `src/keys.ts`). The snapshot is refreshed shortly after own
+ * input, on the fork's `pane_output_changed` tick for this pane (M1.5), and by
+ * a poll: 2.5 s until the first tick proves the server emits output events,
+ * then a 10 s safety net (architecture.md F3).
  * Dialogue blocks are recoloured and framed with xterm decorations; the cursor
  * is placed on the CLI's prompt line.
  */
-export default function TerminalView(p: { paneId: string; tree?: Tree }) {
+export const POLL_MS_WITHOUT_OUTPUT_EVENTS = 2500;
+export const POLL_MS_WITH_OUTPUT_EVENTS = 10000;
+
+export default function TerminalView(p: { paneId: string; tree?: Tree; outputTick?: number }) {
   let host!: HTMLDivElement;
   let term: Terminal;
   let fit: FitAddon;
   let lastText = "";
+  // `revision` from the last applied pane.read (fork: content counter; upstream: always 0).
+  let lastRevision = 0;
+  // Set by the first output tick: the server emits output events, so the poll
+  // may relax from 2.5 s to a 10 s safety net.
+  let seenTick = false;
   let debounce: number | undefined;
   let decorations: IDecoration[] = [];
   // Set on dispose: pending timers/promises must not touch the disposed xterm or signals.
@@ -70,6 +80,10 @@ export default function TerminalView(p: { paneId: string; tree?: Tree }) {
       const { read } = await api.paneRead(id, Math.max(200, term.rows * 4));
       if (disposed || id !== p.paneId) return;
       setError(null);
+      // Even revision = stable content (odd = a write was in flight); a known
+      // even revision means the text cannot have changed. 0 = no revisions.
+      if (read.revision !== 0 && read.revision % 2 === 0 && read.revision === lastRevision) return;
+      lastRevision = read.revision;
       if (read.text === lastText) return;
       if (lastText !== "" && userIsReading()) { setHeld(read.text); return; }
       setHeld(null);
@@ -233,14 +247,31 @@ export default function TerminalView(p: { paneId: string; tree?: Tree }) {
       if (lastText) render(lastText);
     });
     ro.observe(host);
-    const poll = setInterval(refresh, 2500);
-    onCleanup(() => { ro.disconnect(); clearInterval(poll); term.dispose(); });
+    // Self-rescheduling poll so the period can relax once output events arrive.
+    let poll: number | undefined;
+    const schedulePoll = () => {
+      poll = window.setTimeout(() => {
+        refresh();
+        if (!disposed) schedulePoll();
+      }, seenTick ? POLL_MS_WITH_OUTPUT_EVENTS : POLL_MS_WITHOUT_OUTPUT_EVENTS);
+    };
+    schedulePoll();
+    onCleanup(() => { ro.disconnect(); clearTimeout(poll); term.dispose(); });
     refresh();
   });
+
+  // Output tick from App (routeEvent → "tick" for this pane): coalesce through
+  // the same 120 ms debounce as own input; in-flight + dirty handles the rest.
+  createEffect(on(() => p.outputTick, (tick) => {
+    if (!tick) return;
+    seenTick = true;
+    schedule();
+  }, { defer: true }));
 
   createEffect(on(() => p.paneId, () => {
     // New pane: nothing from the previous one may hold its first snapshot (R17 N1).
     lastText = "";
+    lastRevision = 0;
     setHeld(null);
     term.clearSelection();
     term.scrollToBottom();

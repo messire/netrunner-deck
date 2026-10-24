@@ -45,8 +45,24 @@ describe("routeEvent", () => {
     expect(routeEvent({ event, ...payload }, "pane-1")).toBe("tree");
   });
 
-  it("there is no output event (F3): pane_output_changed is ignored until M1.5", () => {
-    expect(routeEvent({ event: "pane_output_changed", pane_id: "pane-1", workspace_id: "ws-1", revision: 7 }, "pane-1")).toBe("ignore");
+  describe("pane_output_changed (fork M1.5) ticks only the pane on screen", () => {
+    const out = (pane_id: string) => ({ event: "pane_output_changed", pane_id, workspace_id: "ws-1", revision: 7 });
+    it("same pane → tick", () => {
+      expect(routeEvent(out("pane-1"), "pane-1")).toBe("tick");
+    });
+    it("other pane → ignore (never a tree refetch: it carries no metadata)", () => {
+      expect(routeEvent(out("pane-2"), "pane-1")).toBe("ignore");
+    });
+    it("no pane on screen → ignore", () => {
+      expect(routeEvent(out("pane-1"), null)).toBe("ignore");
+    });
+    it("malformed payload without pane_id → ignore", () => {
+      expect(routeEvent({ event: "pane_output_changed", revision: 7 }, "pane-1")).toBe("ignore");
+      expect(routeEvent({ event: "pane_output_changed", pane_id: 3 }, "3")).toBe("ignore");
+    });
+    it("dotted spelling is tolerated", () => {
+      expect(routeEvent({ event: "pane.output_changed", pane_id: "pane-1" }, "pane-1")).toBe("tick");
+    });
   });
 
   it("per-pane-only events that cannot arrive on the global subscription are ignored", () => {

@@ -97,16 +97,21 @@ describe("mapInput: cursor and function keys", () => {
 });
 
 describe("mapInput: home/end/insert/delete/pageup/pagedown", () => {
-  // Herdr's `config::parse_key_combo` (src/config/keybinds.rs) has no token for
-  // these keys, so `pane.send_keys` answers `invalid_key: unsupported key home`.
-  // Until the fork learns them they are recognised and dropped (F5 forbids
-  // sending the escape sequence as text).
+  // Named since the fork's M1.5 patch to `config::parse_key_combo`
+  // (`home end pageup pagedown insert delete`); the three common encodings of
+  // Home/End (CSI H, CSI 1~, SS3 H) all map to the same name.
   it.each([
-    "\x1b[H", "\x1b[F", "\x1b[1~", "\x1b[4~", "\x1bOH", "\x1bOF",
-    "\x1b[2~", "\x1b[3~", "\x1b[5~", "\x1b[6~",
-    "\x1b[1;5H", "\x1b[1;2F", "\x1b[3;5~", "\x1b[5;2~",
-  ])("%j → drop (no Herdr key name yet)", (data) => {
-    dropped(data);
+    ["\x1b[H", "home"], ["\x1b[1~", "home"], ["\x1bOH", "home"],
+    ["\x1b[F", "end"], ["\x1b[4~", "end"], ["\x1bOF", "end"],
+    ["\x1b[2~", "insert"], ["\x1b[3~", "delete"], ["\x1b[5~", "pageup"], ["\x1b[6~", "pagedown"],
+  ])("%j → %s", (data, name) => {
+    expect(keys(data)).toEqual([name]);
+  });
+  it.each([
+    ["\x1b[1;5H", "ctrl+home"], ["\x1b[1;2F", "shift+end"], ["\x1b[3;5~", "ctrl+delete"], ["\x1b[5;2~", "shift+pageup"],
+    ["\x1b\x1b[3~", "alt+delete"],
+  ])("%j → %s (modified)", (data, name) => {
+    expect(keys(data)).toEqual([name]);
   });
 });
 
@@ -183,6 +188,8 @@ describe("mapInput: every emitted key name is accepted by Herdr's parse_key_comb
     "left", "right", "up", "down",
     "minus", "comma", "period", "slash", "backslash", "quote", "double_quote", "double-quote",
     "semicolon", "colon", "percent", "ampersand", "backtick", "plus",
+    // fork M1.5 (src/config/keybinds.rs parse_navigation_keys)
+    "home", "end", "pageup", "page_up", "pgup", "pagedown", "page_down", "pgdn", "insert", "ins", "delete", "del",
   ]);
   function herdrAccepts(combo: string): boolean {
     if (combo !== combo.trim()) return false;
@@ -224,8 +231,8 @@ describe("mapInput: every emitted key name is accepted by Herdr's parse_key_comb
   }
 
   it("herdrAccepts mirror sanity-checks against known good/bad spellings", () => {
-    for (const ok of ["enter", "shift+tab", "ctrl+shift+left", "alt+plus", "alt++", "ctrl+\\", "f12", "ctrl+@", "alt+space", "alt+A"]) expect(herdrAccepts(ok), ok).toBe(true);
-    for (const bad of ["home", "end", "pageup", "pagedown", "insert", "delete", "alt+ ", "ctrl+", "ctrl+a+b", "", "alt+pgup"]) expect(herdrAccepts(bad), bad).toBe(false);
+    for (const ok of ["enter", "shift+tab", "ctrl+shift+left", "alt+plus", "alt++", "ctrl+\\", "f12", "ctrl+@", "alt+space", "alt+A", "home", "end", "pageup", "pagedown", "insert", "delete", "ctrl+home"]) expect(herdrAccepts(ok), ok).toBe(true);
+    for (const bad of ["alt+ ", "ctrl+", "ctrl+a+b", "", "alt+pageup+x", "alt+pg_up"]) expect(herdrAccepts(bad), bad).toBe(false);
   });
 
   it("no key name leaves mapInput that Herdr would reject with invalid_key", () => {
