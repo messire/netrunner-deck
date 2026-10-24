@@ -33,7 +33,10 @@ const MAX_CONCURRENT_CALLS: usize = 2;
 #[derive(Debug, thiserror::Error)]
 pub enum HerdrError {
     #[error("herdr server is not reachable at {path}: {source}")]
-    Connect { path: String, source: std::io::Error },
+    Connect {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("io error talking to herdr: {0}")]
     Io(#[from] std::io::Error),
     #[error("herdr returned an error for {method}: {message}")]
@@ -116,8 +119,12 @@ fn connect_with(read_timeout: Option<Duration>) -> Result<Stream> {
     }
     #[cfg(not(windows))]
     {
-        let stream = std::os::unix::net::UnixStream::connect(&path)
-            .map_err(|source| HerdrError::Connect { path: display, source })?;
+        let stream = std::os::unix::net::UnixStream::connect(&path).map_err(|source| {
+            HerdrError::Connect {
+                path: display,
+                source,
+            }
+        })?;
         // `None` is the default (block forever); setting it is a no-op.
         stream.set_read_timeout(read_timeout).ok();
         Ok(stream)
@@ -264,7 +271,10 @@ fn parse_reply(method: &str, line: &str) -> Result<Value> {
             .and_then(Value::as_str)
             .unwrap_or("unknown error")
             .to_string();
-        return Err(HerdrError::Api { method: method.into(), message });
+        return Err(HerdrError::Api {
+            method: method.into(),
+            message,
+        });
     }
     value
         .get("result")

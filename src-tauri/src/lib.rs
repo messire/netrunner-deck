@@ -25,10 +25,7 @@ where
 /// `ping` → `{version, protocol}`; also the "is Herdr running" probe.
 #[tauri::command]
 async fn herdr_ping() -> herdr::Result<Value> {
-    blocking(move || {
-        herdr::call("ping", json!({}))
-    })
-    .await
+    blocking(move || herdr::call("ping", json!({}))).await
 }
 
 /// Everything the sidebar needs in one round trip set: workspaces, tabs,
@@ -83,7 +80,10 @@ async fn herdr_pane_read(pane_id: String, lines: Option<u32>) -> herdr::Result<V
 #[tauri::command]
 async fn herdr_pane_send_text(pane_id: String, text: String) -> herdr::Result<Value> {
     blocking(move || {
-        herdr::call("pane.send_text", json!({ "pane_id": pane_id, "text": text }))
+        herdr::call(
+            "pane.send_text",
+            json!({ "pane_id": pane_id, "text": text }),
+        )
     })
     .await
 }
@@ -91,7 +91,10 @@ async fn herdr_pane_send_text(pane_id: String, text: String) -> herdr::Result<Va
 #[tauri::command]
 async fn herdr_pane_send_keys(pane_id: String, keys: Vec<String>) -> herdr::Result<Value> {
     blocking(move || {
-        herdr::call("pane.send_keys", json!({ "pane_id": pane_id, "keys": keys }))
+        herdr::call(
+            "pane.send_keys",
+            json!({ "pane_id": pane_id, "keys": keys }),
+        )
     })
     .await
 }

@@ -65,7 +65,7 @@
 
 ---
 
-## 4. M1b — качество pane view, CI, документация
+## 4. M1b — **закрыт 2026-10-24** (R17: 18/21 закрыто, 3 частично с обоснованным переносом; см. раздел «Статус» в аудите) — качество pane view, CI, документация
 
 Стартует после закрытия M1a. Критерий закрытия: все 21 находка аудита закрыты или явно перенесены (R17).
 
@@ -81,7 +81,7 @@
 | **R12** ✅ `8a0e27e` | UI | `leadStyle`: первый печатный символ искать, пропуская ANSI (`/^(?:\x1b\[[0-9;?]*[ -\/]*[@-~]|\s)*/`), `DIM`/`RED` по этому префиксу. | `src/dialogue.ts` | 10 | R11 | tdd-test-engineer | Кейс «dim с цифрой» зелёный, остальные фикстуры без изменений ожиданий. | S |
 | **R13'** ✅ `8a0e27e` | UI | Урезано: `blockWidth(lines, cols, widthOf = codePoints)` с инжектируемой функцией ширины; в `TerminalView` передать `widthOf` на основе простой East-Asian-Width таблицы (wide → 2). `placeCursor` не трогать; полный переход на ширины из буфера xterm — в M2. | `src/dialogue.ts`, `src/components/TerminalView.tsx` | 11 (частично) | R11 | tdd-test-engineer | `npm test`: `blockWidth` с CJK=2. Остаток п.11 (курсор) перенесён в M2 — зафиксировать в R17. | S |
 | **R14'** ✅ `0eb4bd4` | UI | Урезано до часа: в `refresh` не вызывать `render`, пока `term.hasSelection()` или viewport не внизу (`viewportY < baseY`); без индикатора и отложенного dirty-рендера. Полное решение — M2. | `src/components/TerminalView.tsx` | 8 (частично) | R8 | ui-builder | Вручную: выделение и прокрутка вверх переживают поллинг; прокрутка вниз — следующий снапшот применяется. | S (1 ч) |
-| **R16** ✅ (e6543e7) | — | Документация по факту: `docs/architecture.md` (день 0 + поток данных, event pump, ограничения снапшот-режима, F1–F10 как факты); README — `cswap` (как установлен, U3), `HERDR_SOCKET_PATH`/`HERDR_CONFIG_DIR`, `npm test`/`cargo test`, уточнить «Nothing is duplicated or stored»; `KeyBar` — убрать F1/F2/CTRL+K/ESC до M3. | `docs/architecture.md`, `README.md`, `src/components/KeyBar.tsx` | 21 | R5, R7, R9, R15 | architecture-documenter | Каждое утверждение README проверяется grep'ом по коду; в `architecture.md` нет пометок «[предположение]» рядом с форматом событий/`pane.read`/`send_text`. | S |
+| **R16** ✅ (289b181) | — | Документация по факту: `docs/architecture.md` (день 0 + поток данных, event pump, ограничения снапшот-режима, F1–F10 как факты); README — `cswap` (как установлен, U3), `HERDR_SOCKET_PATH`/`HERDR_CONFIG_DIR`, `npm test`/`cargo test`, уточнить «Nothing is duplicated or stored»; `KeyBar` — убрать F1/F2/CTRL+K/ESC до M3. | `docs/architecture.md`, `README.md`, `src/components/KeyBar.tsx` | 21 | R5, R7, R9, R15 | architecture-documenter | Каждое утверждение README проверяется grep'ом по коду; в `architecture.md` нет пометок «[предположение]» рядом с форматом событий/`pane.read`/`send_text`. | S |
 | **R17** | — | Повторное ревью по 21 находке: «закрыта (коммит)» / «перенесена (куда, почему)» — ожидаемые переносы: п.8 и п.11 частично → M2, п.19 unix-джоба. Перевести clippy в `-D warnings` (починить предупреждения). Проверить: ни одна команда не синхронная; нет `unwrap` на пути запросов; lifetimes в `TerminalView`. | `docs/audit/2026-10-24-tech-debt.md` (раздел «Статус»), `.github/workflows/build.yml` | все | R2b … R16 | code-quality-reviewer | Таблица 21×статус; CI зелёный с `clippy -D warnings`; нет открытых P0/P1. | S |
 
 Сумма M1b: 10×S (R14' — час) ≈ **4.5–5 дней разработки + ≈0.5 дня ручных проверок** → вторая рабочая неделя. Итого M1 ≈ **2 календарные недели** (v1 обещала 5 дней при 11.5 человеко-днях работы — критика, вызов 2).

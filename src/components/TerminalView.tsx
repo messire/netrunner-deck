@@ -71,7 +71,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree }) {
       if (disposed || id !== p.paneId) return;
       setError(null);
       if (read.text === lastText) return;
-      if (userIsReading()) { setHeld(read.text); return; }
+      if (lastText !== "" && userIsReading()) { setHeld(read.text); return; }
       setHeld(null);
       render(read.text);
       lastText = read.text;
@@ -238,7 +238,14 @@ export default function TerminalView(p: { paneId: string; tree?: Tree }) {
     refresh();
   });
 
-  createEffect(on(() => p.paneId, () => { lastText = ""; refresh(); }, { defer: true }));
+  createEffect(on(() => p.paneId, () => {
+    // New pane: nothing from the previous one may hold its first snapshot (R17 N1).
+    lastText = "";
+    setHeld(null);
+    term.clearSelection();
+    term.scrollToBottom();
+    refresh();
+  }, { defer: true }));
 
   return (
     <div class="term">
