@@ -8,7 +8,10 @@ export default function KeyBar(p: { tree?: Tree; selectedPane: string | null; ac
   };
   return (
     <footer class="keys">
-      <span><b>F1</b>SWITCH ACCOUNT</span><span><b>F2</b>JUMP TO WAITING</span><span><b>CTRL+K</b>COMMAND</span><span><b>ESC</b>BACK</span>
+      {/* TODO(M3, docs/plan/ROADMAP.md): hotkeys — F1 account picker, F2 jump to
+          waiting agent, Ctrl+K palette, Esc. Until then the terminal owns every
+          key press, so only the mouse actions that exist today are advertised (R16). */}
+      <span><b>DBL-CLICK</b>ACCOUNT · SWITCH</span><span><b>CLICK</b>AGENT · OPEN</span>
       <div class="right"><span>{where()}</span><span class="d">◆ {p.account ? accountLabel(p.account) : "NO LINK"}</span></div>
     </footer>
   );
