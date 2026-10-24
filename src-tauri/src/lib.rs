@@ -128,28 +128,32 @@ const CSWAP_NOT_FOUND: &str = "cswap not found (searched PATH and ~/.local/bin)"
 fn cswap_candidates() -> Vec<String> {
     #[cfg(windows)]
     {
-        // `cswap.exe`, then `cswap.cmd`, then the bare name. `PATHEXT` is
-        // honoured when set; otherwise the fixed list from the plan.
-        let mut names: Vec<String> = std::env::var("PATHEXT")
-            .ok()
-            .map(|exts| {
-                exts.split(';')
-                    .filter(|ext| !ext.is_empty())
-                    .map(|ext| format!("cswap{}", ext.to_ascii_lowercase()))
-                    .collect()
-            })
-            .unwrap_or_else(|| vec!["cswap.exe".to_string(), "cswap.cmd".to_string()]);
-        for fixed in ["cswap.exe", "cswap.cmd", "cswap"] {
-            if !names.iter().any(|n| n == fixed) {
-                names.push(fixed.to_string());
-            }
-        }
-        names
+        windows_candidates(std::env::var("PATHEXT").ok().as_deref())
     }
     #[cfg(not(windows))]
     {
         vec!["cswap".to_string()]
     }
+}
+
+/// Windows names: every `PATHEXT` extension in order (when set), then
+/// `cswap.exe`, `cswap.cmd`, `cswap` for anything the variable did not cover.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_candidates(pathext: Option<&str>) -> Vec<String> {
+    let mut names: Vec<String> = pathext
+        .map(|exts| {
+            exts.split(';')
+                .filter(|ext| !ext.is_empty())
+                .map(|ext| format!("cswap{}", ext.to_ascii_lowercase()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for fixed in ["cswap.exe", "cswap.cmd", "cswap"] {
+        if !names.iter().any(|n| n == fixed) {
+            names.push(fixed.to_string());
+        }
+    }
+    names
 }
 
 /// `~` for the fallback lookup: `USERPROFILE` on Windows, `HOME` elsewhere.
@@ -187,10 +191,7 @@ async fn cswap_list(cswap: tauri::State<'_, CswapPath>) -> Result<Value, String>
 }
 
 #[tauri::command]
-async fn cswap_switch(
-    cswap: tauri::State<'_, CswapPath>,
-    number: u64,
-) -> Result<Value, String> {
+async fn cswap_switch(cswap: tauri::State<'_, CswapPath>, number: u64) -> Result<Value, String> {
     let program = cswap.0.clone().ok_or_else(|| CSWAP_NOT_FOUND.to_string())?;
     blocking(move || run_json(&program, &["switch", &number.to_string(), "--json"])).await
 }
@@ -399,7 +400,7 @@ mod tests {
         assert_eq!(truncate_chars("abc", 5), "abc");
         assert_eq!(truncate_chars("abcdef", 3), "abc...");
         assert_eq!(truncate_chars("ééé", 2), "éé...");
-        let long: String = std::iter::repeat('x').take(500).collect();
+        let long = "x".repeat(500);
         assert_eq!(truncate_chars(&long, 300).chars().count(), 303);
     }
 
@@ -422,16 +423,25 @@ mod tests {
     }
 
     #[test]
-    fn cswap_candidates_prefer_exe_then_cmd_on_windows() {
+    fn windows_candidates_follow_pathext_then_fixed_list() {
+        assert_eq!(
+            windows_candidates(None),
+            vec!["cswap.exe", "cswap.cmd", "cswap"]
+        );
+        assert_eq!(
+            windows_candidates(Some(".COM;.EXE;.BAT;.CMD")),
+            vec!["cswap.com", "cswap.exe", "cswap.bat", "cswap.cmd", "cswap"]
+        );
+        assert_eq!(
+            windows_candidates(Some("")),
+            vec!["cswap.exe", "cswap.cmd", "cswap"]
+        );
+    }
+
+    #[test]
+    fn cswap_candidates_always_include_bare_name() {
         let names = cswap_candidates();
-        assert!(names.iter().any(|n| n == "cswap"));
-        #[cfg(windows)]
-        {
-            let exe = names.iter().position(|n| n == "cswap.exe");
-            let cmd = names.iter().position(|n| n == "cswap.cmd");
-            assert!(exe.is_some() && cmd.is_some(), "got {names:?}");
-            assert!(exe < cmd, "got {names:?}");
-        }
+        assert!(names.iter().any(|n| n == "cswap"), "got {names:?}");
         #[cfg(not(windows))]
         assert_eq!(names, vec!["cswap".to_string()]);
     }
