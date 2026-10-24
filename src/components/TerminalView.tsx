@@ -23,6 +23,10 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
   let lastText = "";
   let debounce: number | undefined;
   let decorations: IDecoration[] = [];
+  // Set on dispose: pending timers/promises must not touch the disposed xterm or signals.
+  let disposed = false;
+  // "Last pane.read wins" per pane id: a slow response for an older request is dropped.
+  onCleanup(() => { disposed = true; clearTimeout(debounce); });
 
   const pane = () => p.tree?.panes.find((x) => x.pane_id === p.paneId);
   const header = () => {
@@ -34,20 +38,36 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
   };
 
   const [error, setError] = createSignal<string | null>(null);
+  // One request in flight per view; a refresh asked for meanwhile marks the
+  // view dirty and runs right after. (A "last wins" gate would starve rendering
+  // whenever pane.read is slower than the poll period.) A pane switch mid-flight
+  // is detected by `id !== p.paneId` and that response is dropped.
+  let inFlight = false;
+  let dirty = false;
   async function refresh() {
+    if (disposed) return;
+    if (inFlight) { dirty = true; return; }
+    inFlight = true;
+    const id = p.paneId;
     try {
-      const { read } = await api.paneRead(p.paneId, Math.max(200, term.rows * 4));
+      const { read } = await api.paneRead(id, Math.max(200, term.rows * 4));
+      if (disposed || id !== p.paneId) return;
       setError(null);
       if (read.text === lastText) return;
-      lastText = read.text;
       render(read.text);
+      lastText = read.text;
     } catch (err) {
+      if (disposed || id !== p.paneId) return;
       console.error("pane.read failed", err);
       setError(String(err));
+    } finally {
+      inFlight = false;
+      if (dirty && !disposed) { dirty = false; schedule(); }
     }
   }
 
   function render(text: string) {
+    if (disposed) return;
     const raw = text.replace(/\r\n?/g, "\n").split("\n");
     const rawPlain = raw.map(stripAnsi);
     const rawKinds = classify(rawPlain, raw);
@@ -73,6 +93,7 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     decorations = [];
     term.reset();
     term.write(out, () => {
+      if (disposed) return;
       try {
         decorate(kinds, plain);
         placeCursor(plain);
@@ -144,7 +165,11 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     term.write(`\x1b[${viewportRow + 1};${col + 1}H`);
   }
 
-  const schedule = () => { clearTimeout(debounce); debounce = window.setTimeout(refresh, 120); };
+  const schedule = () => {
+    if (disposed) return;
+    clearTimeout(debounce);
+    debounce = window.setTimeout(refresh, 120);
+  };
 
   // Printable text goes as text; control sequences map to Herdr key names.
   const KEYS: Record<string, string> = {
@@ -154,12 +179,12 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
   };
   function onData(data: string) {
     const key = KEYS[data];
-    if (key) return void api.sendKeys(p.paneId, [key]).then(schedule);
+    if (key) return void api.sendKeys(p.paneId, [key]).then(schedule, (e) => setError(String(e)));
     if (data.length === 1 && data.charCodeAt(0) < 32) {
       const letter = String.fromCharCode(data.charCodeAt(0) + 96);
-      return void api.sendKeys(p.paneId, [`ctrl+${letter}`]).then(schedule);
+      return void api.sendKeys(p.paneId, [`ctrl+${letter}`]).then(schedule, (e) => setError(String(e)));
     }
-    api.sendText(p.paneId, data).then(schedule);
+    api.sendText(p.paneId, data).then(schedule, (e) => setError(String(e)));
   }
 
   onMount(() => {

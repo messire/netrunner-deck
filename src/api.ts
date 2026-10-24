@@ -68,16 +68,28 @@ export interface CswapUsage {
 }
 export interface CswapList { activeAccountNumber: number; accounts: CswapAccount[] }
 
+// DEV-only call counters for manual checks: Tauri `invoke` is not visible in the
+// DevTools Network tab, so inspect `window.__deckCalls` in the webview console.
+declare global { interface Window { __deckCalls?: Record<string, number> } }
+export const callCounts: Record<string, number> = {};
+const count = (name: string) => {
+  if (!import.meta.env.DEV) return;
+  callCounts[name] = (callCounts[name] ?? 0) + 1;
+  if (typeof window !== "undefined") window.__deckCalls = callCounts;
+};
+
 export const api = {
   ping: () => invoke<{ version: string; protocol: number }>("herdr_ping"),
-  tree: () => invoke<Tree>("herdr_tree"),
-  paneRead: (paneId: string, lines = 400) =>
-    invoke<{ read: { text: string; revision: number } }>("herdr_pane_read", { paneId, lines }),
+  tree: () => { count("herdr_tree"); return invoke<Tree>("herdr_tree"); },
+  paneRead: (paneId: string, lines = 400) => {
+    count("herdr_pane_read");
+    return invoke<{ read: { text: string; revision: number } }>("herdr_pane_read", { paneId, lines });
+  },
   sendText: (paneId: string, text: string) => invoke("herdr_pane_send_text", { paneId, text }),
   sendKeys: (paneId: string, keys: string[]) => invoke("herdr_pane_send_keys", { paneId, keys }),
   focus: (target: "workspace" | "tab" | "pane", id: string) => invoke("herdr_focus", { target, id }),
-  cswapList: () => invoke<CswapList>("cswap_list"),
-  cswapSwitch: (number: number) => invoke("cswap_switch", { number }),
+  cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
+  cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
   onEvent: (cb: (event: Record<string, unknown>) => void): Promise<UnlistenFn> =>
     listen<Record<string, unknown>>("herdr://event", (e) => cb(e.payload)),
   onOffline: (cb: (message: string) => void): Promise<UnlistenFn> =>
