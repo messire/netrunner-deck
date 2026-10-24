@@ -1,4 +1,4 @@
-import { createEffect, on, onCleanup, onMount } from "solid-js";
+import { createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type Tree } from "../api";
@@ -33,14 +33,17 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     return { title: who, where: `${ws} · ${x.cwd ?? ""}`, ctx: x.tokens?.ctx ? `CTX ${x.tokens.ctx}%` : "" };
   };
 
+  const [error, setError] = createSignal<string | null>(null);
   async function refresh() {
     try {
       const { read } = await api.paneRead(p.paneId, Math.max(200, term.rows * 4));
+      setError(null);
       if (read.text === lastText) return;
       lastText = read.text;
       render(read.text);
-    } catch {
-      /* server went away; the offline banner covers it */
+    } catch (err) {
+      console.error("pane.read failed", err);
+      setError(String(err));
     }
   }
 
@@ -70,8 +73,13 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     decorations = [];
     term.reset();
     term.write(out, () => {
-      decorate(kinds, plain);
-      placeCursor(plain);
+      try {
+        decorate(kinds, plain);
+        placeCursor(plain);
+      } catch (err) {
+        console.error("decorate failed", err);
+        setError(String(err));
+      }
     });
   }
 
@@ -189,7 +197,7 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
 
   return (
     <div class="term">
-      <div class="th"><span>◆ {header().title}</span><span class="micro">{header().where}</span><span class="micro right">{header().ctx}</span></div>
+      <div class="th"><span>◆ {header().title}</span><span class="micro">{header().where}</span><span class="micro right" style={error() ? "color:#FF2B4A" : ""}>{error() ?? header().ctx}</span></div>
       <div class="xterm-host" ref={host} />
     </div>
   );

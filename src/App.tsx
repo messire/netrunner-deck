@@ -24,17 +24,18 @@ export default function App() {
     return pane?.pane_id ?? null;
   };
 
-  onMount(async () => {
-    const un1 = await api.onEvent((ev) => {
+  onMount(() => {
+    let un1: (() => void) | undefined, un2: (() => void) | undefined;
+    api.onEvent((ev) => {
       setOffline(null);
       // Any structural event re-reads the tree; pane output bumps the terminal tick.
       const kind = String(ev.event ?? ev.type ?? "");
       if (kind.startsWith("pane.updated")) setTick((n) => n + 1);
       else refetchTree();
-    });
-    const un2 = await api.onOffline((m) => setOffline(m));
+    }).then((u) => (un1 = u));
+    api.onOffline((m) => setOffline(m)).then((u) => (un2 = u));
     const timer = setInterval(() => { refetchTree(); refetchAccounts(); }, 15000);
-    onCleanup(() => { un1(); un2(); clearInterval(timer); });
+    onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); });
   });
 
   const activeAccount = () => accounts()?.accounts.find((a) => a.active);
