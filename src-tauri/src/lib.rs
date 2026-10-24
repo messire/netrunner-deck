@@ -148,19 +148,26 @@ fn start_event_pump(app: AppHandle) {
     std::thread::spawn(move || loop {
         let handle = app.clone();
         let result = herdr::subscribe(
+            // Names must match Herdr's `Subscription` enum exactly; an unknown
+            // one makes the server reject the whole subscription (R4 surfaces it).
             &[
                 "workspace.created",
                 "workspace.updated",
+                "workspace.renamed",
                 "workspace.closed",
+                "workspace.focused",
                 "tab.created",
-                "tab.updated",
                 "tab.closed",
+                "tab.focused",
+                "tab.renamed",
+                "tab.moved",
                 "pane.created",
-                "pane.updated",
                 "pane.closed",
+                "pane.updated",
                 "pane.focused",
                 "pane.agent_detected",
                 "pane.agent_status_changed",
+                "layout.updated",
             ],
             |event| handle.emit("herdr://event", event).is_ok(),
         );
