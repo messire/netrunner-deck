@@ -25,6 +25,7 @@ Pane view в M1 — снимки `pane.read` (поллинг 2,5 с + после
 |---|---|---|
 | F1 | События приходят в поле `event` в **snake_case** (`pane_updated`, `workspace_created`); подписка принимает точечные имена (`pane.updated`). | `src/api/schema/events.rs:115,193-194`; `tests/subscription_socket_tests.rs:171` |
 | F2 | `pane_updated` — событие **метаданных** (имя агента, токены, заголовок), payload `pane: PaneInfo`; на смену label/title приходит. | `events.rs:500-502`; `app/api.rs:696`; `terminal_titles.rs:73` |
+| F2a | Глобальных подписок на `pane.agent_status_changed`, `pane.scroll_changed`, `pane.output_matched` нет — они требуют `pane_id`; подписка с неизвестным/неполным именем отвергается целиком. | `events.rs:60-66`; проверено 2026-10-24 |
 | F3 | `pane.output_changed` (`pane_id`, `workspace_id`, `revision`) есть в схеме, но сервером **не эмитится**. События вывода нет. | `events.rs:521-525` |
 | F4 | `pane.read` → `{read:{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}}`; `revision` всегда `0`; `lines` ≤ 1000; `format=ansi` — отрендеренные строки экрана, не сырой поток. | `schema/panes.rs:729-738`; `app/api/panes.rs:1543-1548`; `api_helpers.rs:117` |
 | F5 | `pane.send_text` оборачивает текст в bracketed paste (`\x1b[200~…\x1b[201~`), если панель его включила (Claude Code включает). Escape-последовательности через `send_text` приходят как вставка. | `app/api_helpers.rs:25-32` |
