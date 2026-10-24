@@ -6,11 +6,9 @@
  * they go through `pane.send_keys` as key names Herdr's `config::parse_key_combo`
  * accepts (F6; fork `src/config/keybinds.rs`), or they are dropped.
  *
- * Home/End/Insert/Delete/PageUp/PageDown have no name in `parse_key_combo`
- * (it knows `enter esc tab backspace left right up down space`, punctuation
- * words, single characters and `f<N>`); `send_keys` would answer
- * `invalid_key`. They are recognised here and dropped until the fork learns
- * them — see `UNNAMED_IN_HERDR`.
+ * Home/End/Insert/Delete/PageUp/PageDown are named `home end insert delete
+ * pageup pagedown` — names the fork's `parse_key_combo` accepts since M1.5
+ * (upstream Herdr still answers `invalid_key` for them).
  */
 export type MappedInput = { keys: string[] } | { text: string } | { drop: true; reason: string };
 
@@ -32,7 +30,9 @@ const PLAIN: Record<string, string> = {
 };
 
 // Keys xterm sends that Herdr's key grammar cannot name (fork keybinds.rs:1313-1343).
-const UNNAMED_IN_HERDR: Record<string, string> = {
+// Navigation keys. Herdr's `parse_key_combo` learned these names in the fork
+// (M1.5); upstream answers `invalid_key` and the key is silently lost there.
+const NAMED_NAV: Record<string, string> = {
   "\x1b[H": "home", "\x1b[1~": "home", "\x1bOH": "home",
   "\x1b[F": "end", "\x1b[4~": "end", "\x1bOF": "end",
   "\x1b[2~": "insert", "\x1b[3~": "delete", "\x1b[5~": "pageup", "\x1b[6~": "pagedown",
@@ -47,7 +47,6 @@ const CSI_TILDE: Record<string, string> = {
   "11": "f1", "12": "f2", "13": "f3", "14": "f4", "15": "f5", "17": "f6", "18": "f7", "19": "f8",
   "20": "f9", "21": "f10", "23": "f11", "24": "f12",
 };
-const NAV = new Set(["home", "end", "insert", "delete", "pageup", "pagedown"]);
 
 // C0 bytes with a name other than ctrl+<letter>.
 const C0_SPECIAL: Record<number, string> = {
@@ -66,12 +65,12 @@ function modifierPrefix(n: number): string | null {
 }
 
 const drop = (reason: string): MappedInput => ({ drop: true, reason });
-const key = (name: string): MappedInput => (NAV.has(name.split("+").pop()!) ? drop(`herdr has no key name for ${name}`) : { keys: [name] });
+const key = (name: string): MappedInput => ({ keys: [name] });
 
 /** Name for a single key sequence (no leading alt-ESC). Null if unknown. */
 function nameOf(data: string): string | null {
   if (data in PLAIN) return PLAIN[data];
-  if (data in UNNAMED_IN_HERDR) return UNNAMED_IN_HERDR[data];
+  if (data in NAMED_NAV) return NAMED_NAV[data];
   if (data.length === 1) {
     const c = data.charCodeAt(0);
     if (c in C0_SPECIAL) return C0_SPECIAL[c];
