@@ -1,0 +1,35 @@
+{
+  "comment": "Block boundaries are inclusive line indexes into the fixture (0-based, after splitting on CRLF). Blocks list only the lines a frame must cover.",
+  "blocks": [
+    {
+      "kind": "user",
+      "from": 0,
+      "to": 0
+    },
+    {
+      "kind": "agent",
+      "from": 2,
+      "to": 3
+    },
+    {
+      "kind": "agent",
+      "from": 12,
+      "to": 16
+    }
+  ],
+  "neverFramed": [
+    5,
+    7,
+    8,
+    9,
+    10,
+    20,
+    22,
+    25,
+    28
+  ],
+  "promptLine": 25,
+  "knownGaps": {
+    "18": "dim summary starting with a digit (audit #10, R12): 24-bit dim colour is not detected and the verb list cannot match a digit"
+  }
+}

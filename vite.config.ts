@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import solid from "vite-plugin-solid";
 
@@ -8,4 +9,9 @@ export default defineConfig({
   server: { port: 1420, strictPort: true },
   envPrefix: ["VITE_", "TAURI_"],
   build: { target: "es2022", minify: "esbuild", sourcemap: true },
+  test: {
+    // Pure-logic modules only (dialogue, keys, events); no DOM, no xterm.
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+  },
 });
