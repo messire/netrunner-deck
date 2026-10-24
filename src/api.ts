@@ -68,6 +68,15 @@ export interface CswapUsage {
 }
 export interface CswapList { activeAccountNumber: number; accounts: CswapAccount[] }
 
+/**
+ * One event from Herdr's `events.subscribe` stream, forwarded as-is by the
+ * Rust pump on `herdr://event`. `event` is the variant name in snake_case
+ * (`pane_updated`, `workspace_created`, …) and the remaining fields are that
+ * variant's payload — e.g. `pane_updated` carries `pane: PaneInfo` and is
+ * metadata, not output. See docs/architecture.md F1–F3. Routing: `src/events.ts`.
+ */
+export type HerdrEvent = { event: string; [k: string]: unknown };
+
 // DEV-only call counters for manual checks: Tauri `invoke` is not visible in the
 // DevTools Network tab, so inspect `window.__deckCalls` in the webview console.
 declare global { interface Window { __deckCalls?: Record<string, number> } }
@@ -90,8 +99,9 @@ export const api = {
   focus: (target: "workspace" | "tab" | "pane", id: string) => invoke("herdr_focus", { target, id }),
   cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
   cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
-  onEvent: (cb: (event: Record<string, unknown>) => void): Promise<UnlistenFn> =>
-    listen<Record<string, unknown>>("herdr://event", (e) => cb(e.payload)),
+  // The payload is whatever Herdr sent; `routeEvent` validates the shape.
+  onEvent: (cb: (event: HerdrEvent) => void): Promise<UnlistenFn> =>
+    listen<HerdrEvent>("herdr://event", (e) => cb(e.payload)),
   onOffline: (cb: (message: string) => void): Promise<UnlistenFn> =>
     listen<string>("herdr://offline", (e) => cb(e.payload)),
 };

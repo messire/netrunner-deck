@@ -114,7 +114,10 @@ M1b хвост: R16 (после R5, R7, R9, R15) → R17
 
 Порядок: M1.5 → M2 → M3 → M4 → M5.
 
-### M1.5 — форк: `pane.output_changed` и настоящий `revision`
+### M1.5 (дополнено R9)
+
+- **Патч форка: имена навигационных клавиш** в `parse_key_combo` (`home end pageup pagedown insert delete`) — без него Deck не может послать эти клавиши через `send_keys`; после патча убрать их из `UNNAMED_IN_HERDR` в `src/keys.ts`.
+ — форк: `pane.output_changed` и настоящий `revision`
 
 **Цель.** Дать Deck честный триггер вместо поллинга 2.5 с: эмитить существующий `EventKind::PaneOutputChanged` (`pane_id`, `workspace_id`, `revision`) коалесцированно (≤ N/с на панель) и возвращать реальный `revision` в `pane.read` вместо `0` (F3, F4). Схема уже есть — изменений контракта нет, только эмиссия; диff в форке малый, стоимость rebase низкая.
 
