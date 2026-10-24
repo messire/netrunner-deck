@@ -1,0 +1,28 @@
+[0m[38;2;94;68;84m> [0mrun the lint and fix what it reports
+
+[0m[38;2;155;232;234m● [0mStarting with the linter.
+
+[0m[38;2;155;232;234m● [0mBash(npm run lint)
+  [0m[38;2;94;68;84m⎿  src/cache.ts:14:7 unused variable 'ttl'[0m
+     [0m[38;2;94;68;84msrc/cache.ts:40:1 missing return type[0m
+     [0m[38;2;94;68;84m… +2 lines (ctrl+o to expand)[0m
+[0m[38;2;155;232;234m● [0mUpdate(src/cache.ts)
+  [0m[38;2;94;68;84m⎿  Updated src/cache.ts with 2 additions and 3 removals[0m
+[0m[38;2;155;232;234m● [0mBash(npm run lint)
+  [0m[38;2;94;68;84m⎿  (No output)[0m
+
+[0m[38;2;155;232;234m● [0mLint is clean now. The unused variable was left over from the TTL
+  refactor; I removed it and added the missing return type.
+
+[31m● [0m[31mError: pre-commit hook failed (exit 1)[0m
+  [0m[38;2;94;68;84m⎿  husky - pre-commit script failed[0m
+
+[0m[38;2;255;107;74m● [0mBackground command "npm run watch" exited with code 137
+
+[0m[38;2;94;68;84m✻ Cooked for 1m 3s · done 9:20 AM[0m
+
+[0m[38;2;94;68;84m──────────────────────────────────────────────[0m
+[38;2;255;43;74m❯ [0m
+[0m[38;2;94;68;84m──────────────────────────────────────────────[0m
+
+  [0m[38;2;94;68;84m⏵⏵ bypass permissions on (shift+tab to cycle)[0m
