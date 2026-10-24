@@ -47,9 +47,9 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
   function render(text: string) {
     const raw = text.replace(/\r\n?/g, "\n").split("\n");
     const rawPlain = raw.map(stripAnsi);
-    const rawKinds = classify(rawPlain);
-    // Every dialogue block gets one blank row inside its frame at the top and
-    // bottom: an existing blank neighbour is absorbed, otherwise a spacer is added.
+    const rawKinds = classify(rawPlain, raw);
+    // Every dialogue block gets its own blank row inside the frame at the top
+    // and bottom; blank lines around it in the output stay outside as the gap.
     const lines: string[] = [], plain: string[] = [], kinds: LineKind[] = [];
     const push = (l: string, pl: string, k: LineKind) => { lines.push(l); plain.push(pl); kinds.push(k); };
     let i = 0;
@@ -58,12 +58,9 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
       if (!k) { push(raw[i], rawPlain[i], null); i++; continue; }
       let j = i;
       while (j + 1 < raw.length && rawKinds[j + 1] === k) j++;
-      const last = kinds.length - 1;
-      if (last >= 0 && kinds[last] === null && plain[last].trim() === "") kinds[last] = k;
-      else push("", "", k);
+      push("", "", k);
       for (let r = i; r <= j; r++) push(raw[r], rawPlain[r], k);
-      if (j + 1 < raw.length && rawPlain[j + 1].trim() === "") { push(raw[j + 1], rawPlain[j + 1], k); j++; }
-      else push("", "", k);
+      push("", "", k);
       i = j + 1;
     }
     const out = lines

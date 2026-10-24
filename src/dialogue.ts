@@ -14,7 +14,8 @@ const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@
 export const stripAnsi = (s: string) => s.replace(ANSI, "");
 
 const TOOL_CALL = /^[A-Za-z_][\w.-]*\s*\(/;
-const TOOL_SUMMARY = /^(Ran|Read|Wrote|Updated|Searched|Found|Listed|Fetched)\b.*\b(commands?|files?|lines?|matches|results?)\b/i;
+// Collapsed tool lines ("Ran 2 shell commands", "Searched for …", "Called Slack …").
+const TOOL_SUMMARY = /^(Ran|Read|Wrote|Updated|Edited|Searched|Found|Listed|Fetched|Called|Created|Deleted|Checked|Queried|Opened|Viewed|Loaded|Executed|Invoked|Used)\b/;
 
 function startKind(line: string): LineKind {
   const user = /^>\s+(\S.*)?$/.exec(line);
@@ -34,11 +35,13 @@ const isContinuation = (line: string) =>
   /^\s{2,}\S/.test(line) && !TOOL_SUMMARY.test(line.trim()) && !/^\s*[⎿└├│]/.test(line) && !/^\s*[※✻✽✶✳·]\s/.test(line);
 const isBlank = (line: string) => line.trim() === "";
 
-export function classify(lines: string[]): LineKind[] {
+/** `raw` (with ANSI) is optional: dim-styled indented lines are tool summaries, never message text. */
+export function classify(lines: string[], raw?: string[]): LineKind[] {
   const kinds: LineKind[] = new Array(lines.length).fill(null);
   let current: LineKind = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const dim = raw ? /^(?:\s|\x1b\[[0-9;]*m)*\x1b\[(?:2|90|38;5;(?:8|24[0-9]|25[0-5]))m/.test(raw[i]) : false;
     const start = startKind(line);
     if (start) {
       current = start;
@@ -46,9 +49,9 @@ export function classify(lines: string[]): LineKind[] {
       continue;
     }
     if (!current) continue;
-    if (isContinuation(line)) {
+    if (isContinuation(line) && !dim) {
       kinds[i] = current;
-    } else if (isBlank(line) && i + 1 < lines.length && isContinuation(lines[i + 1])) {
+    } else if (isBlank(line) && i + 1 < lines.length && isContinuation(lines[i + 1]) && !(raw && /\x1b\[(?:2|90)m/.test(raw[i + 1]))) {
       kinds[i] = current; // paragraph break inside the same message
     } else {
       current = null;
