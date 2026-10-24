@@ -11,3 +11,9 @@ deck-debug.log
 probe.txt
 dev.log
 check.log
+
+# real pane snapshots captured on the dev machine stay local; committed fixtures are synthetic
+src/__fixtures__/pane-read/*.ans
+src/__fixtures__/pane-read/*.txt
+src/__fixtures__/pane-read/_*
+!src/__fixtures__/pane-read/synthetic-*.ans
