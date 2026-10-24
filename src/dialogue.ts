@@ -15,7 +15,7 @@ export const stripAnsi = (s: string) => s.replace(ANSI, "");
 
 const TOOL_CALL = /^[A-Za-z_][\w.-]*\s*\(/;
 // Collapsed tool lines ("Ran 2 shell commands", "Searched for …", "Called Slack …").
-const TOOL_SUMMARY = /^(Ran|Read|Wrote|Updated|Edited|Searched|Found|Listed|Fetched|Called|Created|Deleted|Checked|Queried|Opened|Viewed|Loaded|Executed|Invoked|Used)\b/;
+const TOOL_SUMMARY = /^(Ran|Read|Wrote|Updated|Edited|Searched|Found|Listed|Fetched|Called|Created|Deleted|Checked|Queried|Opened|Viewed|Loaded|Executed|Invoked|Used|Running|Reading|Writing|Updating|Editing|Searching|Fetching|Calling|Listing|Checking|Querying|Thinking|Waiting)\b/;
 
 const DIM = /\x1b\[(?:2|90|38;5;(?:8|24[0-9]|25[0-5]))m/;
 const RED = /\x1b\[(?:31|91|38;5;(?:1|9|196|160|203)|38;2;(?:1[89]\d|2\d\d);(?:\d|[1-9]\d|1[01]\d);\d+)m/;
@@ -80,6 +80,11 @@ export function blockWidth(lines: string[], cols: number): number {
   let w = 0;
   for (const line of lines) w = Math.max(w, [...line.replace(/\s+$/, "")].length);
   return Math.min(cols, w + 2);
+}
+
+/** Drop background colours (Claude Code paints user turns on a grey band). */
+export function stripBackground(raw: string): string {
+  return raw.replace(/\x1b\[(?:48;2;\d+;\d+;\d+|48;5;\d+|4[0-7]|10[0-7])m/g, "");
 }
 
 export function promptLine(lines: string[]): number {

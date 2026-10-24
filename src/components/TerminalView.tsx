@@ -2,7 +2,7 @@ import { createEffect, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type Tree } from "../api";
-import { blockWidth, classify, promptLine, stripAnsi, type LineKind } from "../dialogue";
+import { blockWidth, classify, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
   user: "\x1b[38;2;255;246;168m",
@@ -64,7 +64,7 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
       i = j + 1;
     }
     const out = lines
-      .map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${line}\x1b[39m` : line))
+      .map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${kinds[i] === "user" ? stripBackground(line) : line}\x1b[39m` : line))
       .join("\r\n");
     for (const d of decorations) d.dispose();
     decorations = [];
