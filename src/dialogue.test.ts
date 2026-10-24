@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { classify, promptLine, stripAnsi, stripBackground, blockWidth, type LineKind } from "./dialogue";
+import { blockWidth, classify, defaultWidthOf, promptLine, stripAnsi, stripBackground, type LineKind } from "./dialogue";
 
 const FIXTURES = new URL("./__fixtures__/pane-read/", import.meta.url);
 function loadFixture(name: string) {
@@ -13,13 +13,24 @@ function loadFixture(name: string) {
   return { raw, plain: raw.map(stripAnsi), expected };
 }
 
-describe("classify on synthetic Claude Code snapshot", () => {
-  const { raw, plain, expected } = loadFixture("synthetic-claude-basic");
+const SNAPSHOTS = [
+  "synthetic-claude-basic", // > echo, reply + continuation, dim "Read 2 files" summary, tool calls, digit summary, red error
+  "synthetic-claude-long-reply", // paragraphs, bullet and numbered lists, dim summaries starting with a digit / "Called"
+  "synthetic-claude-tools", // tool call/result pairs with ⎿, multi-line results, red ● error, 24-bit red system note, ✻ status
+  "synthetic-claude-prompt-wrap", // ❯ user echo, wrapped prompt, CJK/emoji reply, empty live prompt
+];
+
+describe.each(SNAPSHOTS)("classify on synthetic Claude Code snapshot %s", (name) => {
+  const { raw, plain, expected } = loadFixture(name);
   const kinds = classify(plain, raw);
 
   for (const b of expected.blocks) {
     it(`frames ${b.kind} block lines ${b.from}-${b.to}`, () => {
       for (let i = b.from; i <= b.to; i++) expect(kinds[i], `line ${i}: ${plain[i]}`).toBe(b.kind);
+    });
+    it(`ends the ${b.kind} block at line ${b.to}`, () => {
+      // The block must not bleed into the next line (blank-before-summary, tool call, status…).
+      if (b.to + 1 < kinds.length) expect(kinds[b.to + 1], `line ${b.to + 1}: ${plain[b.to + 1]}`).not.toBe(b.kind);
     });
   }
   it("leaves tool calls, results, dim summaries, errors and chrome unframed", () => {
@@ -31,8 +42,78 @@ describe("classify on synthetic Claude Code snapshot", () => {
   it("does not frame the live prompt even though it starts with ❯", () => {
     expect(kinds[expected.promptLine]).toBeNull();
   });
-  it.fails("known gap: dim 24-bit summary starting with a digit stays outside the frame (R12)", () => {
-    expect(kinds[18]).toBeNull();
+  it("classifies the same way without the trailing empty line left by the final CRLF", () => {
+    const trimmed = classify(plain.slice(0, -1), raw.slice(0, -1));
+    expect(trimmed).toEqual(kinds.slice(0, -1));
+  });
+});
+
+const AGENT = "\x1b[0m\x1b[38;2;155;232;234m● \x1b[0m";
+const run = (raw: string[]) => classify(raw.map(stripAnsi), raw);
+
+describe("leadStyle (R12): first printable char is found past ANSI and whitespace", () => {
+  it("24-bit low-luminance summary starting with a digit is not a continuation", () => {
+    const kinds = run([`${AGENT}Reply`, "  \x1b[0m\x1b[38;2;94;68;84m8 files changed\x1b[0m"]);
+    expect(kinds).toEqual(["agent", null]);
+  });
+  it("bold before the 24-bit dim colour does not hide the dim", () => {
+    const kinds = run([`${AGENT}Reply`, "  \x1b[1m\x1b[38;2;94;68;84m3 files changed\x1b[0m"]);
+    expect(kinds[1]).toBeNull();
+  });
+  it("256-colour grey (SGR 38;5;240) and SGR 2 / 90 are dim", () => {
+    for (const sgr of ["\x1b[1m\x1b[38;5;240m", "\x1b[2m", "\x1b[90m", "\x1b[38;5;8m"]) {
+      const kinds = run([`${AGENT}Reply`, `  ${sgr}8 files changed\x1b[0m`]);
+      expect(kinds[1], sgr).toBeNull();
+    }
+  });
+  it("a reset after a dim colour clears it (the text itself is default colour)", () => {
+    const kinds = run([`${AGENT}Reply`, "  \x1b[2m\x1b[0mplain continuation"]);
+    expect(kinds[1]).toBe("agent");
+  });
+  it("bright 24-bit colour and bold are not dim", () => {
+    const kinds = run([`${AGENT}Reply`, "  \x1b[38;2;230;230;230mstill the reply", "  \x1b[1mbold continuation\x1b[0m"]);
+    expect(kinds).toEqual(["agent", "agent", "agent"]);
+  });
+  it("blank line before a 24-bit dim summary is outside the block", () => {
+    const kinds = run([`${AGENT}Reply`, "", "  \x1b[0m\x1b[38;2;94;68;84m2 files changed\x1b[0m"]);
+    expect(kinds).toEqual(["agent", null, null]);
+  });
+  it("blank line before a plain continuation stays inside the block", () => {
+    const kinds = run([`${AGENT}Reply`, "", "  second paragraph"]);
+    expect(kinds).toEqual(["agent", "agent", "agent"]);
+  });
+  it("red ● lines are errors, not replies: SGR 31, 91 and 24-bit red", () => {
+    for (const sgr of ["\x1b[31m", "\x1b[91m", "\x1b[38;2;255;43;74m", "\x1b[0m\x1b[38;2;255;107;74m"]) {
+      const kinds = run([`${sgr}● \x1b[0mError: something failed`]);
+      expect(kinds[0], sgr).toBeNull();
+    }
+  });
+  it("24-bit colours with high G or B are not red", () => {
+    for (const sgr of ["\x1b[38;2;255;200;100m", "\x1b[38;2;200;100;200m", "\x1b[38;2;170;130;60m"]) {
+      const kinds = run([`${sgr}● \x1b[0mA reply in an unusual theme colour`]);
+      expect(kinds[0], sgr).toBe("agent");
+    }
+  });
+  it("a dim ● line (system note) is not a reply", () => {
+    expect(run(["\x1b[0m\x1b[38;2;94;68;84m● \x1b[0mContext compacted"])).toEqual([null]);
+  });
+});
+
+describe("promptLine", () => {
+  it("finds a live prompt with NBSP and a dim placeholder", () => {
+    const raw = [`${AGENT}Done.`, "", "❯  \x1b[0m\x1b[2mtype a message\x1b[0m"];
+    const plain = raw.map(stripAnsi);
+    expect(promptLine(plain)).toBe(2);
+    expect(classify(plain, raw)[2]).toBeNull();
+  });
+  it("prefers the last prompt-looking line so a ❯ user echo above is still a user turn", () => {
+    const raw = ["\x1b[0m\x1b[38;2;94;68;84m❯ \x1b[0mdo it", "", `${AGENT}Done.`, "", "❯ "];
+    const plain = raw.map(stripAnsi);
+    expect(promptLine(plain)).toBe(4);
+    expect(classify(plain, raw)[0]).toBe("user");
+  });
+  it("returns -1 without a prompt", () => {
+    expect(promptLine(["> hi", "● hello"])).toBe(-1);
   });
 });
 
@@ -44,13 +125,42 @@ describe("helpers", () => {
   it("stripBackground removes only background colours", () => {
     expect(stripBackground("\x1b[48;2;9;9;9m\x1b[33mtext\x1b[0m")).toBe("\x1b[33mtext\x1b[0m");
   });
-  it("blockWidth is the widest trimmed line plus padding, capped at cols", () => {
+});
+
+describe("blockWidth (R13'): display cells, not code points", () => {
+  it("is the widest trimmed line plus padding, capped at cols", () => {
     expect(blockWidth(["ab   ", "abcd"], 80)).toBe(6);
     expect(blockWidth(["x".repeat(200)], 80)).toBe(80);
   });
-  it("256-colour dim summary starting with a digit is not a continuation (audit #10)", () => {
-    const raw = ["\x1b[0m\x1b[38;2;155;232;234m● \x1b[0mReply", "  \x1b[1m\x1b[38;5;240m8 files changed\x1b[0m"];
-    const kinds = classify(raw.map(stripAnsi), raw);
-    expect(kinds[1]).toBeNull();
+  it("counts CJK as two cells", () => {
+    expect(blockWidth(["日本語"], 80)).toBe(8);
+    expect(blockWidth(["한글"], 80)).toBe(6);
+    expect(blockWidth(["ｱｲｳ"], 80)).toBe(5); // halfwidth katakana (FF61+) stay narrow
+    expect(blockWidth(["ＡＢ"], 80)).toBe(6); // fullwidth latin
+  });
+  it("counts emoji as two cells and combining marks / VS16 as zero", () => {
+    expect(blockWidth(["Готово ✅ 日本語"], 80)).toBe(6 + 1 + 2 + 1 + 6 + 2);
+    expect(blockWidth(["😀"], 80)).toBe(4);
+    expect(blockWidth(["é"], 80)).toBe(3);
+    expect(blockWidth(["✔"], 80)).toBe(3); // text-presentation dingbat: 1 cell
+    expect(blockWidth(["✔️"], 80)).toBe(4); // emoji presentation via VS16: 2 cells
+    expect(blockWidth(["👨‍💻"], 80)).toBe(6); // ZWJ is zero width; the parts stay 2+2 (no grapheme merging)
+  });
+  it("accepts an injected width function", () => {
+    expect(blockWidth(["abc"], 80, () => 3)).toBe(11);
+    expect(blockWidth(["日本語"], 80, () => 1)).toBe(5);
+  });
+  it("defaultWidthOf table", () => {
+    expect(defaultWidthOf("a")).toBe(1);
+    expect(defaultWidthOf("中")).toBe(2);
+    expect(defaultWidthOf("あ")).toBe(2);
+    expect(defaultWidthOf("ガ")).toBe(2);
+    expect(defaultWidthOf("́")).toBe(0);
+    expect(defaultWidthOf("️")).toBe(0);
+    expect(defaultWidthOf("🧪")).toBe(2);
+    expect(defaultWidthOf("✅")).toBe(2);
+    expect(defaultWidthOf("☀")).toBe(1);
+    expect(defaultWidthOf("☀", "️")).toBe(2);
+    expect(defaultWidthOf("─")).toBe(1);
   });
 });

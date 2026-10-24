@@ -1,0 +1,23 @@
+{
+  "comment": "Block boundaries are inclusive line indexes into the fixture (0-based, after splitting on CRLF). Blocks list only the lines a frame must cover.",
+  "blocks": [
+    {
+      "kind": "user",
+      "from": 0,
+      "to": 1
+    },
+    {
+      "kind": "agent",
+      "from": 3,
+      "to": 3
+    }
+  ],
+  "neverFramed": [
+    4,
+    5,
+    7,
+    10,
+    13
+  ],
+  "promptLine": 10
+}
