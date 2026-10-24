@@ -97,26 +97,6 @@ fn run_json(program: &str, args: &[&str]) -> Result<Value, String> {
     serde_json::from_str(&text[start..]).map_err(|e| format!("{program}: bad json: {e}"))
 }
 
-/// Append a line to `deck-debug.log` next to the project (dev diagnostics).
-#[tauri::command]
-fn debug_log(line: String) {
-    use std::io::Write;
-    let path = std::env::current_dir()
-        .map(|d| d.join("..").join("deck-debug.log"))
-        .unwrap_or_else(|_| "deck-debug.log".into());
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{} {line}", chrono_free_now());
-    }
-}
-
-fn chrono_free_now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
-}
-
 /// Forward Herdr events to the webview as `herdr://event` until the window dies.
 fn start_event_pump(app: AppHandle) {
     std::thread::spawn(move || loop {
@@ -147,8 +127,12 @@ fn start_event_pump(app: AppHandle) {
 }
 
 pub fn run() {
+    // `RUST_LOG` overrides; default to info so event-pump warnings are visible.
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
     tauri::Builder::default()
         .setup(|app| {
@@ -167,7 +151,6 @@ pub fn run() {
             herdr_focus,
             cswap_list,
             cswap_switch,
-            debug_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Netrunner Deck");

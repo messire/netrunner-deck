@@ -38,7 +38,6 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     try {
       const { read } = await api.paneRead(p.paneId, Math.max(200, term.rows * 4));
       setError(null);
-      api.debug(`read pane=${p.paneId} len=${read.text.length} rev=${read.revision} rows=${term.rows} cols=${term.cols} same=${read.text === lastText} head=${JSON.stringify(read.text.slice(0, 120))}`);
       if (read.text === lastText) return;
       lastText = read.text;
       render(read.text);
@@ -73,10 +72,8 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     for (const d of decorations) d.dispose();
     decorations = [];
     term.reset();
-    api.debug(`render lines=${lines.length} blocks=${kinds.filter((k, i) => k && kinds[i - 1] !== k).length} out=${out.length} host=${host.clientWidth}x${host.clientHeight}`);
     term.write(out, () => {
       try {
-        api.debug(`written buffer=${term.buffer.active.length} baseY=${term.buffer.active.baseY} line0=${JSON.stringify(term.buffer.active.getLine(0)?.translateToString(true).slice(0, 80))}`);
         decorate(kinds, plain);
         placeCursor(plain);
       } catch (err) {
