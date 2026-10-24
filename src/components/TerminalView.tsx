@@ -48,16 +48,23 @@ export default function TerminalView(p: { paneId: string; tick: number; tree?: T
     const raw = text.replace(/\r\n?/g, "\n").split("\n");
     const rawPlain = raw.map(stripAnsi);
     const rawKinds = classify(rawPlain);
-    // Give every dialogue block breathing room: a spacer row before and after
-    // it when the neighbouring line is not already blank, so frames never touch.
+    // Every dialogue block gets one blank row inside its frame at the top and
+    // bottom: an existing blank neighbour is absorbed, otherwise a spacer is added.
     const lines: string[] = [], plain: string[] = [], kinds: LineKind[] = [];
-    for (let i = 0; i < raw.length; i++) {
+    const push = (l: string, pl: string, k: LineKind) => { lines.push(l); plain.push(pl); kinds.push(k); };
+    let i = 0;
+    while (i < raw.length) {
       const k = rawKinds[i];
-      const prevK = i > 0 ? rawKinds[i - 1] : null;
-      if (k && k !== prevK && i > 0 && rawPlain[i - 1].trim() !== "") { lines.push(""); plain.push(""); kinds.push(null); }
-      lines.push(raw[i]); plain.push(rawPlain[i]); kinds.push(k);
-      const nextK = i + 1 < raw.length ? rawKinds[i + 1] : null;
-      if (k && k !== nextK && i + 1 < raw.length && rawPlain[i + 1].trim() !== "") { lines.push(""); plain.push(""); kinds.push(null); }
+      if (!k) { push(raw[i], rawPlain[i], null); i++; continue; }
+      let j = i;
+      while (j + 1 < raw.length && rawKinds[j + 1] === k) j++;
+      const last = kinds.length - 1;
+      if (last >= 0 && kinds[last] === null && plain[last].trim() === "") kinds[last] = k;
+      else push("", "", k);
+      for (let r = i; r <= j; r++) push(raw[r], rawPlain[r], k);
+      if (j + 1 < raw.length && rawPlain[j + 1].trim() === "") { push(raw[j + 1], rawPlain[j + 1], k); j++; }
+      else push("", "", k);
+      i = j + 1;
     }
     const out = lines
       .map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${line}\x1b[39m` : line))
