@@ -40,6 +40,21 @@ export default function TerminalView(p: { paneId: string; tree?: Tree }) {
   };
 
   const [error, setError] = createSignal<string | null>(null);
+  // R14': a snapshot repaint resets scroll and selection, so while the user is
+  // reading history or selecting text the latest snapshot is parked here and
+  // applied as soon as they return to the bottom / drop the selection.
+  const [held, setHeld] = createSignal<string | null>(null);
+  const userIsReading = () => {
+    const buf = term.buffer.active;
+    return term.hasSelection() || buf.viewportY < buf.baseY;
+  };
+  const applyHeld = () => {
+    const text = held();
+    if (text === null || disposed || userIsReading()) return;
+    setHeld(null);
+    render(text);
+    lastText = text;
+  };
   // One request in flight per view; a refresh asked for meanwhile marks the
   // view dirty and runs right after. (A "last wins" gate would starve rendering
   // whenever pane.read is slower than the poll period.) A pane switch mid-flight
@@ -56,6 +71,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree }) {
       if (disposed || id !== p.paneId) return;
       setError(null);
       if (read.text === lastText) return;
+      if (userIsReading()) { setHeld(read.text); return; }
+      setHeld(null);
       render(read.text);
       lastText = read.text;
     } catch (err) {
@@ -205,6 +222,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree }) {
     term.open(host);
     fit.fit();
     term.onData(onData);
+    term.onScroll(() => applyHeld());
+    term.onSelectionChange(() => applyHeld());
     let lastSize = "";
     const ro = new ResizeObserver(() => {
       const size = `${host.clientWidth}x${host.clientHeight}`;
@@ -223,7 +242,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree }) {
 
   return (
     <div class="term">
-      <div class="th"><span>◆ {header().title}</span><span class="micro">{header().where}</span><span class="micro right" style={error() ? "color:#FF2B4A" : ""}>{error() ?? header().ctx}</span></div>
+      <div class="th"><span>◆ {header().title}</span><span class="micro">{header().where}</span><span class="micro right" style={error() ? "color:#FF2B4A" : held() !== null ? "color:#FCEE0A" : ""}>{error() ?? (held() !== null ? "NEW OUTPUT ↓ (scroll down)" : header().ctx)}</span></div>
       <div class="xterm-host" ref={host} />
     </div>
   );
