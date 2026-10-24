@@ -80,6 +80,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .keys b{display:inline-block;min-width:20px;text-align:center;border:1px solid var(--cy);color:var(--cy);font-weight:700;padding:0 5px;margin-right:6px;font-size:10px}
 .keys .right{margin-left:auto;display:flex;gap:18px;font:11px Consolas,monospace;color:var(--mut)}
 /* dialogue frames drawn under the text by xterm decorations */
+.xterm .xterm-decoration-container,.xterm .xterm-screen{overflow:visible}
 .xterm .dlg{box-sizing:content-box;pointer-events:none;border-left:1px solid;border-right:1px solid;overflow:visible;padding:0 6px;margin-left:-6px}
 .xterm .dlg-top,.xterm .dlg-only{margin-top:2px}
 .xterm .dlg-agent{border-color:#2BFF88;background:rgba(43,255,136,.06)}
