@@ -2,7 +2,7 @@ import { createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type Tree } from "../api";
-import { blockWidth, classify, fitRules, promptLine, snapshotCols, stripAnsi, stripBackground, type LineKind } from "../dialogue";
+import { blockWidth, classify, fitRules, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
 import { mapInput } from "../keys";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
@@ -99,35 +99,25 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     }
   }
 
-  // The snapshot is formatted for the PTY's width (the TUI's, not ours). The
-  // font shrinks so that width fits when it can (down to MIN_FONT); rule-only
-  // lines (input box, separators) are cut to our width so they never wrap.
-  const BASE_FONT = 13.5, MIN_FONT = 10;
-  let fontFor = 0;
-  // Returns true when the font changed: xterm re-measures the cell on the next
-  // frame, so the caller must stop and the deferred fit() + render() finish.
-  function fitFont(ptyCols: number): boolean {
-    if (!ptyCols || ptyCols === fontFor || !term.cols) return false;
-    fontFor = ptyCols;
-    const current = term.options.fontSize ?? BASE_FONT;
-    const pxPerCellPerFontPx = host.clientWidth / term.cols / current;
-    const want = Math.floor((host.clientWidth / ptyCols / pxPerCellPerFontPx) * 10) / 10;
-    const size = Math.max(MIN_FONT, Math.min(BASE_FONT, want));
-    if (size === current) return false;
-    term.options.fontSize = size;
-    requestAnimationFrame(() => {
-      if (disposed) return;
-      fit.fit();
-      if (lastText) render(lastText);
-    });
-    return true;
+  // The snapshot is formatted for the PTY's width (the TUI's, not ours): long
+  // text wraps here (frames follow the wrapped rows); rule-only lines (input
+  // box, separators) are cut to our width so they never wrap. The font never
+  // changes. Columns are fitted to the host minus the viewport scrollbar plus
+  // one spare cell, so neither text nor frames ever run under the scrollbar.
+  const FONT = 13.5;
+  function fitCols() {
+    fit.fit();
+    const vp = host.querySelector<HTMLElement>(".xterm-viewport");
+    const scrollbarPx = vp ? vp.offsetWidth - vp.clientWidth : 0;
+    const cellPx = host.clientWidth / Math.max(1, term.cols);
+    const reserve = Math.ceil(scrollbarPx / cellPx) + 1;
+    const cols = Math.max(20, term.cols - reserve);
+    if (cols !== term.cols) term.resize(cols, term.rows);
   }
 
   function render(text: string) {
     if (disposed) return;
-    const source = text.replace(/\r\n?/g, "\n").split("\n");
-    if (fitFont(snapshotCols(source.map(stripAnsi)))) return;
-    const raw = source.map((l) => fitRules(l, term.cols));
+    const raw = text.replace(/\r\n?/g, "\n").split("\n").map((l) => fitRules(l, term.cols));
     const rawPlain = raw.map(stripAnsi);
     const rawKinds = classify(rawPlain, raw);
     // Every dialogue block gets its own blank row inside the frame at the top
@@ -189,8 +179,9 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       const first = rows[i]?.[0];
       const last = rows[j]?.[rows[j].length - 1];
       if (first !== undefined && last !== undefined) {
-        // Two cells short of the edge: the frame never runs under the scrollbar.
-        const width = blockWidth(plain.slice(i, j + 1), term.cols - 2);
+        // Capped at the column count: every full-width frame ends on the same
+        // line as the rules the CLI draws (fitRules cuts those to term.cols).
+        const width = blockWidth(plain.slice(i, j + 1), term.cols);
         for (let r = first; r <= last; r++) {
           const marker = term.registerMarker(r - cursorRow);
           if (!marker) continue;
@@ -243,7 +234,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   onMount(() => {
     term = new Terminal({
       fontFamily: '"Cascadia Mono", Consolas, "JetBrains Mono", monospace',
-      fontSize: BASE_FONT,
+      fontSize: FONT,
       lineHeight: 1.25,
       cursorBlink: true,
       cursorStyle: "block",
@@ -261,7 +252,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    fit.fit();
+    fitCols();
     term.onData(onData);
     term.onScroll(() => applyHeld());
     term.onSelectionChange(() => applyHeld());
@@ -270,8 +261,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       const size = `${host.clientWidth}x${host.clientHeight}`;
       if (size === lastSize) return;
       lastSize = size;
-      fontFor = 0; // the width budget changed: re-derive the font from the snapshot
-      fit.fit();
+      fitCols();
       if (lastText) render(lastText);
     });
     ro.observe(host);
