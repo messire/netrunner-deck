@@ -2,7 +2,7 @@ import { createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type Tree } from "../api";
-import { blockWidth, classify, fitRules, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
+import { blockWidth, classify, fitRules, inputBoxStart, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
 import { mapInput } from "../keys";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
@@ -25,7 +25,11 @@ export const POLL_MS_WITH_OUTPUT_EVENTS = 10000;
 
 export default function TerminalView(p: { paneId: string; tree?: Tree; outputTick?: number }) {
   let host!: HTMLDivElement;
+  let inputHost!: HTMLDivElement;
+  // Two terminals: the chat scrolls; the CLI's input box (rules, prompt,
+  // status line) is pinned below it and always visible.
   let term: Terminal;
+  let inputTerm: Terminal;
   let fit: FitAddon;
   let lastText = "";
   // `revision` from the last applied pane.read (fork: content counter; upstream: always 0).
@@ -113,12 +117,18 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     const reserve = Math.ceil(scrollbarPx / cellPx) + 1;
     const cols = Math.max(20, term.cols - reserve);
     if (cols !== term.cols) term.resize(cols, term.rows);
+    if (inputTerm.cols !== cols) inputTerm.resize(cols, inputTerm.rows);
   }
 
   function render(text: string) {
     if (disposed) return;
-    const raw = text.replace(/\r\n?/g, "\n").split("\n").map((l) => fitRules(l, term.cols));
-    const rawPlain = raw.map(stripAnsi);
+    const all = text.replace(/\r\n?/g, "\n").split("\n").map((l) => fitRules(l, term.cols));
+    const allPlain = all.map(stripAnsi);
+    // Split off the input box; it is rendered in the pinned terminal below.
+    const boxAt = inputBoxStart(allPlain);
+    const raw = boxAt >= 0 ? all.slice(0, boxAt) : all;
+    const rawPlain = boxAt >= 0 ? allPlain.slice(0, boxAt) : allPlain;
+    renderInput(boxAt >= 0 ? all.slice(boxAt) : [], boxAt >= 0 ? allPlain.slice(boxAt) : []);
     const rawKinds = classify(rawPlain, raw);
     // Every dialogue block gets its own blank row inside the frame at the top
     // and bottom; blank lines around it in the output stay outside as the gap.
@@ -145,7 +155,6 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       if (disposed) return;
       try {
         decorate(kinds, plain);
-        placeCursor(plain);
       } catch (err) {
         console.error("decorate failed", err);
         setError(String(err));
@@ -199,21 +208,26 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     }
   }
 
-  function placeCursor(plain: string[]) {
-    const idx = promptLine(plain);
-    const rows = rowsByLine();
-    const row = idx >= 0 ? rows[idx]?.[0] : undefined;
-    if (row === undefined) { term.options.cursorStyle = "underline"; term.options.cursorInactiveStyle = "none"; return; }
-    const buf = term.buffer.active;
-    const viewportRow = row - buf.baseY;
-    if (viewportRow < 0 || viewportRow >= term.rows) return;
-    // The snapshot carries no cursor position; typing appends, so the end of the
-    // prompt line is the best estimate until the streaming attach lands.
-    const typed = [...plain[idx].replace(/\s+$/, "")].length;
-    const col = Math.min(term.cols - 1, Math.max(typed, 2));
-    term.options.cursorStyle = "block";
-    term.options.cursorInactiveStyle = "outline";
-    term.write(`\x1b[${viewportRow + 1};${col + 1}H`);
+  /** The input box: fixed number of rows, no scrollback, cursor at the end of the prompt line. */
+  function renderInput(raw: string[], plain: string[]) {
+    while (raw.length && plain[plain.length - 1].trim() === "") { raw.pop(); plain.pop(); }
+    const rows = raw.length;
+    inputHost.style.display = rows ? "" : "none";
+    if (!rows) { inputTerm.reset(); return; }
+    if (inputTerm.rows !== rows) inputTerm.resize(inputTerm.cols, rows);
+    inputTerm.reset();
+    inputTerm.write(raw.join("\r\n"), () => {
+      if (disposed) return;
+      const idx = promptLine(plain);
+      if (idx < 0) { inputTerm.options.cursorStyle = "underline"; inputTerm.options.cursorInactiveStyle = "none"; return; }
+      // The snapshot carries no cursor position; typing appends, so the end of
+      // the prompt line is the best estimate until the streaming attach lands.
+      const typed = [...plain[idx].replace(/\s+$/, "")].length;
+      const col = Math.min(inputTerm.cols - 1, Math.max(typed, 2));
+      inputTerm.options.cursorStyle = "block";
+      inputTerm.options.cursorInactiveStyle = "outline";
+      inputTerm.write(`\x1b[${idx + 1};${col + 1}H`);
+    });
   }
 
   const schedule = () => {
@@ -236,8 +250,9 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       fontFamily: '"Cascadia Mono", Consolas, "JetBrains Mono", monospace',
       fontSize: FONT,
       lineHeight: 1.25,
-      cursorBlink: true,
-      cursorStyle: "block",
+      cursorBlink: false,
+      cursorStyle: "underline",
+      cursorInactiveStyle: "none",
       scrollback: 5000,
       allowProposedApi: true,
       theme: {
@@ -252,6 +267,11 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
+    inputTerm = new Terminal({ ...term.options, scrollback: 0, rows: 1, cols: term.cols, cursorBlink: true });
+    inputTerm.open(inputHost);
+    inputTerm.onData(onData);
+    // Keys typed anywhere in the pane go to the CLI; the caret lives in the input box.
+    term.textarea?.addEventListener("focus", () => inputTerm.focus());
     fitCols();
     term.onData(onData);
     term.onScroll(() => applyHeld());
@@ -274,7 +294,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       }, seenTick ? POLL_MS_WITH_OUTPUT_EVENTS : POLL_MS_WITHOUT_OUTPUT_EVENTS);
     };
     schedulePoll();
-    onCleanup(() => { ro.disconnect(); clearTimeout(poll); term.dispose(); });
+    onCleanup(() => { ro.disconnect(); clearTimeout(poll); term.dispose(); inputTerm.dispose(); });
     refresh();
   });
 
@@ -299,7 +319,10 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   return (
     <div class="term">
       <div class="th"><span>◆ {header().title}</span><span class="micro">{header().where}</span><span class="micro right" style={error() ? "color:#FF2B4A" : held() !== null ? "color:#FCEE0A" : ""}>{error() ?? (held() !== null ? "NEW OUTPUT ↓ (scroll down)" : header().ctx)}</span></div>
-      <div class="xterm-host" ref={host} />
+      <div class="pane-body">
+        <div class="xterm-host" ref={host} />
+        <div class="xterm-input" ref={inputHost} />
+      </div>
     </div>
   );
 }

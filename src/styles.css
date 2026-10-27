@@ -71,8 +71,12 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .term:before{left:-2px;top:-2px;border-right:0;border-bottom:0}.term:after{right:-2px;bottom:-2px;border-left:0;border-top:0}
 .th{display:flex;align-items:center;gap:12px;padding:0 12px;background:linear-gradient(90deg,rgba(255,43,74,.25),transparent 60%);border-bottom:1px solid var(--line);font-size:11px;letter-spacing:1.5px;color:var(--yel);font-weight:700;white-space:nowrap;overflow:hidden}
 .th .right{margin-left:auto}
-.xterm-host{min-height:0;min-width:0;overflow:hidden;padding:6px 12px 6px 14px;user-select:text}
+.pane-body{display:grid;grid-template-rows:1fr auto;min-height:0;min-width:0}
+.xterm-host{min-height:0;min-width:0;overflow:hidden;padding:6px 12px 2px 14px;user-select:text}
 .xterm-host .xterm{height:100%}
+/* The CLI's input box, pinned under the chat; same grid, no scrollback. */
+.xterm-input{min-width:0;overflow:hidden;padding:4px 12px 6px 14px;border-top:1px solid var(--line);user-select:text}
+.xterm-input .xterm .xterm-viewport{overflow:hidden}
 .empty{display:grid;place-items:center;color:var(--mut);letter-spacing:2px}
 .offline{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);max-width:70%;max-height:3.6em;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--red);color:var(--red);background:#160910;padding:6px 14px;font:11px Consolas,monospace;letter-spacing:1px;line-height:1.2}
 /* key bar */
