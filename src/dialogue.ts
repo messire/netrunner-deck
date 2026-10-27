@@ -73,6 +73,10 @@ function startKind(line: string, raw: string | undefined, isPrompt: boolean): Li
 
 // Indented lines continue a message, except tool summaries ("Ran 2 shell
 // commands"), tool results ("⎿ …") and status lines that Claude Code also indents.
+const BACKGROUND = /\x1b\[(?:48;2;\d+;\d+;\d+|48;5;\d+|4[0-7]|10[0-7])m/;
+/** Claude Code paints the whole user turn (every row, blank ones included) on a background band. */
+export const hasBackground = (raw: string | undefined) => raw !== undefined && BACKGROUND.test(raw);
+
 const isContinuation = (line: string) =>
   /^\s{2,}\S/.test(line) && !TOOL_SUMMARY.test(line.trim()) && !/^\s*[⎿└├│]/.test(line) && !/^\s*[※✻✽✶✳·]\s/.test(line);
 const isBlank = (line: string) => line.trim() === "";
@@ -92,7 +96,11 @@ export function classify(lines: string[], raw?: string[]): LineKind[] {
       continue;
     }
     if (!current) continue;
-    if (isContinuation(line) && !dim) {
+    if (current === "user" && raw && hasBackground(raw[i])) {
+      kinds[i] = current; // still on the user-turn band: indentation and blanks do not matter
+    } else if (current === "user" && raw && hasBackground(raw[kinds.lastIndexOf("user")])) {
+      current = null; // the band ended on the previous line: this one is not part of the turn
+    } else if (isContinuation(line) && !dim) {
       kinds[i] = current;
     } else if (isBlank(line) && i + 1 < lines.length && isContinuation(lines[i + 1]) && !(raw && leadStyle(raw[i + 1]).dim)) {
       kinds[i] = current; // paragraph break inside the same message
@@ -179,4 +187,32 @@ export function promptLine(lines: string[]): number {
     if (/^[❯›>]\s*$/.test(lines[i]) || /^[❯›]\s/.test(lines[i])) return i;
   }
   return -1;
+}
+
+/** Widest line of a snapshot, in cells: the PTY's column count when the CLI draws full-width rules. */
+export function snapshotCols(lines: string[], widthOf: WidthOf = defaultWidthOf): number {
+  let w = 0;
+  for (const line of lines) w = Math.max(w, lineWidth(line, widthOf));
+  return w;
+}
+
+const RULE_RUN = /[─━═]{2,}/; // stateless; `new RegExp(RULE_RUN, "g")` for iteration
+/**
+ * A line that is only horizontal rules (Claude Code's input box, separators)
+ * drawn for a wider PTY is shortened to `cols` so it never wraps in the view;
+ * the longest run absorbs the cut. Other lines are returned unchanged.
+ */
+export function fitRules(raw: string, cols: number, widthOf: WidthOf = defaultWidthOf): string {
+  const plain = stripAnsi(raw);
+  if (!/^[\s─━═╌┄┈]*$/.test(plain) || !RULE_RUN.test(plain)) return raw;
+  const excess = lineWidth(plain, widthOf) - cols;
+  if (excess <= 0) return raw;
+  let longest = 0;
+  for (const m of plain.matchAll(new RegExp(RULE_RUN, "g"))) longest = Math.max(longest, m[0].length);
+  let done = false;
+  return raw.replace(new RegExp(RULE_RUN, "g"), (run) => {
+    if (done || run.length !== longest) return run;
+    done = true;
+    return run.slice(0, Math.max(1, run.length - excess));
+  });
 }

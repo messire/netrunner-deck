@@ -2,7 +2,7 @@ import { createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type Tree } from "../api";
-import { blockWidth, classify, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
+import { blockWidth, classify, fitRules, promptLine, snapshotCols, stripAnsi, stripBackground, type LineKind } from "../dialogue";
 import { mapInput } from "../keys";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
@@ -99,9 +99,26 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     }
   }
 
+  // The snapshot is formatted for the PTY's width (the TUI's, not ours). The
+  // font shrinks so that width fits when it can (down to MIN_FONT); rule-only
+  // lines (input box, separators) are cut to our width so they never wrap.
+  const BASE_FONT = 13.5, MIN_FONT = 10;
+  let fontFor = 0;
+  function fitFont(ptyCols: number) {
+    if (!ptyCols || ptyCols === fontFor || !term.cols) return;
+    fontFor = ptyCols;
+    const current = term.options.fontSize ?? BASE_FONT;
+    const pxPerCellPerFontPx = host.clientWidth / term.cols / current;
+    const want = Math.floor((host.clientWidth / ptyCols / pxPerCellPerFontPx) * 10) / 10;
+    const size = Math.max(MIN_FONT, Math.min(BASE_FONT, want));
+    if (size !== current) { term.options.fontSize = size; fit.fit(); }
+  }
+
   function render(text: string) {
     if (disposed) return;
-    const raw = text.replace(/\r\n?/g, "\n").split("\n");
+    const source = text.replace(/\r\n?/g, "\n").split("\n");
+    fitFont(snapshotCols(source.map(stripAnsi)));
+    const raw = source.map((l) => fitRules(l, term.cols));
     const rawPlain = raw.map(stripAnsi);
     const rawKinds = classify(rawPlain, raw);
     // Every dialogue block gets its own blank row inside the frame at the top
@@ -216,7 +233,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   onMount(() => {
     term = new Terminal({
       fontFamily: '"Cascadia Mono", Consolas, "JetBrains Mono", monospace',
-      fontSize: 13.5,
+      fontSize: BASE_FONT,
       lineHeight: 1.25,
       cursorBlink: true,
       cursorStyle: "block",
@@ -243,6 +260,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       const size = `${host.clientWidth}x${host.clientHeight}`;
       if (size === lastSize) return;
       lastSize = size;
+      fontFor = 0; // the width budget changed: re-derive the font from the snapshot
       fit.fit();
       if (lastText) render(lastText);
     });
