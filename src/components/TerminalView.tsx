@@ -104,20 +104,29 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   // lines (input box, separators) are cut to our width so they never wrap.
   const BASE_FONT = 13.5, MIN_FONT = 10;
   let fontFor = 0;
-  function fitFont(ptyCols: number) {
-    if (!ptyCols || ptyCols === fontFor || !term.cols) return;
+  // Returns true when the font changed: xterm re-measures the cell on the next
+  // frame, so the caller must stop and the deferred fit() + render() finish.
+  function fitFont(ptyCols: number): boolean {
+    if (!ptyCols || ptyCols === fontFor || !term.cols) return false;
     fontFor = ptyCols;
     const current = term.options.fontSize ?? BASE_FONT;
     const pxPerCellPerFontPx = host.clientWidth / term.cols / current;
     const want = Math.floor((host.clientWidth / ptyCols / pxPerCellPerFontPx) * 10) / 10;
     const size = Math.max(MIN_FONT, Math.min(BASE_FONT, want));
-    if (size !== current) { term.options.fontSize = size; fit.fit(); }
+    if (size === current) return false;
+    term.options.fontSize = size;
+    requestAnimationFrame(() => {
+      if (disposed) return;
+      fit.fit();
+      if (lastText) render(lastText);
+    });
+    return true;
   }
 
   function render(text: string) {
     if (disposed) return;
     const source = text.replace(/\r\n?/g, "\n").split("\n");
-    fitFont(snapshotCols(source.map(stripAnsi)));
+    if (fitFont(snapshotCols(source.map(stripAnsi)))) return;
     const raw = source.map((l) => fitRules(l, term.cols));
     const rawPlain = raw.map(stripAnsi);
     const rawKinds = classify(rawPlain, raw);
@@ -180,7 +189,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       const first = rows[i]?.[0];
       const last = rows[j]?.[rows[j].length - 1];
       if (first !== undefined && last !== undefined) {
-        const width = blockWidth(plain.slice(i, j + 1), term.cols);
+        // Two cells short of the edge: the frame never runs under the scrollbar.
+        const width = blockWidth(plain.slice(i, j + 1), term.cols - 2);
         for (let r = first; r <= last; r++) {
           const marker = term.registerMarker(r - cursorRow);
           if (!marker) continue;
