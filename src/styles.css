@@ -81,7 +81,8 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .keys .right{margin-left:auto;display:flex;gap:18px;font:11px Consolas,monospace;color:var(--mut)}
 /* dialogue frames drawn under the text by xterm decorations */
 .xterm .xterm-decoration-container{overflow:visible}
-.xterm .dlg{box-sizing:content-box;pointer-events:none;border:0 solid;border-left-width:1px;border-right-width:1px;overflow:visible;padding:0 6px;margin-left:-6px}
+/* Frame edges sit on the text grid: left border at column 0, right border at the last cell of the block, so full-width frames and the CLI rules start and end on the same lines. */
+.xterm .dlg{box-sizing:border-box;pointer-events:none;border:0 solid;border-left-width:1px;border-right-width:1px;overflow:visible;padding:0;margin-left:-1px}
 .xterm .dlg-top,.xterm .dlg-only{margin-top:2px}
 .xterm .dlg-agent{border-color:#2BFF88;background:rgba(43,255,136,.06)}
 .xterm .dlg-user{border-color:#FCEE0A;background:rgba(252,238,10,.06)}
