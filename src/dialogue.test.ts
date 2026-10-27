@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { blockWidth, classify, defaultWidthOf, promptLine, stripAnsi, stripBackground, type LineKind } from "./dialogue";
+import { blockWidth, classify, defaultWidthOf, fitRules, hasBackground, promptLine, snapshotCols, stripAnsi, stripBackground, type LineKind } from "./dialogue";
 
 const FIXTURES = new URL("./__fixtures__/pane-read/", import.meta.url);
 function loadFixture(name: string) {
@@ -162,5 +162,77 @@ describe("blockWidth (R13'): display cells, not code points", () => {
     expect(defaultWidthOf("☀")).toBe(1);
     expect(defaultWidthOf("☀", "️")).toBe(2);
     expect(defaultWidthOf("─")).toBe(1);
+  });
+});
+
+describe("classify: user turn on Claude Code's background band (v2.1+)", () => {
+  const BG = "\x1b[48;2;30;10;20m";
+  const DIM = "\x1b[38;2;94;68;84m";
+  const FG = "\x1b[38;2;155;232;234m";
+  const band = (text: string) => `\x1b[0m${BG}  \x1b[0m${FG}${BG}${text}\x1b[0m${BG}        `;
+  const blank = `\x1b[0m${BG}                    `;
+  const raw = [
+    `\x1b[0m${DIM}${BG}❯ \x1b[0m${FG}${BG}# Редизайн\x1b[0m${BG}      `,
+    blank,
+    band("Необходимо переработать интерфейс"),
+    blank,
+    band("| col | col |"),
+    band("│ table row │"),
+    band("- bullet"),
+    band("```"),
+    blank,
+    "",
+    `\x1b[0m${FG}● \x1b[0mПринял.`,
+    "  1. Волью main.",
+    "",
+    "❯ ",
+  ];
+  const plain = raw.map(stripAnsi);
+  it("every row with the band belongs to the user turn, blanks and tables included", () => {
+    const kinds = classify(plain, raw);
+    expect(kinds.slice(0, 9)).toEqual(new Array(9).fill("user"));
+  });
+  it("the turn ends exactly where the band ends", () => {
+    const kinds = classify(plain, raw);
+    expect(kinds[9]).toBeNull();
+    expect(kinds[10]).toBe("agent");
+    expect(kinds[11]).toBe("agent");
+    expect(kinds[13]).toBeNull();
+  });
+  it("without a band (older Claude Code) the indentation rule still applies", () => {
+    const old = ["❯ hello", "  more", "not part", "", "● reply", "", "❯ "];
+    expect(classify(old, old)).toEqual(["user", "user", null, null, "agent", null, null]);
+  });
+  it("hasBackground sees 24-bit, 256-colour and classic backgrounds only", () => {
+    expect(hasBackground(BG + "x")).toBe(true);
+    expect(hasBackground("\x1b[48;5;236mx")).toBe(true);
+    expect(hasBackground("\x1b[44mx")).toBe(true);
+    expect(hasBackground("\x1b[38;2;30;10;20mx")).toBe(false);
+    expect(hasBackground(undefined)).toBe(false);
+  });
+});
+
+describe("snapshotCols / fitRules: a snapshot drawn for a wider PTY", () => {
+  it("snapshotCols is the widest line in cells", () => {
+    expect(snapshotCols(["ab", "─".repeat(169), "  x"])).toBe(169);
+    expect(snapshotCols(["日本語", "ab"])).toBe(6);
+    expect(snapshotCols([])).toBe(0);
+  });
+  it("a rule-only line wider than the view is cut to the view width, keeping its colour", () => {
+    const line = "\x1b[38;2;192;19;42m" + "─".repeat(169) + "\x1b[0m";
+    const out = fitRules(line, 100);
+    expect(stripAnsi(out)).toBe("─".repeat(100));
+    expect(out.startsWith("\x1b[38;2;192;19;42m")).toBe(true);
+  });
+  it("indentation counts: 2 spaces + 167 rules at 100 cols → 2 spaces + 98 rules", () => {
+    expect(stripAnsi(fitRules("  " + "─".repeat(167), 100))).toBe("  " + "─".repeat(98));
+  });
+  it("lines that fit, or that carry text, are untouched", () => {
+    expect(fitRules("─".repeat(50), 100)).toBe("─".repeat(50));
+    expect(fitRules("── title ──" + "─".repeat(200), 100)).toBe("── title ──" + "─".repeat(200));
+    expect(fitRules("● text", 100)).toBe("● text");
+  });
+  it("only the longest run is cut when a line has several", () => {
+    expect(stripAnsi(fitRules("──  " + "─".repeat(120), 100))).toBe("──  " + "─".repeat(96));
   });
 });

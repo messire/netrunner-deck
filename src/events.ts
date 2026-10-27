@@ -33,7 +33,10 @@ export function routeEvent(ev: unknown, currentPane: string | null): EventRoute 
   // tolerant of the dotted spelling should it ever be echoed back.
   const name = raw.replace(/\./g, "_");
   if (name === "pane_output_changed") {
-    const pane = (ev as { pane_id?: unknown }).pane_id;
+    // Wire shape: `{event, data: {type, pane_id, workspace_id, revision}}`
+    // (fork `EventEnvelope` + internally tagged `EventData`).
+    const data = (ev as { data?: unknown }).data;
+    const pane = typeof data === "object" && data !== null ? (data as { pane_id?: unknown }).pane_id : undefined;
     return currentPane !== null && pane === currentPane ? "tick" : "ignore";
   }
   if (TREE_EVENTS.has(name)) return "tree";

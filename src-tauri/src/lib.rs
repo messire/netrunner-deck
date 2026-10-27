@@ -63,7 +63,7 @@ async fn herdr_tree() -> herdr::Result<Value> {
 #[tauri::command]
 async fn herdr_pane_read(pane_id: String, lines: Option<u32>) -> herdr::Result<Value> {
     blocking(move || {
-        herdr::call(
+        let read = herdr::call(
             "pane.read",
             json!({
                 "pane_id": pane_id,
@@ -72,7 +72,14 @@ async fn herdr_pane_read(pane_id: String, lines: Option<u32>) -> herdr::Result<V
                 "format": "ansi",
                 "strip_ansi": false
             }),
-        )
+        )?;
+        // Debug trace of the read cadence (Herdr only logs failed reads).
+        tracing::debug!(
+            pane = %pane_id,
+            revision = read["read"]["revision"].as_u64().unwrap_or(0),
+            "pane.read"
+        );
+        Ok(read)
     })
     .await
 }
@@ -352,7 +359,7 @@ pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,netrunner_deck_lib=debug")),
         )
         .init();
     let cswap = resolve_cswap();
