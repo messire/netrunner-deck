@@ -216,3 +216,21 @@ export function fitRules(raw: string, cols: number, widthOf: WidthOf = defaultWi
     return run.slice(0, Math.max(1, run.length - excess));
   });
 }
+
+const RULE_ONLY = /^[\s─━═╌┄┈]+$/;
+/**
+ * Where the CLI's input box starts: the rule line drawn just above the live
+ * prompt (Claude Code boxes the prompt between two rules), else the prompt
+ * line itself. -1 when there is no live prompt. Everything from here to the
+ * end of the snapshot (prompt, closing rule, status line) is the input area
+ * the view pins below the scrolling chat.
+ */
+export function inputBoxStart(lines: string[]): number {
+  const prompt = promptLine(lines);
+  if (prompt < 0) return -1;
+  for (let i = prompt - 1; i >= Math.max(0, prompt - 2); i--) {
+    if (RULE_ONLY.test(lines[i])) return i;
+    if (lines[i].trim() !== "") break;
+  }
+  return prompt;
+}

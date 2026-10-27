@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { blockWidth, classify, defaultWidthOf, fitRules, hasBackground, promptLine, snapshotCols, stripAnsi, stripBackground, type LineKind } from "./dialogue";
+import { blockWidth, classify, defaultWidthOf, fitRules, hasBackground, inputBoxStart, promptLine, snapshotCols, stripAnsi, stripBackground, type LineKind } from "./dialogue";
 
 const FIXTURES = new URL("./__fixtures__/pane-read/", import.meta.url);
 function loadFixture(name: string) {
@@ -234,5 +234,27 @@ describe("snapshotCols / fitRules: a snapshot drawn for a wider PTY", () => {
   });
   it("only the longest run is cut when a line has several", () => {
     expect(stripAnsi(fitRules("──  " + "─".repeat(120), 100))).toBe("──  " + "─".repeat(96));
+  });
+});
+
+describe("inputBoxStart: the pinned input area", () => {
+  it("starts at the rule above the live prompt and runs to the end", () => {
+    const lines = ["● reply", "", "─".repeat(40), "❯ ", "─".repeat(40), "  ⏵⏵ bypass permissions on"];
+    expect(inputBoxStart(lines)).toBe(2);
+  });
+  it("falls back to the prompt line when there is no rule above it", () => {
+    expect(inputBoxStart(["● reply", "", "❯ typing"])).toBe(2);
+    expect(inputBoxStart(["● reply", "x", "", "❯ "])).toBe(3);
+  });
+  it("a rule further than two lines up is not the box", () => {
+    expect(inputBoxStart(["─".repeat(10), "a", "b", "c", "❯ "])).toBe(4);
+  });
+  it("-1 without a live prompt", () => {
+    expect(inputBoxStart(["● reply", "", "$ "])).toBe(-1);
+    expect(inputBoxStart([])).toBe(-1);
+  });
+  it("a user echo above the live prompt is not the input box", () => {
+    const lines = ["❯ my question", "", "● reply", "", "─".repeat(40), "❯ ", "─".repeat(40)];
+    expect(inputBoxStart(lines)).toBe(4);
   });
 });
