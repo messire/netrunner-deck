@@ -7,7 +7,8 @@ re-fetched from Herdr, pane contents are `pane.read` snapshots, account data com
 on every call. (UI-only settings such as window size may be persisted from milestone M4 on;
 none are today.)
 
-Stack: Tauri 2 (Rust) + Solid + xterm.js.
+Stack: Tauri 2 (Rust) + Solid + xterm.js. UI font: Rajdhani (Indian Type Foundry, SIL OFL 1.1),
+bundled from `src/fonts/` with its `OFL.txt`; nothing is fetched at runtime.
 
 Deck keeps two UI-only preferences on your machine: the window size/position
 (`tauri-plugin-window-state`) and the last selected pane (webview `localStorage`). Nothing from
