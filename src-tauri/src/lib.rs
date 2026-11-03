@@ -118,6 +118,90 @@ async fn herdr_focus(target: String, id: String) -> herdr::Result<Value> {
     .await
 }
 
+/// Tree actions (M3): create/close workspaces, tabs and panes. The webview
+/// names the action, not the Herdr method, so the command surface stays an
+/// allowlist (audit: command surface) and the params each action may carry
+/// are fixed here.
+#[tauri::command]
+async fn herdr_action(
+    action: String,
+    id: Option<String>,
+    options: Option<Value>,
+) -> herdr::Result<Value> {
+    let (method, params) = action_request(&action, id.as_deref(), options.as_ref())
+        .map_err(herdr::HerdrError::Shape)?;
+    blocking(move || herdr::call(method, params)).await
+}
+
+/// Map an action name to its Herdr method and params. `id` is the workspace,
+/// tab or pane the action applies to (required where the method needs one);
+/// `options` may carry `cwd`/`label` for create actions.
+fn action_request(
+    action: &str,
+    id: Option<&str>,
+    options: Option<&Value>,
+) -> Result<(&'static str, Value), String> {
+    let opt = |key: &str| {
+        options
+            .and_then(|o| o.get(key))
+            .filter(|v| v.is_string())
+            .cloned()
+    };
+    let need_id = |field: &str| -> Result<(String, Value), String> {
+        let id = id
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("{action} needs an id"))?;
+        Ok((field.to_string(), Value::String(id.to_string())))
+    };
+    let mut params = serde_json::Map::new();
+    let method = match action {
+        "workspace.create" => {
+            if let Some(id) = id.filter(|s| !s.is_empty()) {
+                params.insert("source_workspace_id".into(), Value::String(id.to_string()));
+            }
+            params.insert("focus".into(), Value::Bool(true));
+            "workspace.create"
+        }
+        "workspace.close" => {
+            let (k, v) = need_id("workspace_id")?;
+            params.insert(k, v);
+            if options
+                .and_then(|o| o.get("close_group"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                params.insert("close_group".into(), Value::Bool(true));
+            }
+            "workspace.close"
+        }
+        "tab.create" => {
+            let (k, v) = need_id("workspace_id")?;
+            params.insert(k, v);
+            params.insert("focus".into(), Value::Bool(true));
+            "tab.create"
+        }
+        "tab.close" => {
+            let (k, v) = need_id("tab_id")?;
+            params.insert(k, v);
+            "tab.close"
+        }
+        "pane.close" => {
+            let (k, v) = need_id("pane_id")?;
+            params.insert(k, v);
+            "pane.close"
+        }
+        other => return Err(format!("unknown action: {other}")),
+    };
+    if matches!(action, "workspace.create" | "tab.create") {
+        for key in ["cwd", "label"] {
+            if let Some(v) = opt(key) {
+                params.insert(key.into(), v);
+            }
+        }
+    }
+    Ok((method, Value::Object(params)))
+}
+
 /// Pick the Herdr method and id field for a `herdr_focus` target.
 fn focus_method(target: &str) -> Result<(&'static str, &'static str), String> {
     match target {
@@ -383,6 +467,7 @@ pub fn run() {
             herdr_pane_send_text,
             herdr_pane_send_keys,
             herdr_focus,
+            herdr_action,
             cswap_list,
             cswap_switch,
         ])
@@ -441,6 +526,67 @@ mod tests {
         assert_eq!(truncate_chars("ééé", 2), "éé...");
         let long = "x".repeat(500);
         assert_eq!(truncate_chars(&long, 300).chars().count(), 303);
+    }
+
+    #[test]
+    fn action_request_builds_create_and_close_params() {
+        let (m, p) = action_request(
+            "workspace.create",
+            Some("ws_1"),
+            Some(&json!({ "cwd": "C:\\x", "label": "L", "env": { "A": "1" } })),
+        )
+        .unwrap();
+        assert_eq!(m, "workspace.create");
+        assert_eq!(
+            p,
+            json!({ "source_workspace_id": "ws_1", "focus": true, "cwd": "C:\\x", "label": "L" })
+        );
+        let (m, p) = action_request("workspace.create", None, None).unwrap();
+        assert_eq!((m, p), ("workspace.create", json!({ "focus": true })));
+        let (m, p) = action_request("tab.create", Some("ws_1"), None).unwrap();
+        assert_eq!(
+            (m, p),
+            (
+                "tab.create",
+                json!({ "workspace_id": "ws_1", "focus": true })
+            )
+        );
+        let (m, p) = action_request("tab.close", Some("t_1"), None).unwrap();
+        assert_eq!((m, p), ("tab.close", json!({ "tab_id": "t_1" })));
+        let (m, p) = action_request("pane.close", Some("p_1"), None).unwrap();
+        assert_eq!((m, p), ("pane.close", json!({ "pane_id": "p_1" })));
+        let (m, p) = action_request(
+            "workspace.close",
+            Some("ws_1"),
+            Some(&json!({ "close_group": true })),
+        )
+        .unwrap();
+        assert_eq!(
+            (m, p),
+            (
+                "workspace.close",
+                json!({ "workspace_id": "ws_1", "close_group": true })
+            )
+        );
+    }
+
+    #[test]
+    fn action_request_rejects_unknown_actions_and_missing_ids() {
+        assert!(action_request("server.stop", None, None)
+            .unwrap_err()
+            .contains("unknown action"));
+        assert!(action_request("tab.close", None, None)
+            .unwrap_err()
+            .contains("needs an id"));
+        assert!(action_request("pane.close", Some(""), None).is_err());
+        // Options cannot smuggle arbitrary params.
+        let (_, p) = action_request(
+            "tab.create",
+            Some("ws"),
+            Some(&json!({ "workspace_id": "other", "focus": false })),
+        )
+        .unwrap();
+        assert_eq!(p, json!({ "workspace_id": "ws", "focus": true }));
     }
 
     #[test]

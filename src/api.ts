@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { invoke, listen } from "./tauri";
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
@@ -77,6 +77,8 @@ export interface CswapList { activeAccountNumber: number; accounts: CswapAccount
  */
 export type HerdrEvent = { event: string; [k: string]: unknown };
 
+export type TreeAction = "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.close";
+
 /**
  * `pane.read` reply. `revision` is the fork's content counter (0 upstream).
  * `cursor` and `alternate_screen` are fork additions (M2): `cursor.line` is
@@ -117,6 +119,9 @@ export const api = {
   sendText: (paneId: string, text: string) => invoke("herdr_pane_send_text", { paneId, text }),
   sendKeys: (paneId: string, keys: string[]) => invoke("herdr_pane_send_keys", { paneId, keys }),
   focus: (target: "workspace" | "tab" | "pane", id: string) => invoke("herdr_focus", { target, id }),
+  /** Tree actions (M3); the Rust side maps the name to a Herdr method with a fixed param set. */
+  action: (action: TreeAction, id?: string | null, options?: { cwd?: string; label?: string; close_group?: boolean }) =>
+    invoke("herdr_action", { action, id: id ?? null, options: options ?? null }),
   cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
   cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
   // The payload is whatever Herdr sent; `routeEvent` validates the shape.
