@@ -199,7 +199,5 @@ data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost`
 
 ## Открытые вопросы
 
-- Патч форка для `home/end/pageup/pagedown/insert/delete` и эмиссия `pane.output_changed`
-  записаны в ROADMAP как M1.5; в материалах репозитория не видно, начата ли эта работа в форке.
 - Снапшоты с живого Herdr (U2) для фикстур не добавлены; текущие фикстуры синтетические.
 - `ERROR_PIPE_BUSY` при 2 параллельных вызовах не замерялся (ROADMAP, M2 вопрос 4).
