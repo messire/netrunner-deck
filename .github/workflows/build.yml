@@ -31,6 +31,7 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - run: npm run version:check
       - run: npm run typecheck
       - run: npm test
       - name: cargo fmt

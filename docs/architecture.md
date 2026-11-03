@@ -21,6 +21,22 @@ Deck — тонкий клиент к серверу Herdr. Всё состоя�
 | `src/components/Sidebar.tsx`, `TabBar.tsx`, `KeyBar.tsx` | Дерево/аккаунты/агенты/карта сессий, вкладки, нижняя строка подсказок | — |
 | `scripts/fake-herdr.mjs` | Фальшивый сервер API для ручных проверок моста (`silent`, `slow <ms>`, `ack-error`, `close-after-ack`, `ok`) | — |
 
+## Локальное состояние (M4)
+
+Только UI-настройки: размер и положение окна (`tauri_plugin_window_state`, файл в каталоге данных
+приложения) и последняя выбранная панель (`localStorage`, ключ `deck.selectedPane`; `App.tsx`
+`remember`/`remembered`). Если панели больше нет, выбор падает на сфокусированную панель
+сфокусированного workspace, как и раньше. Состояние сессии (workspaces, панели, вывод) по-прежнему
+живёт только в Herdr.
+
+## Режим без Tauri
+
+`src/tauri.ts` экспортирует `invoke`/`listen`/`getCurrentWindow`: внутри окна Tauri это реальные
+функции `@tauri-apps/api`; в обычном браузере (нет `window.__TAURI_INTERNALS__`) — заглушка в памяти,
+отвечающая на те же команды синтетическим деревом, растущим транскриптом с курсором и мутациями по
+действиям M3. Нужна для визуальной проверки UI без Herdr; поведения, отличного от Rust-стороны,
+в ней нет.
+
 ## Действия и хоткеи (M3)
 
 `src/actions.ts` (чистый, с тестами): `hotkeyOf` — F1 (пикер аккаунта), F2 (следующий агент в
@@ -63,6 +79,7 @@ tokio-воркеры.
 | `herdr_pane_send_keys` | `pane.send_keys` | имена из `src/keys.ts` |
 | `herdr_focus` | `workspace.focus` / `tab.focus` / `pane.focus` | неизвестный target → `HerdrError::Shape` до обращения к серверу (`focus_method`) |
 | `herdr_action` | `workspace.create` / `workspace.close` / `tab.create` / `tab.close` / `pane.close` | M3; имя действия → метод и фиксированный набор параметров (`action_request`): create всегда `focus: true`, из `options` проходят только `cwd`, `label`, `close_group`; неизвестное действие → `Shape` |
+| `notify` | OS notification через `tauri-plugin-notification` | M4; решение «когда» принимает webview (агент перешёл в `blocked`, его панель не на экране или окно не в фокусе) |
 | `cswap_list` | `cswap list --json` | |
 | `cswap_switch` | `cswap switch <n> --json` | |
 

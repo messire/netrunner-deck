@@ -9,6 +9,10 @@ none are today.)
 
 Stack: Tauri 2 (Rust) + Solid + xterm.js.
 
+Deck keeps two UI-only preferences on your machine: the window size/position
+(`tauri-plugin-window-state`) and the last selected pane (webview `localStorage`). Nothing from
+Herdr is stored.
+
 ## Requirements
 
 - A running Herdr server. Deck talks to its JSON API endpoint: `<config dir>/herdr.sock`
@@ -107,6 +111,12 @@ Point Deck at it with `HERDR_SOCKET_PATH`. On Windows the variable is a pipe *na
   goes to the CLI). These keys never reach the pane. Every action is one Herdr method
   (`workspace.create/close`, `tab.create/close`, `pane.close`, `*.focus`) behind the `herdr_action`
   allowlist; failures show in the title bar.
+- **Notifications (M4).** When an agent turns `blocked` (waits for input) and its pane is not on
+  screen, or the window is in the background, Deck raises an OS notification
+  (`tauri-plugin-notification`); clicking the agent in the sidebar or `F2` brings its pane up.
+- **Browser mode.** `npm run dev` and open `http://localhost:1420/` in a browser: without Tauri the
+  bridge is replaced by an in-memory stand-in (`src/tauri.ts`) with synthetic workspaces and a
+  transcript that keeps growing, so the UI can be looked at and driven without Herdr.
 
 Not there yet:
 
@@ -129,6 +139,23 @@ Not there yet:
 - `src-tauri/src/lib.rs` — Tauri commands, `cswap` resolution, the event pump.
 - `scripts/fake-herdr.mjs` — fake Herdr server for manual bridge tests.
 - `docs/architecture.md` — data flow, verified Herdr API facts (F1–F10), module map.
+
+## Release
+
+`package.json` holds the version; `tauri.conf.json` reads it (`"version": "../package.json"`) and
+`npm run version:sync` copies it into `src-tauri/Cargo.toml` (+ `Cargo.lock`); CI fails on a
+mismatch (`npm run version:check`). To release:
+
+```powershell
+npm version 0.2.0 --no-git-tag-version
+npm run version:sync
+git commit -am "release: v0.2.0" && git tag v0.2.0 && git push && git push --tags
+```
+
+`.github/workflows/release.yml` builds the Windows installer on the tag (same checks as
+`build.yml`) and publishes a GitHub Release with the NSIS installer and the bare `.exe`; a tag with
+a pre-release suffix (`v0.2.0-rc.1`) is marked pre-release. The build workflow stays read-only.
+There is no in-app updater yet (it needs a signing key kept outside the repository).
 
 ## Roadmap
 
