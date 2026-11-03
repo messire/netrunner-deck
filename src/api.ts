@@ -77,6 +77,26 @@ export interface CswapList { activeAccountNumber: number; accounts: CswapAccount
  */
 export type HerdrEvent = { event: string; [k: string]: unknown };
 
+/**
+ * `pane.read` reply. `revision` is the fork's content counter (0 upstream).
+ * `cursor` and `alternate_screen` are fork additions (M2): `cursor.line` is
+ * the cursor's row as an index into the lines of `text` (absent when the
+ * server cannot tell), so the view places a real cursor instead of guessing.
+ */
+export interface PaneRead {
+  text: string;
+  revision: number;
+  cursor?: PaneCursor | null;
+  alternate_screen?: boolean;
+}
+export interface PaneCursor {
+  line?: number | null;
+  col: number;
+  visible: boolean;
+  /** DECSCUSR 0–6; 0 = terminal default. */
+  shape: number;
+}
+
 // DEV-only call counters for manual checks: Tauri `invoke` is not visible in the
 // DevTools Network tab, so inspect `window.__deckCalls` in the webview console.
 declare global { interface Window { __deckCalls?: Record<string, number> } }
@@ -92,7 +112,7 @@ export const api = {
   tree: () => { count("herdr_tree"); return invoke<Tree>("herdr_tree"); },
   paneRead: (paneId: string, lines = 400) => {
     count("herdr_pane_read");
-    return invoke<{ read: { text: string; revision: number } }>("herdr_pane_read", { paneId, lines });
+    return invoke<{ read: PaneRead }>("herdr_pane_read", { paneId, lines });
   },
   sendText: (paneId: string, text: string) => invoke("herdr_pane_send_text", { paneId, text }),
   sendKeys: (paneId: string, keys: string[]) => invoke("herdr_pane_send_keys", { paneId, keys }),
