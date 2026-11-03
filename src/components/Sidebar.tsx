@@ -1,5 +1,5 @@
 import { For, Show, createMemo } from "solid-js";
-import { accountLabel, usageOf, type CswapList, type Tree, type Workspace, type Agent, type AgentStatus } from "../api";
+import { accountLabel, usageOf, type CswapAccount, type CswapList, type Tree, type Workspace, type Agent, type AgentStatus } from "../api";
 
 export interface SwitchError { number: number; message: string }
 interface Group { label: string; items: Workspace[] }
@@ -17,6 +17,11 @@ interface Props {
   onSelectPane: (paneId: string) => void;
   onSwitchAccount: (number: number) => void;
   onRefreshAccounts: () => void;
+  /** M3: right-click menus and the new-space button; App owns the actions. */
+  onWorkspaceMenu: (e: MouseEvent, w: Workspace) => void;
+  onAgentMenu: (e: MouseEvent, a: Agent) => void;
+  onAccountMenu: (e: MouseEvent, a: CswapAccount) => void;
+  onNewSpace: () => void;
 }
 
 const statusClass = (s: AgentStatus) => (s === "working" ? "w" : s === "blocked" ? "b" : "");
@@ -65,13 +70,14 @@ export default function Sidebar(p: Props) {
 
   return (
     <aside class="side">
-      <div class="plate">Spaces</div>
+      <div class="plate-row"><div class="plate">Spaces</div><button class="plus" title="new space (workspace.create)" onClick={() => p.onNewSpace()}>+</button></div>
       <Show when={p.tree} fallback={<div class="row micro">connecting…</div>}>
         <For each={spaces().top}>
           {(w) => (
             <>
               <div class={`row ${panesOf(w.workspace_id).some((x) => x.pane_id === p.selectedPane) ? "sel" : ""}`}
-                   onClick={() => { const pane = panesOf(w.workspace_id).find((x) => x.focused) ?? panesOf(w.workspace_id)[0]; if (pane) p.onSelectPane(pane.pane_id); }}>
+                   onClick={() => { const pane = panesOf(w.workspace_id).find((x) => x.focused) ?? panesOf(w.workspace_id)[0]; if (pane) p.onSelectPane(pane.pane_id); }}
+                   onContextMenu={(e) => { e.preventDefault(); p.onWorkspaceMenu(e, w); }}>
                 <span class={`st ${statusClass(w.agent_status)}`} />
                 <span class="nm ws">{w.label}</span>
                 <span class="cnt">{w.tab_count}</span>
@@ -86,7 +92,8 @@ export default function Sidebar(p: Props) {
               <For each={g.items}>
                 {(w) => (
                   <div class={`row l2 ${panesOf(w.workspace_id).some((x) => x.pane_id === p.selectedPane) ? "sel" : ""}`}
-                       onClick={() => { const pane = panesOf(w.workspace_id).find((x) => x.focused) ?? panesOf(w.workspace_id)[0]; if (pane) p.onSelectPane(pane.pane_id); }}>
+                       onClick={() => { const pane = panesOf(w.workspace_id).find((x) => x.focused) ?? panesOf(w.workspace_id)[0]; if (pane) p.onSelectPane(pane.pane_id); }}
+                       onContextMenu={(e) => { e.preventDefault(); p.onWorkspaceMenu(e, w); }}>
                     <span class={`st ${statusClass(w.agent_status)}`} />
                     <span class="nm wt">{w.worktree?.branch ?? w.label}</span>
                     <span class="tag">{w.agent_status === "blocked" ? "WAITING" : ""}</span>
@@ -112,6 +119,7 @@ export default function Sidebar(p: Props) {
               const canSwitch = () => !a.active && p.switching == null;
               return (
                 <div class={`bio ${a.active ? "" : "off"}`} onDblClick={() => canSwitch() && p.onSwitchAccount(a.number)}
+                     onContextMenu={(e) => { e.preventDefault(); p.onAccountMenu(e, a); }}
                      title={a.active ? a.email : `${a.email} — double-click to switch`}>
                   <div class="hd"><span class="num">{String(i() + 1).padStart(2, "0")}</span><span class="acc">{accountLabel(a)}</span>
                     <span class="tag">{a.active ? "ACTIVE" : busy() ? "SWITCHING…" : "DBL-CLICK · SWITCH"}</span></div>
@@ -136,7 +144,8 @@ export default function Sidebar(p: Props) {
       <div class="plate" style="margin-top:8px">Agents <span class="tag lc">by recency</span></div>
       <For each={agents()}>
         {(a) => (
-          <div class={`row ${a.pane_id === p.selectedPane ? "sel" : ""}`} onClick={() => p.onSelectPane(a.pane_id)}>
+          <div class={`row ${a.pane_id === p.selectedPane ? "sel" : ""}`} onClick={() => p.onSelectPane(a.pane_id)}
+               onContextMenu={(e) => { e.preventDefault(); p.onAgentMenu(e, a); }}>
             <span class={`st ${statusClass(a.agent_status)}`} />
             <span class="nm">{agentLabel(a)}</span>
             <span class="tag">{(a.display_agent ?? a.agent ?? "").toUpperCase()}</span>

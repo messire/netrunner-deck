@@ -1,14 +1,20 @@
 import { For, createMemo, createSignal, onCleanup } from "solid-js";
-import type { Tree } from "../api";
+import type { Tab, Tree } from "../api";
 
-export default function TabBar(p: { tree?: Tree; selectedPane: string | null; onSelectPane: (id: string) => void }) {
+export default function TabBar(p: {
+  tree?: Tree;
+  selectedPane: string | null;
+  onSelectPane: (id: string) => void;
+  onTabMenu: (e: MouseEvent, tab: Tab) => void;
+  onNewTab: (workspaceId: string) => void;
+}) {
+  const workspaceId = () => p.tree?.panes.find((x) => x.pane_id === p.selectedPane)?.workspace_id ?? null;
   const tabs = createMemo(() => {
     const t = p.tree;
-    if (!t || !p.selectedPane) return [];
-    const pane = t.panes.find((x) => x.pane_id === p.selectedPane);
-    if (!pane) return [];
+    const ws = workspaceId();
+    if (!t || !ws) return [];
     return t.tabs
-      .filter((tab) => tab.workspace_id === pane.workspace_id)
+      .filter((tab) => tab.workspace_id === ws)
       .map((tab) => {
         const panes = t.panes.filter((x) => x.tab_id === tab.tab_id);
         const agent = panes.find((x) => x.agent);
@@ -28,11 +34,13 @@ export default function TabBar(p: { tree?: Tree; selectedPane: string | null; on
     <div class="tabs">
       <For each={tabs()}>
         {(t) => (
-          <div class={`tab ${t.on ? "on" : ""}`} onClick={() => t.pane && p.onSelectPane(t.pane.pane_id)}>
+          <div class={`tab ${t.on ? "on" : ""}`} onClick={() => t.pane && p.onSelectPane(t.pane.pane_id)}
+               onContextMenu={(e) => { e.preventDefault(); p.onTabMenu(e, t.tab); }} title="right-click: tab actions">
             {t.tab.agent_status === "working" ? "◆" : t.tab.agent_status === "blocked" ? "◈" : "◇"} {t.label.toUpperCase()}
           </div>
         )}
       </For>
+      {workspaceId() ? <div class="tab add" title="new tab in this space (tab.create)" onClick={() => p.onNewTab(workspaceId()!)}>+</div> : null}
       <div class="right">
         <span class="r">{pulse()}</span><span class="m">▕</span>
         <span class="glitch" data-text="▞ AFTER LIFE ▚">▞ AFTER LIFE ▚</span><span class="m">▕</span>

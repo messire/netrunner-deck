@@ -21,6 +21,18 @@ Deck — тонкий клиент к серверу Herdr. Всё состоя�
 | `src/components/Sidebar.tsx`, `TabBar.tsx`, `KeyBar.tsx` | Дерево/аккаунты/агенты/карта сессий, вкладки, нижняя строка подсказок | — |
 | `scripts/fake-herdr.mjs` | Фальшивый сервер API для ручных проверок моста (`silent`, `slow <ms>`, `ack-error`, `close-after-ack`, `ok`) | — |
 
+## Действия и хоткеи (M3)
+
+`src/actions.ts` (чистый, с тестами): `hotkeyOf` — F1 (пикер аккаунта), F2 (следующий агент в
+`blocked`, по кругу, `nextBlockedPane`), Ctrl+K (палитра), Esc только при открытом оверлее;
+`commands` — пункты палитры из дерева и аккаунтов. `App.tsx` слушает `keydown` на `window` в
+фазе захвата и гасит событие, а `TerminalView` дополнительно отфильтровывает эти клавиши через
+`attachCustomKeyEventHandler`, так что в PTY они не попадают. Контекстные меню
+(`components/ContextMenu.tsx`): workspace — focus / new tab / new space / close (+ close group для
+primary-репозитория с worktree); tab — focus / new tab / close; агент — open / focus / close pane;
+аккаунт — switch / refresh. Деструктивные пункты требуют второго клика в течение 3 с. Ошибки
+действий — в заголовке окна на 8 с; `workspace_group_close_required` объясняется словами.
+
 ## Поток данных
 
 ```
@@ -50,6 +62,7 @@ tokio-воркеры.
 | `herdr_pane_send_text` | `pane.send_text` | только печатный текст (см. F5) |
 | `herdr_pane_send_keys` | `pane.send_keys` | имена из `src/keys.ts` |
 | `herdr_focus` | `workspace.focus` / `tab.focus` / `pane.focus` | неизвестный target → `HerdrError::Shape` до обращения к серверу (`focus_method`) |
+| `herdr_action` | `workspace.create` / `workspace.close` / `tab.create` / `tab.close` / `pane.close` | M3; имя действия → метод и фиксированный набор параметров (`action_request`): create всегда `focus: true`, из `options` проходят только `cwd`, `label`, `close_group`; неизвестное действие → `Shape` |
 | `cswap_list` | `cswap list --json` | |
 | `cswap_switch` | `cswap switch <n> --json` | |
 

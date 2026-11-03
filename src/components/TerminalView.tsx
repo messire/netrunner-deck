@@ -5,6 +5,7 @@ import { api, type PaneCursor, type PaneRead, type Tree } from "../api";
 import { blockWidth, classify, fitRules, inputBoxStart, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
 import { mapInput } from "../keys";
 import { planUpdate } from "../render-plan";
+import { hotkeyOf } from "../actions";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
   user: "\x1b[38;2;255;246;168m",
@@ -174,12 +175,32 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     renderInput(box.raw, box.plain, snap.cursor, box.at);
   }
 
+  // xterm's write() is asynchronous and term.reset() does not flush data that
+  // is already queued, so renders are serialised: while a write is pending the
+  // newest request waits here and runs from the write callback.
+  let writing = false;
+  let pending: { snap: Snapshot; canHold: boolean } | null = null;
+  function writeDone(after: () => void) {
+    return () => {
+      writing = false;
+      if (!disposed) after();
+      const next = pending;
+      pending = null;
+      if (next && !disposed) {
+        if (render(next.snap, next.canHold)) { setHeld(null); last = next.snap; } else setHeld(next.snap);
+      }
+    };
+  }
+
   /**
    * Apply a snapshot. Returns false (and changes nothing) when the update
    * would be a full repaint and `canHold` says the user is busy reading.
+   * While a previous write is still pending the snapshot is queued and the
+   * call reports success; the queued render decides about holding later.
    */
   function render(snap: Snapshot, canHold: boolean): boolean {
     if (disposed) return true;
+    if (writing) { pending = { snap, canHold }; return true; }
     const { coloured, plain, kinds, box } = prepare(snap.text);
     let plan = planUpdate(rendered, coloured);
     // The buffer must still hold exactly what `rendered` says (xterm may have
@@ -203,7 +224,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
         const first = rendered.length;
         rendered = rendered.concat(plan.lines);
         renderedKinds = renderedKinds.concat(kinds.slice(first));
-        term.write((first ? "\r\n" : "") + plan.lines.join("\r\n"), () => decorateFrom(first, plain));
+        writing = true;
+        term.write((first ? "\r\n" : "") + plan.lines.join("\r\n"), writeDone(() => decorateFrom(first, plain)));
         return true;
       }
       case "rewrite": {
@@ -215,7 +237,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
         rendered = rendered.slice(0, plan.fromLine).concat(plan.lines);
         renderedKinds = renderedKinds.slice(0, plan.fromLine).concat(kinds.slice(plan.fromLine));
         const from = plan.fromLine;
-        term.write(`${up > 0 ? `\x1b[${up}A` : ""}\r\x1b[J${plan.lines.join("\r\n")}`, () => decorateFrom(from, plain));
+        writing = true;
+        term.write(`${up > 0 ? `\x1b[${up}A` : ""}\r\x1b[J${plan.lines.join("\r\n")}`, writeDone(() => decorateFrom(from, plain)));
         return true;
       }
       case "reset": {
@@ -224,7 +247,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
         rendered = plan.lines;
         renderedKinds = kinds.slice();
         term.reset();
-        term.write(plan.lines.join("\r\n"), () => decorateFrom(0, plain));
+        writing = true;
+        term.write(plan.lines.join("\r\n"), writeDone(() => decorateFrom(0, plain)));
         return true;
       }
     }
@@ -302,14 +326,22 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
    * the fork says (`cursor.line` relative to the box start); without that,
    * to the end of the prompt line as an estimate.
    */
+  let inputWriting = false;
+  let inputPending: [string[], string[], PaneCursor | null | undefined, number] | null = null;
   function renderInput(raw: string[], plain: string[], cursor: PaneCursor | null | undefined, boxAt: number) {
+    if (inputWriting) { inputPending = [raw, plain, cursor, boxAt]; return; }
     while (raw.length && plain[plain.length - 1].trim() === "") { raw.pop(); plain.pop(); }
     const rows = raw.length;
     inputHost.style.display = rows ? "" : "none";
     if (!rows) { inputTerm.reset(); return; }
     if (inputTerm.rows !== rows) inputTerm.resize(inputTerm.cols, rows);
     inputTerm.reset();
+    inputWriting = true;
     inputTerm.write(raw.join("\r\n"), () => {
+      inputWriting = false;
+      const next = inputPending;
+      inputPending = null;
+      if (next && !disposed) { renderInput(...next); return; }
       if (disposed) return;
       let row: number, col: number;
       if (cursor && cursor.line != null && boxAt >= 0 && cursor.line >= boxAt && cursor.line < boxAt + rows) {
@@ -379,6 +411,11 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     inputTerm.onData(onData);
     // Keys typed anywhere in the pane go to the CLI; the caret lives in the input box.
     term.textarea?.addEventListener("focus", () => inputTerm.focus());
+    // Deck's own keys (F1/F2/Ctrl+K, src/actions.ts) never reach the PTY even
+    // if a listener order ever lets them past App's capture handler.
+    const notForPty = (e: KeyboardEvent) => !(e.type === "keydown" && hotkeyOf(e, false) !== null);
+    term.attachCustomKeyEventHandler(notForPty);
+    inputTerm.attachCustomKeyEventHandler(notForPty);
     fitCols();
     term.onData(onData);
     term.onScroll(() => applyHeld());

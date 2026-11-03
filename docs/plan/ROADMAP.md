@@ -166,7 +166,14 @@ M1b хвост: R16 (после R5, R7, R9, R15) → R17
 
 **DoD.** ADR принят; `TerminalView` без поллинга и без `term.reset()`; курсор от pty; `dialogue.ts` работает на буфере xterm (закрывает остатки п.8/п.11); фикстуры R11 зелёные; постоянное соединение с таймаутами и реконнектом (async-клиент под выбранный транспорт — сюда переезжает «полноценный tokio-клиент» из R3); спиннеры Claude Code не размножаются.
 
-### M3 — действия в дереве и хоткеи
+### M3 — действия в дереве и хоткеи — **реализовано 2026-11-03**
+
+**Как сделано.** `herdr_action` (allowlist: `workspace.create/close`, `tab.create/close`, `pane.close`;
+тесты `action_request_*`), контекстные меню на space/tab/agent/account, кнопки `+` (space, tab),
+F1 пикер аккаунта, F2 переход к ждущему агенту, Ctrl+K палитра, Esc для оверлеев; клавиши не доходят
+до PTY (capture-слушатель + `attachCustomKeyEventHandler`). `src/actions.ts` с тестами; KeyBar честный.
+Имена методов сверены по `docs/next/api/herdr-api.schema.json` форка (`TabTarget {tab_id}`,
+`PaneTarget {pane_id}`, `WorkspaceCloseParams {workspace_id, close_group}`).
 
 **Цель.** Контекстные меню (аккаунт: switch/refresh; workspace: focus/close/new tab), создание workspace/tab, клавиши из `KeyBar`: F1 пикер аккаунта, F2 переход к ожидающему агенту (`agent_status === "blocked"`; можно опереться на `events.wait`/`pane.agent_status_changed`, F9), Ctrl+K палитра, Esc.
 
@@ -221,7 +228,8 @@ M1b хвост: R16 (после R5, R7, R9, R15) → R17
 5. R2b (CI с Rust-шагами, clippy как предупреждения) и R5 — Rust-поток; R7, R9, R11 → R12, R13', R14' — UI-поток.
 6. R16 документация по итоговому состоянию, затем R17 (21×статус, clippy `-D`).
 7. ✅ После R17: M1.5 в форке и Deck реализован (см. §6); шаг 0 ADR M2 — `docs/adr/0001-pane-stream.md` — до любого кода стриминга.
-8. ✅ 2026-11-03: M2 реализован по поправке ADR (инкрементальная отрисовка + курсор из `pane.read`). Далее M3 → M4 → M5.
+8. ✅ 2026-11-03: M2 реализован по поправке ADR (инкрементальная отрисовка + курсор из `pane.read`).
+9. ✅ 2026-11-03: M3 — действия в дереве и хоткеи. Далее M4 → M5.
 
 Ранние сигналы (из критики): нет зелёного `npm run typecheck && npm test` к концу дня 1; R3 на второй итерации проверки; `src/__fixtures__/pane-read/` пуст к старту R12; в `architecture.md` всё ещё «[предположение]» у формата событий; ADR 0001 без упоминания `PaneSurfacePatch`.
 

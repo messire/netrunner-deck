@@ -1,12 +1,15 @@
-import { createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, type Tree, type CswapList, zoneOf, usageOf, accountLabel } from "./api";
+import { createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { getCurrentWindow } from "./tauri";
+import { api, type Tree, type CswapList, type Tab, type Workspace, type Agent, type CswapAccount, type TreeAction, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SwitchError } from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
 import KeyBar from "./components/KeyBar";
+import ContextMenu, { type MenuState } from "./components/ContextMenu";
+import Palette, { type PaletteItem } from "./components/Palette";
 import { createLatestGate } from "./latest";
 import { debounceTrailing, routeEvent } from "./events";
+import { agentName, commands, hotkeyOf, nextBlockedPane, type Command } from "./actions";
 
 export default function App() {
   const [selectedPane, setSelectedPane] = createSignal<string | null>(null);
@@ -69,6 +72,99 @@ export default function App() {
     const pane = t.panes.find((p) => p.workspace_id === ws?.workspace_id && p.focused) ?? t.panes[0];
     return pane?.pane_id ?? null;
   };
+  const selectPane = (id: string) => { setSelectedPane(id); api.focus("pane", id).catch(() => {}); };
+
+  // ---- M3: tree actions, context menus, palette, hotkeys -------------------
+  // Action failures (Herdr refused, link down) show in the title bar for a while.
+  const [actionError, setActionError] = createSignal<string | null>(null);
+  let errorTimer: number | undefined;
+  const showError = (m: string) => {
+    setActionError(m);
+    clearTimeout(errorTimer);
+    errorTimer = window.setTimeout(() => setActionError(null), 8000);
+  };
+  const runAction = (action: TreeAction, id?: string | null, options?: { cwd?: string; label?: string; close_group?: boolean }) =>
+    api.action(action, id, options)
+      .then(() => refetchTree())
+      .catch((e) => {
+        const m = String(e);
+        // A primary worktree workspace needs explicit group intent; ask once more with it.
+        if (action === "workspace.close" && m.includes("workspace_group_close_required") && !options?.close_group) {
+          showError("space has linked worktrees — right-click again and confirm to close the group");
+          return;
+        }
+        showError(`${action}: ${m}`);
+      });
+
+  const [menu, setMenu] = createSignal<MenuState | null>(null);
+  const [overlay, setOverlay] = createSignal<"palette" | "accounts" | null>(null);
+  const overlayOpen = () => menu() !== null || overlay() !== null;
+  const closeOverlays = () => { setMenu(null); setOverlay(null); };
+
+  const workspaceMenu = (e: MouseEvent, w: Workspace) => setMenu({
+    x: e.clientX, y: e.clientY, title: w.label.toUpperCase(),
+    items: [
+      { label: "FOCUS IN HERDR", hint: "workspace.focus", run: () => api.focus("workspace", w.workspace_id).catch((er) => showError(String(er))) },
+      { label: "NEW TAB", hint: "tab.create", run: () => runAction("tab.create", w.workspace_id) },
+      { label: "NEW SPACE", hint: "workspace.create", run: () => runAction("workspace.create", w.workspace_id) },
+      { label: "CLOSE SPACE", hint: "workspace.close", danger: true, run: () => runAction("workspace.close", w.workspace_id) },
+      // A primary repo workspace with linked worktrees refuses a plain close (workspace_group_close_required).
+      ...(w.worktree ? [] : [{ label: "CLOSE SPACE + WORKTREES", hint: "close_group", danger: true, run: () => runAction("workspace.close", w.workspace_id, { close_group: true }) }]),
+    ],
+  });
+  const tabMenu = (e: MouseEvent, t: Tab) => setMenu({
+    x: e.clientX, y: e.clientY, title: t.label.toUpperCase(),
+    items: [
+      { label: "FOCUS IN HERDR", hint: "tab.focus", run: () => api.focus("tab", t.tab_id).catch((er) => showError(String(er))) },
+      { label: "NEW TAB", hint: "tab.create", run: () => runAction("tab.create", t.workspace_id) },
+      { label: "CLOSE TAB", hint: "tab.close", danger: true, run: () => runAction("tab.close", t.tab_id) },
+    ],
+  });
+  const agentMenu = (e: MouseEvent, a: Agent) => setMenu({
+    x: e.clientX, y: e.clientY, title: agentName(tree(), a).toUpperCase(),
+    items: [
+      { label: "OPEN", run: () => selectPane(a.pane_id) },
+      { label: "FOCUS IN HERDR", hint: "pane.focus", run: () => api.focus("pane", a.pane_id).catch((er) => showError(String(er))) },
+      { label: "CLOSE PANE", hint: "pane.close", danger: true, run: () => runAction("pane.close", a.pane_id) },
+    ],
+  });
+  const accountMenu = (e: MouseEvent, a: CswapAccount) => setMenu({
+    x: e.clientX, y: e.clientY, title: accountLabel(a).toUpperCase(),
+    items: [
+      { label: a.active ? "ACTIVE" : "SWITCH", hint: "cswap switch", disabled: a.active || switching() !== null, run: () => switchAccount(a.number) },
+      { label: "REFRESH", hint: "cswap list", run: () => refetchAccounts() },
+    ],
+  });
+
+  const perform = (c: Command) => {
+    const d = c.do;
+    if (d.kind === "select") selectPane(d.paneId);
+    else if (d.kind === "switch") switchAccount(d.account);
+    else if (d.kind === "refresh") refetchAccounts();
+    else runAction(d.action, d.id);
+  };
+  const paletteItems = createMemo((): PaletteItem[] =>
+    commands(tree(), accounts()?.accounts ?? [], currentPane()).map((c) => ({ id: c.id, label: c.label, hint: c.hint, keys: c.keys, danger: c.danger, run: () => perform(c) })));
+  const accountItems = createMemo((): PaletteItem[] =>
+    (accounts()?.accounts ?? []).map((a) => {
+      const u = usageOf(a);
+      return { id: `acc:${a.number}`, label: accountLabel(a), hint: `${a.active ? "ACTIVE · " : ""}5h ${u.five ?? "--"}% · 7d ${u.week ?? "--"}%`, keys: a.email, run: () => { if (!a.active) switchAccount(a.number); } };
+    }));
+  const waiting = () => (tree()?.agents ?? []).filter((a) => a.agent_status === "blocked").length;
+  const jump = () => {
+    const next = nextBlockedPane(tree(), currentPane());
+    if (next) selectPane(next); else showError("no agent is waiting");
+  };
+  const onKey = (e: KeyboardEvent) => {
+    const hk = hotkeyOf(e, overlayOpen());
+    if (!hk) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (hk === "close") closeOverlays();
+    else if (hk === "jump") { closeOverlays(); jump(); }
+    else if (hk === "palette") { setMenu(null); setOverlay(overlay() === "palette" ? null : "palette"); }
+    else if (hk === "accounts") { setMenu(null); setOverlay(overlay() === "accounts" ? null : "accounts"); }
+  };
 
   // Tree events (architecture.md F1–F3) → one `herdr_tree` call 200 ms after
   // the burst ends. The fork's `pane_output_changed` for the pane on screen →
@@ -86,7 +182,9 @@ export default function App() {
     }).then((u) => (un1 = u));
     api.onOffline((m) => setOffline(m)).then((u) => (un2 = u));
     const timer = setInterval(() => { refetchTree(); refetchAccounts(); }, 15000);
-    onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); refetchTreeSoon.cancel(); });
+    // Capture phase: Deck's keys are decided before xterm's textarea sees them.
+    window.addEventListener("keydown", onKey, true);
+    onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); refetchTreeSoon.cancel(); window.removeEventListener("keydown", onKey, true); clearTimeout(errorTimer); });
   });
 
   const activeAccount = () => accounts()?.accounts.find((a) => a.active);
@@ -97,6 +195,7 @@ export default function App() {
       <header class="titlebar" data-tauri-drag-region>
         <div class="logo">▞ NETRUNNER DECK</div>
         <span class="micro">herdr client · {offline() ? "OFFLINE" : "LINK OK"}</span>
+        <Show when={actionError()}>{(m) => <span class="micro toast" title={m()}>✕ {m()}</span>}</Show>
         <span class="sp" />
         <Show when={activeAccount()} fallback={<div class="zone danger"><i />ZONE : NO LINK</div>}>
           {(a) => {
@@ -124,20 +223,28 @@ export default function App() {
         switching={switching()}
         switchError={switchError()}
         selectedPane={currentPane()}
-        onSelectPane={(id) => { setSelectedPane(id); api.focus("pane", id).catch(() => {}); }}
+        onSelectPane={selectPane}
         onSwitchAccount={switchAccount}
         onRefreshAccounts={() => refetchAccounts()}
+        onWorkspaceMenu={workspaceMenu}
+        onAgentMenu={agentMenu}
+        onAccountMenu={accountMenu}
+        onNewSpace={() => runAction("workspace.create", tree()?.panes.find((p) => p.pane_id === currentPane())?.workspace_id)}
       />
 
       <main class="main">
-        <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} />
+        <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} onTabMenu={tabMenu} onNewTab={(ws) => runAction("tab.create", ws)} />
         <Show when={currentPane()} fallback={<div class="empty">NO PANE SELECTED · open a workspace in Herdr</div>}>
           {(id) => <TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} />}
         </Show>
         <Show when={offline()}>{(m) => <div class="offline">◇ HERDR OFFLINE — {m()}</div>}</Show>
       </main>
 
-      <KeyBar tree={tree()} selectedPane={currentPane()} account={activeAccount()} />
+      <KeyBar tree={tree()} selectedPane={currentPane()} account={activeAccount()} waiting={waiting()} />
+
+      <Show when={menu()}>{(m) => <ContextMenu menu={m()} onClose={() => setMenu(null)} />}</Show>
+      <Show when={overlay() === "palette"}><Palette title="Palette" items={paletteItems()} onClose={() => setOverlay(null)} /></Show>
+      <Show when={overlay() === "accounts"}><Palette title="Account" items={accountItems()} digits onClose={() => setOverlay(null)} /></Show>
     </div>
   );
 }

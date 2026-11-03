@@ -39,7 +39,7 @@ npm scripts (`package.json`):
 |---|---|
 | `npm run dev` | Vite dev server only (no Tauri window) |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | `vitest run` — `src/**/*.test.ts` in a Node environment (dialogue heuristics, key mapping, event routing, latest-wins gate) |
+| `npm test` | `vitest run` — `src/**/*.test.ts` in a Node environment (dialogue heuristics, key mapping, event routing, latest-wins gate, render plan, hotkeys/palette) |
 | `npm run build` | `tsc --noEmit && vite build` |
 | `npm run tauri dev` / `npm run tauri build` | Tauri app in dev mode / release bundle (NSIS) |
 
@@ -95,20 +95,34 @@ Point Deck at it with `HERDR_SOCKET_PATH`. On Windows the variable is a pipe *na
   `send_text` in bracketed paste, so unknown escape sequences are dropped rather than pasted.
 - **Accounts.** The sidebar shows `cswap list --json`; double-click on an account runs
   `cswap switch <n> --json` (one switch at a time; errors are shown in the card).
+- **Incremental rendering (M2).** A new snapshot is aligned with what is already in the xterm
+  buffer (`src/render-plan.ts`) and only the changed tail is rewritten, so scrollback, scroll
+  position and selection survive updates; a full repaint happens only on first show, pane switch
+  and resize. On the fork, `pane.read` also returns the cursor (`cursor.line`/`col`), which Deck
+  places in the input box; on upstream Herdr the cursor is estimated at the end of the prompt line.
+- **Actions and hotkeys (M3).** Right-click a space, tab, agent or account for its menu (focus in
+  Herdr, new tab / new space, close — destructive items ask for a second click); `+` next to
+  SPACES and in the tab bar create a workspace / tab. `F1` account picker, `F2` jump to the next
+  agent that waits for input, `Ctrl+K` command palette, `Esc` closes an overlay (and otherwise
+  goes to the CLI). These keys never reach the pane. Every action is one Herdr method
+  (`workspace.create/close`, `tab.create/close`, `pane.close`, `*.focus`) behind the `herdr_action`
+  allowlist; failures show in the title bar.
 
 Not there yet:
 
-- **Streaming attach.** No live stream of pane output; the view is snapshot-based (milestone M2).
-- **Home / End / Insert / Delete / PageUp / PageDown.** Herdr's `send_keys` has no names for them,
-  so Deck drops these keys until the fork's key grammar learns them (milestone M1.5).
-- **Hotkeys and tree actions** (account picker, jump to waiting agent, command palette): milestone M3.
+- **Home / End / Insert / Delete / PageUp / PageDown** on upstream Herdr: its `send_keys` has no names
+  for them, so Deck drops these keys there (the fork accepts them, M1.5).
+- **Alternate screen.** A full-screen program in the pane (vim, less) is shown as plain text; the
+  fork reports `alternate_screen`, but Deck has no dedicated mode for it yet.
 
 ## Layout
 
-- `src/` — Solid frontend: `App.tsx` (state, event routing), `components/Sidebar.tsx`
+- `src/` — Solid frontend: `App.tsx` (state, event routing, menus, hotkeys), `components/Sidebar.tsx`
   (spaces, accounts, agents, session map), `components/TabBar.tsx`,
-  `components/TerminalView.tsx` (xterm pane view), `components/KeyBar.tsx`;
-  `dialogue.ts`, `keys.ts`, `events.ts`, `latest.ts` are pure modules with tests next to them;
+  `components/TerminalView.tsx` (xterm pane view), `components/KeyBar.tsx`,
+  `components/ContextMenu.tsx`, `components/Palette.tsx`;
+  `dialogue.ts`, `keys.ts`, `events.ts`, `latest.ts`, `render-plan.ts`, `actions.ts` are pure
+  modules with tests next to them;
   `__fixtures__/pane-read/` holds synthetic Claude Code snapshots for the dialogue tests.
 - `src-tauri/src/herdr.rs` — Herdr JSON API client (named pipe on Windows, unix socket elsewhere),
   deadline and connection slots, event subscription.
