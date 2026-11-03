@@ -1,4 +1,4 @@
-import { createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow } from "./tauri";
 import { api, type Tree, type CswapList, type Tab, type Workspace, type Agent, type CswapAccount, type TreeAction, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SwitchError } from "./components/Sidebar";
@@ -11,8 +11,17 @@ import { createLatestGate } from "./latest";
 import { debounceTrailing, routeEvent } from "./events";
 import { agentName, commands, hotkeyOf, nextBlockedPane, type Command } from "./actions";
 
+/** UI-only preferences in the webview's storage; never session state (that lives in Herdr). */
+function remembered(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function remember(key: string, value: string | null) {
+  try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); } catch { /* storage unavailable */ }
+}
+
 export default function App() {
-  const [selectedPane, setSelectedPane] = createSignal<string | null>(null);
+  const [selectedPane, setSelectedPaneRaw] = createSignal<string | null>(remembered("deck.selectedPane"));
+  const setSelectedPane = (id: string | null) => { setSelectedPaneRaw(id); remember("deck.selectedPane", id); };
   const [offline, setOffline] = createSignal<string | null>(null);
   const [accountsError, setAccountsError] = createSignal<string | null>(null);
   // Account number of the `cswap switch` in flight (null = idle) and the last switch failure.
@@ -185,6 +194,24 @@ export default function App() {
     // Capture phase: Deck's keys are decided before xterm's textarea sees them.
     window.addEventListener("keydown", onKey, true);
     onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); refetchTreeSoon.cancel(); window.removeEventListener("keydown", onKey, true); clearTimeout(errorTimer); });
+  });
+
+  // M4: an agent that starts waiting for input while its pane is not on
+  // screen (or the window is in the background) raises an OS notification.
+  let lastStatus = new Map<string, string>();
+  createEffect(() => {
+    const t = tree();
+    if (!t) return;
+    const now = new Map(t.agents.map((a) => [a.pane_id, a.agent_status] as const));
+    const onScreen = currentPane();
+    const focused = typeof document !== "undefined" && document.hasFocus();
+    for (const a of t.agents) {
+      const before = lastStatus.get(a.pane_id);
+      if (a.agent_status === "blocked" && before !== undefined && before !== "blocked" && (a.pane_id !== onScreen || !focused)) {
+        api.notify("Agent is waiting", `${agentName(t, a)} needs your input`).catch(() => {});
+      }
+    }
+    lastStatus = now;
   });
 
   const activeAccount = () => accounts()?.accounts.find((a) => a.active);

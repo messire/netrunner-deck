@@ -202,6 +202,19 @@ fn action_request(
     Ok((method, Value::Object(params)))
 }
 
+/// Desktop notification (M4): the webview decides when (an agent turned
+/// `blocked` while its pane is not on screen); the OS shows it.
+#[tauri::command]
+async fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 /// Pick the Herdr method and id field for a `herdr_focus` target.
 fn focus_method(target: &str) -> Result<(&'static str, &'static str), String> {
     match target {
@@ -452,6 +465,9 @@ pub fn run() {
         None => tracing::info!("cswap not found in PATH or ~/.local/bin; accounts disabled"),
     }
     tauri::Builder::default()
+        // Window size/position survive restarts (UI-only state, roadmap M4).
+        .plugin(tauri_plugin_window_state::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .manage(CswapPath(cswap))
         .setup(|app| {
             start_event_pump(app.handle().clone());
@@ -468,6 +484,7 @@ pub fn run() {
             herdr_pane_send_keys,
             herdr_focus,
             herdr_action,
+            notify,
             cswap_list,
             cswap_switch,
         ])

@@ -122,6 +122,8 @@ export const api = {
   /** Tree actions (M3); the Rust side maps the name to a Herdr method with a fixed param set. */
   action: (action: TreeAction, id?: string | null, options?: { cwd?: string; label?: string; close_group?: boolean }) =>
     invoke("herdr_action", { action, id: id ?? null, options: options ?? null }),
+  /** OS notification (M4); used when an agent starts waiting while its pane is not on screen. */
+  notify: (title: string, body: string) => invoke<void>("notify", { title, body }),
   cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
   cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
   // The payload is whatever Herdr sent; `routeEvent` validates the shape.
