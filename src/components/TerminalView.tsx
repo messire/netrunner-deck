@@ -1,9 +1,10 @@
 import { createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { api, type Tree } from "../api";
+import { api, type PaneCursor, type PaneRead, type Tree } from "../api";
 import { blockWidth, classify, fitRules, inputBoxStart, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
 import { mapInput } from "../keys";
+import { planUpdate } from "../render-plan";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
   user: "\x1b[38;2;255;246;168m",
@@ -11,17 +12,26 @@ const COLOR: Record<Exclude<LineKind, null>, string> = {
 };
 
 /**
- * Milestone 1 pane view: an xterm that shows Herdr's ANSI snapshot of the pane
- * (`pane.read`) and forwards keystrokes with `pane.send_text` / `pane.send_keys`
- * (mapping in `src/keys.ts`). The snapshot is refreshed shortly after own
- * input, on the fork's `pane_output_changed` tick for this pane (M1.5), and by
- * a poll: 2.5 s until the first tick proves the server emits output events,
- * then a 10 s safety net (architecture.md F3).
- * Dialogue blocks are recoloured and framed with xterm decorations; the cursor
- * is placed on the CLI's prompt line.
+ * Pane view: an xterm that shows Herdr's ANSI snapshot of the pane
+ * (`pane.read`) as a chat and forwards keystrokes with `pane.send_text` /
+ * `pane.send_keys` (mapping in `src/keys.ts`). The snapshot is refreshed
+ * shortly after own input, on the fork's `pane_output_changed` tick for this
+ * pane (M1.5), and by a poll: 2.5 s until the first tick proves the server
+ * emits output events, then a 10 s safety net (architecture.md F3).
+ *
+ * M2: snapshots are applied incrementally (`src/render-plan.ts`): the buffer
+ * keeps everything written so far as history, and only the tail that changed
+ * is rewritten in place, so scroll position, selection and scrollback survive
+ * an update. A full repaint (`term.reset()`) happens only when the new
+ * snapshot cannot be aligned with what is on screen (first render, pane
+ * switch, resize). Dialogue blocks are recoloured and framed with xterm
+ * decorations; the cursor comes from the fork's `pane.read` (`cursor.line`),
+ * falling back to the end of the prompt line on upstream Herdr.
  */
 export const POLL_MS_WITHOUT_OUTPUT_EVENTS = 2500;
 export const POLL_MS_WITH_OUTPUT_EVENTS = 10000;
+
+type Snapshot = { text: string; cursor: PaneCursor | null | undefined };
 
 export default function TerminalView(p: { paneId: string; tree?: Tree; outputTick?: number }) {
   let host!: HTMLDivElement;
@@ -31,17 +41,20 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   let term: Terminal;
   let inputTerm: Terminal;
   let fit: FitAddon;
-  let lastText = "";
+  let last: Snapshot | null = null;
   // `revision` from the last applied pane.read (fork: content counter; upstream: always 0).
   let lastRevision = 0;
   // Set by the first output tick: the server emits output events, so the poll
   // may relax from 2.5 s to a 10 s safety net.
   let seenTick = false;
   let debounce: number | undefined;
+  // Logical chat lines currently in the xterm buffer, as written (coloured),
+  // with their dialogue kind: the `prev` side of `planUpdate`.
+  let rendered: string[] = [];
+  let renderedKinds: LineKind[] = [];
   let decorations: IDecoration[] = [];
   // Set on dispose: pending timers/promises must not touch the disposed xterm or signals.
   let disposed = false;
-  // "Last pane.read wins" per pane id: a slow response for an older request is dropped.
   onCleanup(() => { disposed = true; clearTimeout(debounce); });
 
   const pane = () => p.tree?.panes.find((x) => x.pane_id === p.paneId);
@@ -54,20 +67,21 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   };
 
   const [error, setError] = createSignal<string | null>(null);
-  // R14': a snapshot repaint resets scroll and selection, so while the user is
-  // reading history or selecting text the latest snapshot is parked here and
+  // A full repaint resets scroll and selection, so when a snapshot needs one
+  // while the user is reading history or selecting text, it is parked here and
   // applied as soon as they return to the bottom / drop the selection.
-  const [held, setHeld] = createSignal<string | null>(null);
+  // Incremental updates never need this: they leave the viewport alone.
+  const [held, setHeld] = createSignal<Snapshot | null>(null);
   const userIsReading = () => {
     const buf = term.buffer.active;
     return term.hasSelection() || buf.viewportY < buf.baseY;
   };
   const applyHeld = () => {
-    const text = held();
-    if (text === null || disposed || userIsReading()) return;
+    const snap = held();
+    if (snap === null || disposed || userIsReading()) return;
     setHeld(null);
-    render(text);
-    lastText = text;
+    render(snap, false);
+    last = snap;
   };
   // One request in flight per view; a refresh asked for meanwhile marks the
   // view dirty and runs right after. (A "last wins" gate would starve rendering
@@ -88,11 +102,16 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       // even revision means the text cannot have changed. 0 = no revisions.
       if (read.revision !== 0 && read.revision % 2 === 0 && read.revision === lastRevision) return;
       lastRevision = read.revision;
-      if (read.text === lastText) return;
-      if (lastText !== "" && userIsReading()) { setHeld(read.text); return; }
+      const snap = toSnapshot(read);
+      if (last && read.text === last.text) {
+        // Same text, maybe a moved cursor: only the input box needs it.
+        if (cursorKey(snap.cursor) !== cursorKey(last.cursor)) { renderInputFromText(snap); last = snap; }
+        return;
+      }
+      // Hold only when the update would be a repaint while the user is reading.
+      if (!render(snap, last !== null)) { setHeld(snap); return; }
       setHeld(null);
-      render(read.text);
-      lastText = read.text;
+      last = snap;
     } catch (err) {
       if (disposed || id !== p.paneId) return;
       console.error("pane.read failed", err);
@@ -102,6 +121,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       if (dirty && !disposed) { dirty = false; schedule(); }
     }
   }
+  const toSnapshot = (read: PaneRead): Snapshot => ({ text: read.text, cursor: read.cursor });
+  const cursorKey = (c: PaneCursor | null | undefined) => (c ? `${c.line ?? "-"}:${c.col}:${c.visible}` : "");
 
   // The snapshot is formatted for the PTY's width (the TUI's, not ours): long
   // text wraps here (frames follow the wrapped rows); rule-only lines (input
@@ -120,15 +141,14 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     if (inputTerm.cols !== cols) inputTerm.resize(cols, inputTerm.rows);
   }
 
-  function render(text: string) {
-    if (disposed) return;
+  /** Split a snapshot into the chat part (processed lines) and the input box. */
+  function prepare(text: string) {
     const all = text.replace(/\r\n?/g, "\n").split("\n").map((l) => fitRules(l, term.cols));
     const allPlain = all.map(stripAnsi);
-    // Split off the input box; it is rendered in the pinned terminal below.
     const boxAt = inputBoxStart(allPlain);
     const raw = boxAt >= 0 ? all.slice(0, boxAt) : all;
     const rawPlain = boxAt >= 0 ? allPlain.slice(0, boxAt) : allPlain;
-    renderInput(boxAt >= 0 ? all.slice(boxAt) : [], boxAt >= 0 ? allPlain.slice(boxAt) : []);
+    const box = { raw: boxAt >= 0 ? all.slice(boxAt) : [], plain: boxAt >= 0 ? allPlain.slice(boxAt) : [], at: boxAt };
     const rawKinds = classify(rawPlain, raw);
     // Every dialogue block gets its own blank row inside the frame at the top
     // and bottom; blank lines around it in the output stay outside as the gap.
@@ -145,28 +165,78 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       push("", "", k);
       i = j + 1;
     }
-    const out = lines
-      .map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${kinds[i] === "user" ? stripBackground(line) : line}\x1b[39m` : line))
-      .join("\r\n");
-    for (const d of decorations) d.dispose();
-    decorations = [];
-    term.reset();
-    term.write(out, () => {
-      if (disposed) return;
-      try {
-        decorate(kinds, plain);
-      } catch (err) {
-        console.error("decorate failed", err);
-        setError(String(err));
-      }
-    });
+    const coloured = lines.map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${kinds[i] === "user" ? stripBackground(line) : line}\x1b[39m` : line));
+    return { coloured, plain, kinds, box };
   }
 
-  // Logical line → buffer rows (long lines wrap in xterm).
+  function renderInputFromText(snap: Snapshot) {
+    const { box } = prepare(snap.text);
+    renderInput(box.raw, box.plain, snap.cursor, box.at);
+  }
+
+  /**
+   * Apply a snapshot. Returns false (and changes nothing) when the update
+   * would be a full repaint and `canHold` says the user is busy reading.
+   */
+  function render(snap: Snapshot, canHold: boolean): boolean {
+    if (disposed) return true;
+    const { coloured, plain, kinds, box } = prepare(snap.text);
+    let plan = planUpdate(rendered, coloured);
+    // The buffer must still hold exactly what `rendered` says (xterm may have
+    // trimmed scrollback); otherwise the alignment is meaningless.
+    if (plan.kind === "rewrite" || plan.kind === "append") {
+      if (rowsByLine().length !== rendered.length) plan = { kind: "reset", lines: coloured };
+    }
+    if (plan.kind === "rewrite") {
+      const buf = term.buffer.active;
+      const cutRow = rowsByLine()[plan.fromLine]?.[0];
+      // Only viewport rows can be rewritten in place; a change above them is a repaint.
+      if (cutRow === undefined || cutRow < buf.baseY) plan = { kind: "reset", lines: coloured };
+    }
+    if (plan.kind === "reset" && canHold && userIsReading()) return false;
+
+    renderInput(box.raw, box.plain, snap.cursor, box.at);
+    switch (plan.kind) {
+      case "none":
+        return true;
+      case "append": {
+        const first = rendered.length;
+        rendered = rendered.concat(plan.lines);
+        renderedKinds = renderedKinds.concat(kinds.slice(first));
+        term.write((first ? "\r\n" : "") + plan.lines.join("\r\n"), () => decorateFrom(first, plain));
+        return true;
+      }
+      case "rewrite": {
+        const buf = term.buffer.active;
+        const cutRow = rowsByLine()[plan.fromLine][0];
+        const up = buf.baseY + buf.cursorY - cutRow;
+        for (const d of decorations.filter((d) => d.marker.line >= cutRow)) d.dispose();
+        decorations = decorations.filter((d) => !d.isDisposed);
+        rendered = rendered.slice(0, plan.fromLine).concat(plan.lines);
+        renderedKinds = renderedKinds.slice(0, plan.fromLine).concat(kinds.slice(plan.fromLine));
+        const from = plan.fromLine;
+        term.write(`${up > 0 ? `\x1b[${up}A` : ""}\r\x1b[J${plan.lines.join("\r\n")}`, () => decorateFrom(from, plain));
+        return true;
+      }
+      case "reset": {
+        for (const d of decorations) d.dispose();
+        decorations = [];
+        rendered = plan.lines;
+        renderedKinds = kinds.slice();
+        term.reset();
+        term.write(plan.lines.join("\r\n"), () => decorateFrom(0, plain));
+        return true;
+      }
+    }
+  }
+
+  // Logical line → buffer rows (long lines wrap in xterm), up to the cursor's
+  // row: rows below it are the viewport's empty padding, not written lines.
   function rowsByLine(): number[][] {
     const buf = term.buffer.active;
+    const lastRow = Math.min(buf.length - 1, buf.baseY + buf.cursorY);
     const map: number[][] = [];
-    for (let r = 0; r < buf.length; r++) {
+    for (let r = 0; r <= lastRow; r++) {
       const line = buf.getLine(r);
       if (!line) break;
       if (line.isWrapped && map.length) map[map.length - 1].push(r);
@@ -175,11 +245,30 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     return map;
   }
 
-  function decorate(kinds: LineKind[], plain: string[]) {
-    const rows = rowsByLine();
+  /** Frame the dialogue blocks from the block that contains `startLine` on. */
+  function decorateFrom(startLine: number, plain: string[]) {
+    if (disposed) return;
+    try {
+      const kinds = renderedKinds;
+      let start = startLine;
+      while (start > 0 && kinds[start - 1] !== null && kinds[start - 1] === kinds[Math.min(start, kinds.length - 1)]) start--;
+      const rows = rowsByLine();
+      const startRow = rows[start]?.[0];
+      if (startRow !== undefined) {
+        for (const d of decorations.filter((d) => d.marker.line >= startRow)) d.dispose();
+        decorations = decorations.filter((d) => !d.isDisposed);
+      }
+      decorate(kinds, plain, rows, start);
+    } catch (err) {
+      console.error("decorate failed", err);
+      setError(String(err));
+    }
+  }
+
+  function decorate(kinds: LineKind[], plain: string[], rows: number[][], from: number) {
     const buf = term.buffer.active;
     const cursorRow = buf.baseY + buf.cursorY;
-    let i = 0;
+    let i = from;
     while (i < kinds.length) {
       const kind = kinds[i];
       if (!kind) { i++; continue; }
@@ -208,8 +297,12 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     }
   }
 
-  /** The input box: fixed number of rows, no scrollback, cursor at the end of the prompt line. */
-  function renderInput(raw: string[], plain: string[]) {
+  /**
+   * The input box: fixed number of rows, no scrollback. The cursor goes where
+   * the fork says (`cursor.line` relative to the box start); without that,
+   * to the end of the prompt line as an estimate.
+   */
+  function renderInput(raw: string[], plain: string[], cursor: PaneCursor | null | undefined, boxAt: number) {
     while (raw.length && plain[plain.length - 1].trim() === "") { raw.pop(); plain.pop(); }
     const rows = raw.length;
     inputHost.style.display = rows ? "" : "none";
@@ -218,15 +311,21 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     inputTerm.reset();
     inputTerm.write(raw.join("\r\n"), () => {
       if (disposed) return;
-      const idx = promptLine(plain);
-      if (idx < 0) { inputTerm.options.cursorStyle = "underline"; inputTerm.options.cursorInactiveStyle = "none"; return; }
-      // The snapshot carries no cursor position; typing appends, so the end of
-      // the prompt line is the best estimate until the streaming attach lands.
-      const typed = [...plain[idx].replace(/\s+$/, "")].length;
-      const col = Math.min(inputTerm.cols - 1, Math.max(typed, 2));
+      let row: number, col: number;
+      if (cursor && cursor.line != null && boxAt >= 0 && cursor.line >= boxAt && cursor.line < boxAt + rows) {
+        row = cursor.line - boxAt;
+        col = Math.min(inputTerm.cols - 1, cursor.col);
+        if (!cursor.visible) { inputTerm.options.cursorStyle = "underline"; inputTerm.options.cursorInactiveStyle = "none"; return; }
+      } else {
+        const idx = promptLine(plain);
+        if (idx < 0) { inputTerm.options.cursorStyle = "underline"; inputTerm.options.cursorInactiveStyle = "none"; return; }
+        const typed = [...plain[idx].replace(/\s+$/, "")].length;
+        row = idx;
+        col = Math.min(inputTerm.cols - 1, Math.max(typed, 2));
+      }
       inputTerm.options.cursorStyle = "block";
       inputTerm.options.cursorInactiveStyle = "outline";
-      inputTerm.write(`\x1b[${idx + 1};${col + 1}H`);
+      inputTerm.write(`\x1b[${row + 1};${col + 1}H`);
     });
   }
 
@@ -243,6 +342,14 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     if ("drop" in input) { console.debug("input dropped:", input.reason); return; }
     const sent = "keys" in input ? api.sendKeys(p.paneId, input.keys) : api.sendText(p.paneId, input.text);
     sent.then(schedule, (e) => setError(String(e)));
+  }
+
+  /** Forget what is on screen so the next snapshot repaints from scratch. */
+  function invalidate() {
+    rendered = [];
+    renderedKinds = [];
+    for (const d of decorations) d.dispose();
+    decorations = [];
   }
 
   onMount(() => {
@@ -282,7 +389,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       if (size === lastSize) return;
       lastSize = size;
       fitCols();
-      if (lastText) render(lastText);
+      // New width → different wrapping and rule lengths: repaint from scratch.
+      if (last) { invalidate(); render(last, false); }
     });
     ro.observe(host);
     // Self-rescheduling poll so the period can relax once output events arrive.
@@ -307,9 +415,11 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   }, { defer: true }));
 
   createEffect(on(() => p.paneId, () => {
-    // New pane: nothing from the previous one may hold its first snapshot (R17 N1).
-    lastText = "";
+    // New pane: nothing from the previous one may hold its first snapshot (R17 N1),
+    // and its history must not be aligned with the new pane's text.
+    last = null;
     lastRevision = 0;
+    invalidate();
     setHeld(null);
     term.clearSelection();
     term.scrollToBottom();
