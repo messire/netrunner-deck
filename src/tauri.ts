@@ -123,6 +123,7 @@ const fake = (() => {
         setTimeout(() => emit("herdr://event", { event: "layout_updated" }), 10);
         return null;
       }
+      case "notify": console.info("[notify]", args.title, "—", args.body); return null;
       case "cswap_list": return accounts;
       case "cswap_switch": {
         const n = Number(args.number); accounts.activeAccountNumber = n;
