@@ -17,3 +17,4 @@ src/__fixtures__/pane-read/*.ans
 src/__fixtures__/pane-read/*.txt
 src/__fixtures__/pane-read/_*
 !src/__fixtures__/pane-read/synthetic-*.ans
+src/__fixtures__/pane-read/*.err
