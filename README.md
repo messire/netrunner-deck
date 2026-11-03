@@ -13,7 +13,9 @@ Stack: Tauri 2 (Rust) + Solid + xterm.js.
 
 - A running Herdr server. Deck talks to its JSON API endpoint: `<config dir>/herdr.sock`
   (unix socket; on Windows the same path as a named pipe under `\\.\pipe\`). See
-  "Environment variables" for overrides.
+  "Environment variables" for overrides. On Windows a Herdr started from an administrator
+  terminal is reachable only by elevated clients: either run Deck as administrator or restart
+  Herdr with `herdr server --allow-unelevated-clients` (the OFFLINE banner says which).
 - `cswap` for the Accounts section. It is resolved once at startup from `PATH`, then
   `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows, trying the `PATHEXT` extensions, then
   `cswap.exe`, `cswap.cmd`, `cswap`). If it is not found the Accounts block shows

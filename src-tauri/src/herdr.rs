@@ -32,10 +32,12 @@ const MAX_CONCURRENT_CALLS: usize = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HerdrError {
-    #[error("herdr server is not reachable at {path}: {source}")]
+    #[error("herdr server is not reachable at {path}: {source}{hint}")]
     Connect {
         path: String,
         source: std::io::Error,
+        /// Human-readable cause for the common connect failures; empty otherwise.
+        hint: &'static str,
     },
     #[error("io error talking to herdr: {0}")]
     Io(#[from] std::io::Error),
@@ -115,19 +117,40 @@ fn connect_with(read_timeout: Option<Duration>) -> Result<Stream> {
             .read(true)
             .write(true)
             .open(&name)
-            .map_err(|source| HerdrError::Connect { path: name, source })
+            .map_err(|source| HerdrError::Connect {
+                path: name,
+                hint: connect_hint(source.kind()),
+                source,
+            })
     }
     #[cfg(not(windows))]
     {
         let stream = std::os::unix::net::UnixStream::connect(&path).map_err(|source| {
             HerdrError::Connect {
                 path: display,
+                hint: connect_hint(source.kind()),
                 source,
             }
         })?;
         // `None` is the default (block forever); setting it is a no-op.
         stream.set_read_timeout(read_timeout).ok();
         Ok(stream)
+    }
+}
+
+/// Why a connect failed, in words the user can act on. `PermissionDenied`
+/// on Windows means Herdr was started from an administrator terminal: the
+/// pipe of an elevated process rejects unelevated clients (Herdr's own CLI
+/// says the same). `NotFound` means no server is listening at the path.
+fn connect_hint(kind: std::io::ErrorKind) -> &'static str {
+    match kind {
+        std::io::ErrorKind::PermissionDenied => {
+            " — Herdr runs elevated (started from an administrator terminal). \
+             Start Deck as administrator, or restart Herdr with \
+             `herdr server --allow-unelevated-clients`"
+        }
+        std::io::ErrorKind::NotFound => " — is `herdr server` running?",
+        _ => "",
     }
 }
 
@@ -416,6 +439,28 @@ mod tests {
 
     fn is_timeout(result: &Result<Value>, method: &str) -> bool {
         matches!(result, Err(HerdrError::Timeout { method: m }) if m == method)
+    }
+
+    #[test]
+    fn connect_hint_explains_elevated_server_and_missing_server() {
+        use std::io::ErrorKind;
+        assert!(connect_hint(ErrorKind::PermissionDenied).contains("elevated"));
+        assert!(connect_hint(ErrorKind::PermissionDenied).contains("--allow-unelevated-clients"));
+        assert!(connect_hint(ErrorKind::NotFound).contains("running"));
+        assert_eq!(connect_hint(ErrorKind::TimedOut), "");
+    }
+
+    #[test]
+    fn connect_error_display_appends_the_hint() {
+        let source = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let err = HerdrError::Connect {
+            path: "pipe-x".into(),
+            hint: connect_hint(source.kind()),
+            source,
+        };
+        let text = err.to_string();
+        assert!(text.starts_with("herdr server is not reachable at pipe-x: "));
+        assert!(text.ends_with("`herdr server --allow-unelevated-clients`"));
     }
 
     #[test]
