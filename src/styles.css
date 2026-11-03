@@ -77,6 +77,8 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 /* The CLI's input box, pinned under the chat; same grid, no scrollback. */
 .xterm-input{min-width:0;overflow:hidden;padding:4px 12px 6px 14px;border-top:1px solid var(--line);user-select:text}
 .xterm-input .xterm .xterm-viewport{overflow:hidden}
+/* The chat scrollbar matches the sidebar: thin, line-coloured thumb on a transparent track. */
+.xterm .xterm-viewport{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 .empty{display:grid;place-items:center;color:var(--mut);letter-spacing:2px}
 .offline{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);max-width:70%;overflow-wrap:anywhere;border:1px solid var(--red);color:var(--red);background:#160910;padding:6px 14px;font:11px Consolas,monospace;letter-spacing:1px;line-height:1.2}
 /* key bar */
