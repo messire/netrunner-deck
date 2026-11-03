@@ -193,6 +193,10 @@ data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost`
 (`'unsafe-inline'` в стилях нужен xterm.js). `devCsp` дополнительно разрешает
 `http://localhost:1420` и `ws://localhost:1420` для Vite HMR.
 
+Шрифт Rajdhani (веса 400/600/700, `src/fonts/*.ttf`, OFL 1.1) подключён через `@font-face` в
+`styles.css`; Vite кладёт файлы в `dist/assets`, так что `font-src 'self'` покрывает их без
+изменений CSP. Сетевых запросов за шрифтом нет.
+
 ## Факты об API Herdr (проверены по исходникам форка `messire/herdr-punk`, 2026-10-24)
 
 | # | Факт | Источник |
