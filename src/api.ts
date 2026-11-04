@@ -109,6 +109,9 @@ const count = (name: string) => {
   if (typeof window !== "undefined") window.__deckCalls = callCounts;
 };
 
+/** A newer signed release the updater found (M5). */
+export type UpdateInfo = { version: string; current: string; notes: string | null; date: string | null };
+
 export const api = {
   ping: () => invoke<{ version: string; protocol: number }>("herdr_ping"),
   tree: () => { count("herdr_tree"); return invoke<Tree>("herdr_tree"); },
@@ -124,6 +127,9 @@ export const api = {
     invoke("herdr_action", { action, id: id ?? null, options: options ?? null }),
   /** OS notification (M4); used when an agent starts waiting while its pane is not on screen. */
   notify: (title: string, body: string) => invoke<void>("notify", { title, body }),
+  /** Updater (M5): `null` when up to date; errors (offline, no release yet) are advisory. */
+  updateCheck: () => invoke<UpdateInfo | null>("update_check"),
+  updateInstall: () => invoke<void>("update_install"),
   cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
   cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
   // The payload is whatever Herdr sent; `routeEvent` validates the shape.
