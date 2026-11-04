@@ -203,8 +203,8 @@ GitHub Release с NSIS-инсталлятором и `.exe`, pre-release по с
 (`package.json` → `tauri.conf.json` через `"../package.json"`, `scripts/sync-version.mjs` →
 `Cargo.toml`/`Cargo.lock`, `npm run version:check` в CI); 2026-11-04: канал обновлений
 (`tauri-plugin-updater`, команды `update_check`/`update_install`, подпись и `latest.json` в
-`release.yml`, ключ сгенерирован вне репозитория). **Осталось:** секреты
-`TAURI_SIGNING_PRIVATE_KEY{,_PASSWORD}` в GitHub (ставит владелец) и первый тег `v0.2.0`.
+`release.yml`, ключ сгенерирован вне репозитория, секреты в GitHub у владельца). Первый релиз:
+тег `v0.2.0`, 2026-11-04.
 
 **Цель.** Релиз по тегу (`*.exe` + GitHub Release), версия в одном месте (`"version": "../package.json"` в `tauri.conf.json`, `Cargo.toml` синхронизируется скриптом), канал обновлений (`tauri-plugin-updater`, ключ подписи в секретах, `latest.json`).
 
@@ -248,7 +248,7 @@ GitHub Release с NSIS-инсталлятором и `.exe`, pre-release по с
 10. ◐ 2026-11-03: M4 (уведомления, window state, выбранная панель, режим без Tauri) и M5 (релиз по тегу,
     единая версия) — без split view, Codex-фикстур и updater (см. статусы в §6).
 11. ✅ 2026-11-04: Rajdhani в бандле.
-12. ✅ 2026-11-04: updater (M5) в коде; секреты и первый тег — за владельцем.
+12. ✅ 2026-11-04: updater (M5) в коде; первый релиз `v0.2.0`.
 
 Ранние сигналы (из критики): нет зелёного `npm run typecheck && npm test` к концу дня 1; R3 на второй итерации проверки; `src/__fixtures__/pane-read/` пуст к старту R12; в `architecture.md` всё ещё «[предположение]» у формата событий; ADR 0001 без упоминания `PaneSurfacePatch`.
 
