@@ -156,7 +156,18 @@ git commit -am "release: v0.2.0" && git tag v0.2.0 && git push && git push --tag
 `.github/workflows/release.yml` builds the Windows installer on the tag (same checks as
 `build.yml`) and publishes a GitHub Release with the NSIS installer and the bare `.exe`; a tag with
 a pre-release suffix (`v0.2.0-rc.1`) is marked pre-release. The build workflow stays read-only.
-There is no in-app updater yet (it needs a signing key kept outside the repository).
+
+**Updates.** The installer is signed (`tauri-plugin-updater`, minisign) and the release carries
+`latest.json`; Deck checks `releases/latest/download/latest.json` on start and every 4 h and, when a
+newer version exists, shows `⇣ UPDATE vX.Y.Z — INSTALL` in the title bar. Nothing downloads or
+installs until you click it; the NSIS installer then runs in passive mode and restarts the app.
+Pre-releases are never offered (`latest` skips them). `tauri dev` does not check.
+
+The private key lives outside the repository (generated with `npx tauri signer generate -w
+~/.tauri/netrunner-deck.key`); the release workflow needs it as repository secrets
+`TAURI_SIGNING_PRIVATE_KEY` (file contents) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and fails
+early when the key is missing. Its public half is `plugins.updater.pubkey` in `tauri.conf.json`;
+rotating the key means shipping one release signed with the old key that carries the new pubkey.
 
 ## Roadmap
 

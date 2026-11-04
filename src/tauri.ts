@@ -124,6 +124,11 @@ const fake = (() => {
         return null;
       }
       case "notify": console.info("[notify]", args.title, "—", args.body); return null;
+      // `?update=1` in the browser shows the update offer; install just waits a bit.
+      case "update_check":
+        return new URLSearchParams(location.search).has("update")
+          ? { version: "9.9.9", current: "0.1.0", notes: "browser stand-in", date: null } : null;
+      case "update_install": await new Promise((r) => setTimeout(r, 1500)); return null;
       case "cswap_list": return accounts;
       case "cswap_switch": {
         const n = Number(args.number); accounts.activeAccountNumber = n;

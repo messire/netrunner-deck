@@ -106,6 +106,9 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .plus:hover{border-color:var(--cy);background:rgba(103,224,227,.08)}
 .tab.add{color:var(--cy);padding:0 10px;font-weight:700}
 .toast{color:var(--red);max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upd{border:1px solid var(--yel);background:rgba(252,238,10,.08);color:var(--yel);padding:1px 8px;cursor:pointer;letter-spacing:1.5px;font-weight:700}
+.upd:hover{background:rgba(252,238,10,.18)}
+.upd:disabled{opacity:.6;cursor:default}
 .menu{position:fixed;z-index:50;min-width:220px;background:#120A10;border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 8px 24px rgba(0,0,0,.6);padding:4px 0;font-size:11px;letter-spacing:1px;user-select:none;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
 .menu-title{padding:6px 12px 4px;color:var(--mut);font:9px Consolas,monospace;letter-spacing:1.5px;border-bottom:1px solid var(--line);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
 .menu-item{display:flex;justify-content:space-between;gap:18px;padding:6px 12px;color:var(--txt);cursor:pointer;white-space:nowrap}

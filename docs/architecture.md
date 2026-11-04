@@ -37,6 +37,16 @@ Deck — тонкий клиент к серверу Herdr. Всё состоя�
 действиям M3. Нужна для визуальной проверки UI без Herdr; поведения, отличного от Rust-стороны,
 в ней нет.
 
+## Обновления (M5)
+
+`plugins.updater` в `tauri.conf.json`: `pubkey` (minisign, пара к `~/.tauri/netrunner-deck.key`
+у владельца репозитория) и один endpoint — `releases/latest/download/latest.json` на GitHub.
+`release.yml` собирает с `TAURI_SIGNING_PRIVATE_KEY{,_PASSWORD}` из секретов, кладёт в релиз
+переименованный инсталлятор `netrunner-deck_<ver>_x64-setup.exe`, его `.sig` и `latest.json`
+(`platforms."windows-x86_64".{url,signature}`). Webview (`App.tsx`) вызывает `update_check` при
+старте и раз в 4 ч (кроме `tauri dev`), показывает кнопку в титлбаре, установка — только по клику
+(`update_install`). Скачивание идёт из Rust, CSP webview не затрагивается.
+
 ## Действия и хоткеи (M3)
 
 `src/actions.ts` (чистый, с тестами): `hotkeyOf` — F1 (пикер аккаунта), F2 (следующий агент в
@@ -80,6 +90,8 @@ tokio-воркеры.
 | `herdr_focus` | `workspace.focus` / `tab.focus` / `pane.focus` | неизвестный target → `HerdrError::Shape` до обращения к серверу (`focus_method`) |
 | `herdr_action` | `workspace.create` / `workspace.close` / `tab.create` / `tab.close` / `pane.close` | M3; имя действия → метод и фиксированный набор параметров (`action_request`): create всегда `focus: true`, из `options` проходят только `cwd`, `label`, `close_group`; неизвестное действие → `Shape` |
 | `notify` | OS notification через `tauri-plugin-notification` | M4; решение «когда» принимает webview (агент перешёл в `blocked`, его панель не на экране или окно не в фокусе) |
+| `update_check` | `tauri-plugin-updater` → `latest.json` релиза | M5; возвращает `{version,current,notes,date}` или `null`; найденный `Update` хранится в `PendingUpdate` |
+| `update_install` | скачивание, проверка подписи, запуск NSIS (passive) | M5; только по клику пользователя |
 | `cswap_list` | `cswap list --json` | |
 | `cswap_switch` | `cswap switch <n> --json` | |
 

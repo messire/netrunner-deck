@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
-import { getCurrentWindow } from "./tauri";
-import { api, type Tree, type CswapList, type Tab, type Workspace, type Agent, type CswapAccount, type TreeAction, zoneOf, usageOf, accountLabel } from "./api";
+import { getCurrentWindow, inTauri } from "./tauri";
+import { api, type UpdateInfo, type Tree, type CswapList, type Tab, type Workspace, type Agent, type CswapAccount, type TreeAction, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SwitchError } from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
@@ -91,6 +91,19 @@ export default function App() {
     setActionError(m);
     clearTimeout(errorTimer);
     errorTimer = window.setTimeout(() => setActionError(null), 8000);
+  };
+  // M5: a newer signed release is offered in the title bar; nothing installs by itself.
+  // `tauri dev` skips the check (it would offer the GitHub build over the dev binary).
+  const [update, setUpdate] = createSignal<UpdateInfo | null>(null);
+  const [installing, setInstalling] = createSignal(false);
+  const checkUpdate = () => {
+    if (inTauri && import.meta.env.DEV) return;
+    api.updateCheck().then(setUpdate).catch((e) => console.info("[update] check skipped:", String(e)));
+  };
+  const installUpdate = () => {
+    if (installing()) return;
+    setInstalling(true);
+    api.updateInstall().catch((e) => { setInstalling(false); showError(`update: ${e}`); });
   };
   const runAction = (action: TreeAction, id?: string | null, options?: { cwd?: string; label?: string; close_group?: boolean }) =>
     api.action(action, id, options)
@@ -191,9 +204,11 @@ export default function App() {
     }).then((u) => (un1 = u));
     api.onOffline((m) => setOffline(m)).then((u) => (un2 = u));
     const timer = setInterval(() => { refetchTree(); refetchAccounts(); }, 15000);
+    checkUpdate();
+    const updTimer = setInterval(checkUpdate, 4 * 3600_000);
     // Capture phase: Deck's keys are decided before xterm's textarea sees them.
     window.addEventListener("keydown", onKey, true);
-    onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); refetchTreeSoon.cancel(); window.removeEventListener("keydown", onKey, true); clearTimeout(errorTimer); });
+    onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); clearInterval(updTimer); refetchTreeSoon.cancel(); window.removeEventListener("keydown", onKey, true); clearTimeout(errorTimer); });
   });
 
   // M4: an agent that starts waiting for input while its pane is not on
@@ -223,6 +238,11 @@ export default function App() {
         <div class="logo">▞ NETRUNNER DECK</div>
         <span class="micro">herdr client · {offline() ? "OFFLINE" : "LINK OK"}</span>
         <Show when={actionError()}>{(m) => <span class="micro toast" title={m()}>✕ {m()}</span>}</Show>
+        <Show when={update()}>{(u) => (
+          <button class="micro upd" disabled={installing()} title={u().notes ?? ""} onClick={installUpdate}>
+            {installing() ? "⇣ INSTALLING…" : `⇣ UPDATE v${u().version} — INSTALL`}
+          </button>
+        )}</Show>
         <span class="sp" />
         <Show when={activeAccount()} fallback={<div class="zone danger"><i />ZONE : NO LINK</div>}>
           {(a) => {

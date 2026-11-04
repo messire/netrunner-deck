@@ -215,6 +215,59 @@ async fn notify(app: AppHandle, title: String, body: String) -> Result<(), Strin
         .map_err(|e| e.to_string())
 }
 
+/// The update `update_check` found, kept for `update_install` (M5).
+pub struct PendingUpdate(pub std::sync::Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[derive(serde::Serialize)]
+pub struct UpdateInfo {
+    version: String,
+    current: String,
+    notes: Option<String>,
+    date: Option<String>,
+}
+
+/// Ask the release endpoint (`plugins.updater` in `tauri.conf.json`) whether a
+/// newer signed build exists. `None` = up to date. Network/endpoint failures are
+/// errors the webview may ignore: the check is advisory.
+#[tauri::command]
+async fn update_check(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let info = UpdateInfo {
+        version: update.version.clone(),
+        current: update.current_version.clone(),
+        notes: update.body.clone(),
+        date: update.date.map(|d| d.to_string()),
+    };
+    *app.state::<PendingUpdate>()
+        .0
+        .lock()
+        .map_err(|e| e.to_string())? = Some(update);
+    Ok(Some(info))
+}
+
+/// Download, verify the signature and run the installer of the pending update.
+/// On Windows the installer closes the running app itself (passive mode).
+#[tauri::command]
+async fn update_install(app: AppHandle) -> Result<(), String> {
+    let pending = app
+        .state::<PendingUpdate>()
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take();
+    let Some(update) = pending else {
+        return Err("no pending update; run update_check first".into());
+    };
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Pick the Herdr method and id field for a `herdr_focus` target.
 fn focus_method(target: &str) -> Result<(&'static str, &'static str), String> {
     match target {
@@ -468,7 +521,9 @@ pub fn run() {
         // Window size/position survive restarts (UI-only state, roadmap M4).
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(CswapPath(cswap))
+        .manage(PendingUpdate(std::sync::Mutex::new(None)))
         .setup(|app| {
             start_event_pump(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
@@ -485,6 +540,8 @@ pub fn run() {
             herdr_focus,
             herdr_action,
             notify,
+            update_check,
+            update_install,
             cswap_list,
             cswap_switch,
         ])
