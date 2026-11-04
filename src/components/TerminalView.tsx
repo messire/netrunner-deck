@@ -3,7 +3,7 @@ import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type PaneCursor, type PaneRead, type Tree } from "../api";
 import { blockWidth, classify, fitRules, inputBoxStart, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
-import { mapInput } from "../keys";
+import { mapInput, pasteText, specialKeyDown } from "../keys";
 import { planUpdate } from "../render-plan";
 import { hotkeyOf } from "../actions";
 import { throttleLeading } from "../events";
@@ -387,6 +387,19 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     sent.then(schedule, (e) => setError(String(e)));
   }
 
+  /** ctrl+v / shift+insert: clipboard text → `pane.send_text` (Herdr brackets it, F5). */
+  async function paste() {
+    const id = p.paneId;
+    try {
+      const text = pasteText(await api.clipboardReadText());
+      if (!text || disposed || id !== p.paneId) return;
+      await api.sendText(id, text);
+      schedule();
+    } catch (err) {
+      if (!disposed) setError(String(err));
+    }
+  }
+
   /** Forget what is on screen so the next snapshot repaints from scratch. */
   function invalidate() {
     rendered = [];
@@ -423,8 +436,19 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     // Keys typed anywhere in the pane go to the CLI; the caret lives in the input box.
     term.textarea?.addEventListener("focus", () => inputTerm.focus());
     // Deck's own keys (F1/F2/Ctrl+K, src/actions.ts) never reach the PTY even
-    // if a listener order ever lets them past App's capture handler.
-    const notForPty = (e: KeyboardEvent) => !(e.type === "keydown" && hotkeyOf(e, false) !== null);
+    // if a listener order ever lets them past App's capture handler. Keys xterm
+    // would mangle (shift+enter → `\r`, ctrl+v → 0x16) are handled here on
+    // keydown; preventDefault also stops the browser's own paste event, which
+    // xterm would otherwise forward as a second copy of the text.
+    const notForPty = (e: KeyboardEvent) => {
+      if (e.type === "keydown" && hotkeyOf(e, false) !== null) return false;
+      const special = specialKeyDown(e);
+      if (!special) return true;
+      e.preventDefault();
+      if ("paste" in special) void paste();
+      else api.sendKeys(p.paneId, special.keys).then(schedule, (err) => setError(String(err)));
+      return false;
+    };
     term.attachCustomKeyEventHandler(notForPty);
     inputTerm.attachCustomKeyEventHandler(notForPty);
     fitCols();

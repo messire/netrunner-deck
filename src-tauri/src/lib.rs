@@ -226,6 +226,22 @@ async fn notify(app: AppHandle, title: String, body: String) -> Result<(), Strin
         .map_err(|e| e.to_string())
 }
 
+/// Clipboard text for the pane view's ctrl+v / shift+insert. Read on the
+/// Rust side: WebView2 gates `navigator.clipboard.readText` behind a
+/// permission prompt. No text on the clipboard (an image, nothing) is an
+/// empty string, not an error — Claude Code's own alt+v handles images.
+#[tauri::command]
+async fn clipboard_read_text(app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    match app.clipboard().read_text() {
+        Ok(text) => Ok(text),
+        Err(err) => {
+            tracing::debug!(%err, "clipboard has no text");
+            Ok(String::new())
+        }
+    }
+}
+
 /// The update `update_check` found, kept for `update_install` (M5).
 pub struct PendingUpdate(pub std::sync::Mutex<Option<tauri_plugin_updater::Update>>);
 
@@ -533,6 +549,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(CswapPath(cswap))
         .manage(PendingUpdate(std::sync::Mutex::new(None)))
         .setup(|app| {
@@ -551,6 +568,7 @@ pub fn run() {
             herdr_focus,
             herdr_action,
             notify,
+            clipboard_read_text,
             update_check,
             update_install,
             cswap_list,

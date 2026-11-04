@@ -252,6 +252,9 @@ GitHub Release с NSIS-инсталлятором и `.exe`, pre-release по с
 13. ✅ 2026-11-04: M6 — одно дерево в сайдбаре (repo › space › tab › session, `src/tree.ts`),
     `pane.split` в allowlist, полоса WAITING вместо списка Agents. Сплиты всё ещё не рисуются
     рядом (см. M4 «split view»).
+14. ✅ 2026-11-04: поле ввода — тик вывода без debounce-голодания (`throttleLeading` 100 мс),
+    `shift+enter` по имени, `ctrl+v`/`shift+insert` вставляют буфер (`clipboard_read_text`).
+    Курсор перед подсказкой Claude Code требует Herdr ≥ `ca39ad17` (`cursor` в `pane.read`).
 
 Ранние сигналы (из критики): нет зелёного `npm run typecheck && npm test` к концу дня 1; R3 на второй итерации проверки; `src/__fixtures__/pane-read/` пуст к старту R12; в `architecture.md` всё ещё «[предположение]» у формата событий; ADR 0001 без упоминания `PaneSurfacePatch`.
 
