@@ -12,7 +12,7 @@ Deck — тонкий клиент к серверу Herdr. Всё состоя�
 | `src-tauri/src/herdr.rs` | Клиент JSON API Herdr: `socket_path`/`config_dir`, `call` (дедлайн + слоты), `subscribe` (долгое соединение), `parse_reply`, `classify_line` | `cargo test` (дедлайн, семафор, разбор ответов/строк потока) |
 | `src-tauri/src/lib.rs` | Tauri-команды `herdr_*`, `cswap_*`; резолв пути `cswap` при старте; event pump `start_event_pump`; `run()` | `cargo test` (`parse_json_stdout`, `focus_method`, кандидаты `cswap`) |
 | `src/api.ts` | Типы `Tree`/`Pane`/`Agent`/`CswapList`, обёртки `invoke`, `onEvent`/`onOffline`, DEV-счётчики вызовов `window.__deckCalls` | — |
-| `src/events.ts` | `routeEvent(ev) -> "tree" \| "ignore"`, `debounceTrailing` | `events.test.ts` |
+| `src/events.ts` | `routeEvent(ev) -> "tree" \| "tick" \| "ignore"`, `debounceTrailing`, `throttleLeading` | `events.test.ts` |
 | `src/keys.ts` | `mapInput(data) -> {keys} \| {text} \| {drop, reason}` | `keys.test.ts` |
 | `src/dialogue.ts` | `stripAnsi`, `leadStyle`, `classify`, `promptLine`, `blockWidth(lines, cols, widthOf)`, `defaultWidthOf`, `stripBackground` | `dialogue.test.ts` + `src/__fixtures__/pane-read/*.ans` / `*.expected.json` |
 | `src/latest.ts` | `createLatestGate` — «последний запрос побеждает» для ресурсов `tree`/`accounts` | `latest.test.ts` |
@@ -167,13 +167,15 @@ agent_detected|agent_status_changed`, `layout_updated` и любого имен�
 (`.` → `_`). Все `"tree"`-события → один `herdr_tree` через `debounceTrailing(…, 200 мс)`.
 `pane_output_changed` (форк, M1.5) → `"tick"`, только если `pane_id` совпадает с панелью
 на экране; для других панелей — `"ignore"` (метаданных оно не несёт). `"tick"` → счётчик
-`outputTick` в `App` → `TerminalView.schedule()` (тот же 120 мс debounce, что и у
-собственного ввода). Любое событие также снимает баннер OFFLINE.
+`outputTick` в `App` → `TerminalView` читает сразу, а при потоке событий — не чаще раза в
+100 мс (`throttleLeading`, хвост всплеска не теряется). Любое событие также снимает баннер
+OFFLINE.
 
 ### Pane view (`TerminalView.tsx`)
 
-- Снапшот `pane.read` (`lines = max(200, rows*4)`) по поллингу 2,5 с и через 120 мс после
-  собственного ввода; один запрос в полёте, повторная просьба ставит `dirty`. Ответ для другой
+- Снапшот `pane.read` (`lines = max(200, rows*4)`) по тику вывода (сразу, далее ≤ 1 раз в
+  100 мс), по поллингу 2,5 с и через 120 мс после собственного ввода; один запрос в полёте,
+  повторная просьба ставит `dirty`. Ответ для другой
   панели (`id !== p.paneId`) или после `onCleanup` отбрасывается.
 - Отрисовка: `term.reset()` + полная запись; рамки диалога — xterm decorations по
   `classify`; курсор — в конец строки промпта `promptLine` (оценка, позиции курсора в
@@ -259,8 +261,13 @@ data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost`
   только изменившийся хвост в пределах viewport. `term.reset()` — только первый показ, смена
   панели, ресайз; лишь эти случаи R14' откладывает, пока пользователь читает историю или держит
   выделение.
-- Триггер обновления — собственный ввод, `pane_output_changed` (форк, ≤ 100 мс + 120 мс debounce)
-  и поллинг: 2,5 с, пока не пришёл первый tick, затем 10 с как страховка. На upstream — только поллинг.
+- Триггер обновления — собственный ввод (120 мс debounce), `pane_output_changed` (форк:
+  коалесценция ≤ 1/100 мс на сервере; в Deck — чтение сразу, затем throttle 100 мс) и поллинг:
+  2,5 с, пока не пришёл первый tick, затем 10 с как страховка. На upstream — только поллинг.
+  Замер 2026-11-04 на живом Herdr: событие приходит через ~190 мс после ввода, `pane.read`
+  отвечает 2 или ~103 мс — API-сервер Herdr опрашивает pipe раз в 100 мс
+  (`CONNECTION_POLL_INTERVAL`) и так же раз в 100 мс сбрасывает события подписчикам. Прежний
+  trailing-debounce 120 мс сбрасывался каждым событием и при непрерывном выводе не срабатывал.
 - Ширины символов для рамок — из таблицы `defaultWidthOf`, не из буфера xterm (остаток п.11).
 - На upstream Herdr навигационные клавиши не доходят до панели (F6); на форке доходят.
 

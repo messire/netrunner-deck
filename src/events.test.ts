@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { debounceTrailing, routeEvent } from "./events";
+import { debounceTrailing, routeEvent, throttleLeading } from "./events";
 
 // Fixture payloads follow the real wire shape (docs/architecture.md F1/F2):
 // `event` is snake_case and the rest of the object is the variant payload.
@@ -147,5 +147,54 @@ describe("debounceTrailing", () => {
   it("cancel() on an idle debouncer is a no-op", () => {
     const d = debounceTrailing(() => {}, 200);
     expect(() => { d.cancel(); d.cancel(); }).not.toThrow();
+  });
+});
+
+describe("throttleLeading", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("the first call runs at once; a steady stream runs once per window with the last arguments", () => {
+    const fn = vi.fn<(n: number) => void>();
+    const t = throttleLeading(fn, 100);
+    t(1);
+    expect(fn).toHaveBeenCalledTimes(1);
+    // Events every 40 ms for 400 ms: a 120 ms trailing debounce would starve; this fires every 100 ms.
+    for (let i = 2; i <= 10; i++) { vi.advanceTimersByTime(40); t(i); }
+    // t=360 ms: windows closed at 100, 200, 300 → 3 catch-up calls so far.
+    expect(fn).toHaveBeenCalledTimes(4);
+    expect(fn).toHaveBeenLastCalledWith(8);
+    vi.advanceTimersByTime(100);
+    expect(fn).toHaveBeenCalledTimes(5);
+    expect(fn).toHaveBeenLastCalledWith(10);
+    vi.advanceTimersByTime(1000);
+    expect(fn).toHaveBeenCalledTimes(5);
+  });
+
+  it("a lone call inside the window is delivered once the window ends, and the next idle call is immediate again", () => {
+    const fn = vi.fn();
+    const t = throttleLeading(fn, 100);
+    t();
+    vi.advanceTimersByTime(30);
+    t();
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(70);
+    expect(fn).toHaveBeenCalledTimes(2);
+    // The catch-up call opened a new window; after it ends the throttle is idle.
+    vi.advanceTimersByTime(100);
+    t();
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("cancel() drops the pending call and resets the window", () => {
+    const fn = vi.fn();
+    const t = throttleLeading(fn, 100);
+    t(); t();
+    t.cancel();
+    vi.advanceTimersByTime(1000);
+    expect(fn).toHaveBeenCalledTimes(1);
+    t();
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(() => { t.cancel(); t.cancel(); }).not.toThrow();
   });
 });
