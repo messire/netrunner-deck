@@ -57,7 +57,11 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
-      - run: npm run tauri build
+      # Read-only workflow: no signing key here, so the updater artifacts
+      # (`.sig`) are switched off; release.yml builds the signed installer.
+      - name: tauri build (unsigned)
+        shell: bash
+        run: npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - uses: actions/upload-artifact@v4
         with:
           name: netrunner-deck-windows
