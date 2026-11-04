@@ -41,7 +41,7 @@ export interface Command {
   do:
     | { kind: "select"; paneId: string }
     | { kind: "switch"; account: number }
-    | { kind: "action"; action: "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.close"; id?: string }
+    | { kind: "action"; action: "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.close" | "pane.split"; id?: string }
     | { kind: "refresh" };
 }
 

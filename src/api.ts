@@ -13,7 +13,7 @@ export interface Workspace {
   active_tab_id: string;
   agent_status: AgentStatus;
   tokens?: Record<string, string>;
-  worktree?: { repo_key: string; repo_name: string; branch?: string } | null;
+  worktree?: { repo_key: string; repo_name: string; branch?: string; is_linked_worktree?: boolean; checkout_path?: string } | null;
 }
 export interface Tab {
   tab_id: string;
@@ -77,7 +77,8 @@ export interface CswapList { activeAccountNumber: number; accounts: CswapAccount
  */
 export type HerdrEvent = { event: string; [k: string]: unknown };
 
-export type TreeAction = "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.close";
+export type TreeAction = "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.close" | "pane.split";
+export type ActionOptions = { cwd?: string; label?: string; close_group?: boolean; direction?: "right" | "down" };
 
 /**
  * `pane.read` reply. `revision` is the fork's content counter (0 upstream).
@@ -123,7 +124,7 @@ export const api = {
   sendKeys: (paneId: string, keys: string[]) => invoke("herdr_pane_send_keys", { paneId, keys }),
   focus: (target: "workspace" | "tab" | "pane", id: string) => invoke("herdr_focus", { target, id }),
   /** Tree actions (M3); the Rust side maps the name to a Herdr method with a fixed param set. */
-  action: (action: TreeAction, id?: string | null, options?: { cwd?: string; label?: string; close_group?: boolean }) =>
+  action: (action: TreeAction, id?: string | null, options?: ActionOptions) =>
     invoke("herdr_action", { action, id: id ?? null, options: options ?? null }),
   /** OS notification (M4); used when an agent starts waiting while its pane is not on screen. */
   notify: (title: string, body: string) => invoke<void>("notify", { title, body }),

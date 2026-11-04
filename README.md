@@ -105,12 +105,19 @@ Point Deck at it with `HERDR_SOCKET_PATH`. On Windows the variable is a pipe *na
   position and selection survive updates; a full repaint happens only on first show, pane switch
   and resize. On the fork, `pane.read` also returns the cursor (`cursor.line`/`col`), which Deck
   places in the input box; on upstream Herdr the cursor is estimated at the end of the prompt line.
-- **Actions and hotkeys (M3).** Right-click a space, tab, agent or account for its menu (focus in
-  Herdr, new tab / new space, close — destructive items ask for a second click); `+` next to
-  SPACES and in the tab bar create a workspace / tab. `F1` account picker, `F2` jump to the next
+- **One tree (M6).** The sidebar is a single tree — repo (yellow) › space / worktree (red) ›
+  tab-session (cyan) — instead of a Spaces list plus a status-sorted Agents list. A tab with one
+  pane is one row; a split tab keeps its row and lists its sessions one level deeper. Every level
+  collapses (▾/▸; busy or waiting nodes and the one holding the selected pane start open, manual
+  toggles are remembered) and every level has its own `+`: new space in the repo, new tab in the
+  space, split next to a session. Blocked agents are pinned in a WAITING strip above the tree with
+  their `repo / space / tab` path; `F2` cycles through them. Server order everywhere else.
+- **Actions and hotkeys (M3).** Right-click a space, tab, session or account for its menu (focus in
+  Herdr, new tab / new space, split right/down, close — destructive items ask for a second click);
+  `+` next to SESSIONS and in the tab bar create a workspace / tab. `F1` account picker, `F2` jump to the next
   agent that waits for input, `Ctrl+K` command palette, `Esc` closes an overlay (and otherwise
   goes to the CLI). These keys never reach the pane. Every action is one Herdr method
-  (`workspace.create/close`, `tab.create/close`, `pane.close`, `*.focus`) behind the `herdr_action`
+  (`workspace.create/close`, `tab.create/close`, `pane.close`, `pane.split`, `*.focus`) behind the `herdr_action`
   allowlist; failures show in the title bar.
 - **Notifications (M4).** When an agent turns `blocked` (waits for input) and its pane is not on
   screen, or the window is in the background, Deck raises an OS notification
@@ -129,7 +136,7 @@ Not there yet:
 ## Layout
 
 - `src/` — Solid frontend: `App.tsx` (state, event routing, menus, hotkeys), `components/Sidebar.tsx`
-  (spaces, accounts, agents, session map), `components/TabBar.tsx`,
+  (the repo › space › tab › session tree, accounts, session map; model in `tree.ts`), `components/TabBar.tsx`,
   `components/TerminalView.tsx` (xterm pane view), `components/KeyBar.tsx`,
   `components/ContextMenu.tsx`, `components/Palette.tsx`;
   `dialogue.ts`, `keys.ts`, `events.ts`, `latest.ts`, `render-plan.ts`, `actions.ts` are pure

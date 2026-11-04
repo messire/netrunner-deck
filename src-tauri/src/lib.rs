@@ -190,6 +190,17 @@ fn action_request(
             params.insert(k, v);
             "pane.close"
         }
+        // Split next to a pane (M6 tree): `direction` is right|down, default right.
+        "pane.split" => {
+            let (k, v) = need_id("target_pane_id")?;
+            params.insert(k, v);
+            let direction = opt("direction")
+                .filter(|d| matches!(d.as_str(), Some("right") | Some("down")))
+                .unwrap_or_else(|| Value::String("right".into()));
+            params.insert("direction".into(), direction);
+            params.insert("focus".into(), Value::Bool(true));
+            "pane.split"
+        }
         other => return Err(format!("unknown action: {other}")),
     };
     if matches!(action, "workspace.create" | "tab.create") {
@@ -600,6 +611,29 @@ mod tests {
         assert_eq!(truncate_chars("ééé", 2), "éé...");
         let long = "x".repeat(500);
         assert_eq!(truncate_chars(&long, 300).chars().count(), 303);
+    }
+
+    #[test]
+    fn action_request_builds_pane_split_params() {
+        let (m, p) = action_request(
+            "pane.split",
+            Some("p_1"),
+            Some(&json!({ "direction": "down" })),
+        )
+        .unwrap();
+        assert_eq!(m, "pane.split");
+        assert_eq!(
+            p,
+            json!({ "target_pane_id": "p_1", "direction": "down", "focus": true })
+        );
+        let (_, p) = action_request(
+            "pane.split",
+            Some("p_1"),
+            Some(&json!({ "direction": "sideways" })),
+        )
+        .unwrap();
+        assert_eq!(p["direction"], "right");
+        assert!(action_request("pane.split", None, None).is_err());
     }
 
     #[test]

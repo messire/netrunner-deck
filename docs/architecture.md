@@ -18,7 +18,8 @@ Deck — тонкий клиент к серверу Herdr. Всё состоя�
 | `src/latest.ts` | `createLatestGate` — «последний запрос побеждает» для ресурсов `tree`/`accounts` | `latest.test.ts` |
 | `src/App.tsx` | Ресурсы `tree`/`accounts`, сигналы `offline`/`accountsError`/`switching`/`switchError`, подписка на события, поллинг 15 с, выбор текущей панели | — |
 | `src/components/TerminalView.tsx` | xterm + `pane.read`-снапшоты, рамки диалога, курсор, ввод, R14' hold-while-reading | ручная проверка |
-| `src/components/Sidebar.tsx`, `TabBar.tsx`, `KeyBar.tsx` | Дерево/аккаунты/агенты/карта сессий, вкладки, нижняя строка подсказок | — |
+| `src/tree.ts` | Модель дерева сайдбара: repo › space › tab › session, rollup статуса, правила раскрытия, полоса WAITING, open-state в `localStorage` | `tree.test.ts` |
+| `src/components/Sidebar.tsx`, `TabBar.tsx`, `KeyBar.tsx` | Дерево сессий/аккаунты/карта сессий, вкладки, нижняя строка подсказок | — |
 | `scripts/fake-herdr.mjs` | Фальшивый сервер API для ручных проверок моста (`silent`, `slow <ms>`, `ack-error`, `close-after-ack`, `ok`) | — |
 
 ## Локальное состояние (M4)
@@ -46,6 +47,27 @@ Deck — тонкий клиент к серверу Herdr. Всё состоя�
 (`platforms."windows-x86_64".{url,signature}`). Webview (`App.tsx`) вызывает `update_check` при
 старте и раз в 4 ч (кроме `tauri dev`), показывает кнопку в титлбаре, установка — только по клику
 (`update_install`). Скачивание идёт из Rust, CSP webview не затрагивается.
+
+## Дерево сайдбара (M6)
+
+Одно дерево вместо списка Spaces и отсортированного по статусу списка Agents. Уровни и цвета:
+репозиторий (жёлтый, группировка по `worktree.repo_key`, подпись `repo_name`) › workspace
+(красный; `root` — основной чекаут, `⎇` — linked worktree, по `worktree.is_linked_worktree`) ›
+таб (бирюзовый) › сессия (панель). Таб с одной панелью схлопывается в строку сессии: имя таба,
+вид агента, ctx-бар, слово статуса только там, где точка его не несёт (WAITING, DONE, SHELL).
+Таб с `pane_count > 1` остаётся строкой с кареткой и перечисляет сессии уровнем ниже.
+Workspace без `worktree` стоит на верхнем уровне без репозитория.
+
+Статусы: для таба и workspace берутся агрегаты Herdr (`agent_status`), для репозитория — rollup
+по workspace (`blocked` › `working` › `idle` › `done` › `unknown`). Порядок везде серверный.
+Срочность — закреплённая полоса WAITING над деревом (все `blocked` сессии с путём
+`repo / space / tab`, повторяющиеся имена схлопываются), F2 ходит по ней. Раскрытие: по умолчанию
+открыты узлы со статусом `blocked`/`working` и узел с выбранной панелью; ручные переключения —
+`localStorage` `deck.tree.open` (`{id: bool}`), перекрывают умолчание. Создание на любом уровне,
+как в Herdr: `+` у репозитория → `workspace.create` с `source_workspace_id` корневого чекаута,
+у workspace → `tab.create`, у сессии/таба → `pane.split` (`target_pane_id`, `direction`
+right|down, `focus`). Вся логика без DOM — в `src/tree.ts` с тестами; `Sidebar.tsx` только рисует.
+Сами сплиты Deck по-прежнему не рендерит рядом: выбранная панель одна, остальные — через дерево.
 
 ## Действия и хоткеи (M3)
 

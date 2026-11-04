@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
-import { api, type UpdateInfo, type Tree, type CswapList, type Tab, type Workspace, type Agent, type CswapAccount, type TreeAction, zoneOf, usageOf, accountLabel } from "./api";
+import { api, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SwitchError } from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
@@ -105,7 +105,7 @@ export default function App() {
     setInstalling(true);
     api.updateInstall().catch((e) => { setInstalling(false); showError(`update: ${e}`); });
   };
-  const runAction = (action: TreeAction, id?: string | null, options?: { cwd?: string; label?: string; close_group?: boolean }) =>
+  const runAction = (action: TreeAction, id?: string | null, options?: ActionOptions) =>
     api.action(action, id, options)
       .then(() => refetchTree())
       .catch((e) => {
@@ -134,20 +134,26 @@ export default function App() {
       ...(w.worktree ? [] : [{ label: "CLOSE SPACE + WORKTREES", hint: "close_group", danger: true, run: () => runAction("workspace.close", w.workspace_id, { close_group: true }) }]),
     ],
   });
+  // The pane a tab-level action applies to: its focused pane, else the first.
+  const tabPane = (t: Tab) => { const ps = tree()?.panes.filter((p) => p.tab_id === t.tab_id) ?? []; return ps.find((p) => p.focused) ?? ps[0]; };
   const tabMenu = (e: MouseEvent, t: Tab) => setMenu({
     x: e.clientX, y: e.clientY, title: t.label.toUpperCase(),
     items: [
       { label: "FOCUS IN HERDR", hint: "tab.focus", run: () => api.focus("tab", t.tab_id).catch((er) => showError(String(er))) },
       { label: "NEW TAB", hint: "tab.create", run: () => runAction("tab.create", t.workspace_id) },
+      { label: "SPLIT RIGHT", hint: "pane.split", run: () => runAction("pane.split", tabPane(t)?.pane_id, { direction: "right" }) },
+      { label: "SPLIT DOWN", hint: "pane.split", run: () => runAction("pane.split", tabPane(t)?.pane_id, { direction: "down" }) },
       { label: "CLOSE TAB", hint: "tab.close", danger: true, run: () => runAction("tab.close", t.tab_id) },
     ],
   });
-  const agentMenu = (e: MouseEvent, a: Agent) => setMenu({
-    x: e.clientX, y: e.clientY, title: agentName(tree(), a).toUpperCase(),
+  const paneMenu = (e: MouseEvent, pane: Pane) => setMenu({
+    x: e.clientX, y: e.clientY, title: (pane.label || pane.display_agent || pane.agent || pane.title || pane.pane_id).toUpperCase(),
     items: [
-      { label: "OPEN", run: () => selectPane(a.pane_id) },
-      { label: "FOCUS IN HERDR", hint: "pane.focus", run: () => api.focus("pane", a.pane_id).catch((er) => showError(String(er))) },
-      { label: "CLOSE PANE", hint: "pane.close", danger: true, run: () => runAction("pane.close", a.pane_id) },
+      { label: "OPEN", run: () => selectPane(pane.pane_id) },
+      { label: "FOCUS IN HERDR", hint: "pane.focus", run: () => api.focus("pane", pane.pane_id).catch((er) => showError(String(er))) },
+      { label: "SPLIT RIGHT", hint: "pane.split", run: () => runAction("pane.split", pane.pane_id, { direction: "right" }) },
+      { label: "SPLIT DOWN", hint: "pane.split", run: () => runAction("pane.split", pane.pane_id, { direction: "down" }) },
+      { label: "CLOSE PANE", hint: "pane.close", danger: true, run: () => runAction("pane.close", pane.pane_id) },
     ],
   });
   const accountMenu = (e: MouseEvent, a: CswapAccount) => setMenu({
@@ -274,9 +280,12 @@ export default function App() {
         onSwitchAccount={switchAccount}
         onRefreshAccounts={() => refetchAccounts()}
         onWorkspaceMenu={workspaceMenu}
-        onAgentMenu={agentMenu}
+        onTabMenu={tabMenu}
+        onPaneMenu={paneMenu}
         onAccountMenu={accountMenu}
-        onNewSpace={() => runAction("workspace.create", tree()?.panes.find((p) => p.pane_id === currentPane())?.workspace_id)}
+        onNewSpace={(source) => runAction("workspace.create", source ?? tree()?.panes.find((p) => p.pane_id === currentPane())?.workspace_id)}
+        onNewTab={(ws) => runAction("tab.create", ws)}
+        onSplit={(paneId) => runAction("pane.split", paneId, { direction: "right" })}
       />
 
       <main class="main">
