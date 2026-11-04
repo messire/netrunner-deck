@@ -6,6 +6,7 @@ import { blockWidth, classify, fitRules, inputBoxStart, promptLine, stripAnsi, s
 import { mapInput } from "../keys";
 import { planUpdate } from "../render-plan";
 import { hotkeyOf } from "../actions";
+import { throttleLeading } from "../events";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
   user: "\x1b[38;2;255;246;168m",
@@ -17,7 +18,8 @@ const COLOR: Record<Exclude<LineKind, null>, string> = {
  * (`pane.read`) as a chat and forwards keystrokes with `pane.send_text` /
  * `pane.send_keys` (mapping in `src/keys.ts`). The snapshot is refreshed
  * shortly after own input, on the fork's `pane_output_changed` tick for this
- * pane (M1.5), and by a poll: 2.5 s until the first tick proves the server
+ * pane (M1.5) — at once, then at most every `OUTPUT_THROTTLE_MS` while output
+ * keeps coming — and by a poll: 2.5 s until the first tick proves the server
  * emits output events, then a 10 s safety net (architecture.md F3).
  *
  * M2: snapshots are applied incrementally (`src/render-plan.ts`): the buffer
@@ -31,6 +33,13 @@ const COLOR: Record<Exclude<LineKind, null>, string> = {
  */
 export const POLL_MS_WITHOUT_OUTPUT_EVENTS = 2500;
 export const POLL_MS_WITH_OUTPUT_EVENTS = 10000;
+/**
+ * Output ticks → `pane.read`: leading edge, then one read per window. The
+ * server already coalesces output events to one per 100 ms per pane, so a
+ * trailing debounce here (the old 120 ms) was reset by every event and never
+ * fired while an agent streamed; the view froze until the output paused.
+ */
+export const OUTPUT_THROTTLE_MS = 100;
 
 type Snapshot = { text: string; cursor: PaneCursor | null | undefined };
 
@@ -56,7 +65,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   let decorations: IDecoration[] = [];
   // Set on dispose: pending timers/promises must not touch the disposed xterm or signals.
   let disposed = false;
-  onCleanup(() => { disposed = true; clearTimeout(debounce); });
+  onCleanup(() => { disposed = true; clearTimeout(debounce); kick.cancel(); });
 
   const pane = () => p.tree?.panes.find((x) => x.pane_id === p.paneId);
   const header = () => {
@@ -119,9 +128,11 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       setError(String(err));
     } finally {
       inFlight = false;
-      if (dirty && !disposed) { dirty = false; schedule(); }
+      if (dirty && !disposed) { dirty = false; kick(); }
     }
   }
+  // Output path: refresh now, then at most once per window while ticks keep coming.
+  const kick = throttleLeading(() => { refresh(); }, OUTPUT_THROTTLE_MS);
   const toSnapshot = (read: PaneRead): Snapshot => ({ text: read.text, cursor: read.cursor });
   const cursorKey = (c: PaneCursor | null | undefined) => (c ? `${c.line ?? "-"}:${c.col}:${c.visible}` : "");
 
@@ -443,12 +454,12 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     refresh();
   });
 
-  // Output tick from App (routeEvent → "tick" for this pane): coalesce through
-  // the same 120 ms debounce as own input; in-flight + dirty handles the rest.
+  // Output tick from App (routeEvent → "tick" for this pane): read at once,
+  // throttled while output streams; in-flight + dirty handles overlap.
   createEffect(on(() => p.outputTick, (tick) => {
     if (!tick) return;
     seenTick = true;
-    schedule();
+    kick();
   }, { defer: true }));
 
   createEffect(on(() => p.paneId, () => {

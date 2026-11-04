@@ -63,3 +63,31 @@ export function debounceTrailing<T extends (...a: any[]) => void>(fn: T, ms: num
   };
   return debounced;
 }
+
+/**
+ * Leading-edge throttle with a trailing catch-up: the first call runs at
+ * once; calls inside the next `ms` collapse into one call (last arguments)
+ * at the end of the window, so a steady stream runs `fn` every `ms` and the
+ * last event of a burst is never dropped. `cancel()` drops a pending call.
+ */
+export function throttleLeading<T extends (...a: any[]) => void>(fn: T, ms: number): T & { cancel(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let pending: Parameters<T> | null = null;
+  const fire = () => {
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (pending) { const args = pending; pending = null; fn(...args); fire(); }
+    }, ms);
+  };
+  const throttled = ((...args: Parameters<T>) => {
+    if (timer !== undefined) { pending = args; return; }
+    fn(...args);
+    fire();
+  }) as T & { cancel(): void };
+  throttled.cancel = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    pending = null;
+  };
+  return throttled;
+}
