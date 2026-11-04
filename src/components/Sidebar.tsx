@@ -1,9 +1,11 @@
-import { For, Show, createMemo } from "solid-js";
-import { accountLabel, usageOf, type CswapAccount, type CswapList, type Tree, type Workspace, type Agent, type AgentStatus } from "../api";
+import { For, Show, createMemo, createSignal } from "solid-js";
+import { accountLabel, usageOf, type AgentStatus, type CswapAccount, type CswapList, type Pane, type Tab, type Tree, type Workspace } from "../api";
+import {
+  buildTree, ctxPct, defaultOpen, firstPane, loadOpen, saveOpen, waiting,
+  type RepoNode, type RootNode, type SessionNode, type SpaceNode, type TabNode,
+} from "../tree";
 
 export interface SwitchError { number: number; message: string }
-interface Group { label: string; items: Workspace[] }
-interface Spaces { top: Workspace[]; groups: Group[] }
 
 interface Props {
   tree?: Tree;
@@ -17,92 +19,151 @@ interface Props {
   onSelectPane: (paneId: string) => void;
   onSwitchAccount: (number: number) => void;
   onRefreshAccounts: () => void;
-  /** M3: right-click menus and the new-space button; App owns the actions. */
+  /** Right-click menus; App owns the actions. */
   onWorkspaceMenu: (e: MouseEvent, w: Workspace) => void;
-  onAgentMenu: (e: MouseEvent, a: Agent) => void;
+  onTabMenu: (e: MouseEvent, t: Tab) => void;
+  onPaneMenu: (e: MouseEvent, pane: Pane) => void;
   onAccountMenu: (e: MouseEvent, a: CswapAccount) => void;
-  onNewSpace: () => void;
+  /** Create at any level, like Herdr: space (optionally cloned from one), tab, split. */
+  onNewSpace: (sourceWorkspaceId?: string) => void;
+  onNewTab: (workspaceId: string) => void;
+  onSplit: (paneId: string) => void;
 }
 
-const statusClass = (s: AgentStatus) => (s === "working" ? "w" : s === "blocked" ? "b" : "");
+type Node = RootNode | TabNode;
 
+const statusClass = (s: AgentStatus) => (s === "working" ? "w" : s === "blocked" ? "b" : s === "done" ? "d" : "");
+// Only the words the dot cannot carry: working/idle are the dot alone.
+const statusWord = (s: AgentStatus, shell: boolean) =>
+  shell ? "SHELL" : s === "blocked" ? "WAITING" : s === "done" ? "DONE" : "";
+const storage = () => (typeof localStorage === "undefined" ? undefined : localStorage);
+
+/**
+ * Sidebar (M6): one tree — repo › space › tab › session — instead of the old
+ * Spaces list plus a status-sorted Agents list. Herdr's server order is kept at
+ * every level; urgency is a pinned WAITING strip above the tree, not a sort.
+ */
 export default function Sidebar(p: Props) {
-  // Worktree children sit under their repo; everything else is a top-level space.
-  const spaces = createMemo((): Spaces => {
-    const t = p.tree;
-    if (!t) return { top: [], groups: [] };
-    const groups = new Map<string, Group>();
-    const top: Workspace[] = [];
-    for (const w of t.workspaces) {
-      if (w.worktree) {
-        const key = w.worktree.repo_key;
-        if (!groups.has(key)) groups.set(key, { label: w.worktree.repo_name, items: [] });
-        groups.get(key)!.items.push(w);
-      } else top.push(w);
-    }
-    return { top, groups: [...groups.values()] };
-  });
+  const roots = createMemo(() => buildTree(p.tree));
+  const waits = createMemo(() => waiting(roots()));
 
-  const panesOf = (workspaceId: string) => p.tree?.panes.filter((x) => x.workspace_id === workspaceId) ?? [];
-  const agents = createMemo(() => {
-    const list = [...(p.tree?.agents ?? [])];
-    // Recency: working first, then blocked, then the rest (server order within groups).
-    const rank: Record<string, number> = { working: 0, blocked: 1, idle: 2, done: 3, unknown: 4 };
-    return list.sort((a, b) => (rank[a.agent_status] ?? 9) - (rank[b.agent_status] ?? 9));
-  });
-  // Session name as Herdr shows it: workspace (worktree branch), plus the tab
-  // when the workspace hosts more than one agent. `name` wins if the user renamed it.
-  const agentLabel = (a: Agent) => {
-    const t = p.tree;
-    if (a.name) return a.name;
-    const ws = t?.workspaces.find((w) => w.workspace_id === a.workspace_id);
-    const wsName = ws?.worktree?.branch ?? ws?.label ?? a.workspace_id;
-    const siblings = t?.agents.filter((x) => x.workspace_id === a.workspace_id).length ?? 1;
-    if (siblings <= 1) return wsName;
-    const tab = t?.tabs.find((x) => x.tab_id === a.tab_id);
-    return `${wsName} · ${tab?.label ?? a.tab_id}`;
+  // Manual open/closed overrides; everything else follows `defaultOpen`.
+  const [open, setOpen] = createSignal<Record<string, boolean>>(loadOpen(storage()));
+  const isOpen = (n: Node) => open()[n.id] ?? defaultOpen(n, p.selectedPane);
+  const toggle = (n: Node, e: MouseEvent) => {
+    e.stopPropagation();
+    const next = { ...open(), [n.id]: !isOpen(n) };
+    setOpen(next);
+    saveOpen(storage(), next);
   };
-  const ctxOf = (tokens?: Record<string, string>) => {
-    const raw = tokens?.ctx ?? "";
-    const n = parseInt(raw, 10);
-    return Number.isFinite(n) ? n : null;
+  const select = (n: Node) => { const pane = firstPane(n); if (pane) p.onSelectPane(pane.pane_id); };
+  const stop = (e: MouseEvent, fn: () => void) => { e.stopPropagation(); fn(); };
+
+  const Caret = (q: { node: Node; color: string }) => (
+    <button class={`car ${q.color}`} title={isOpen(q.node) ? "collapse" : "expand"} onClick={(e) => toggle(q.node, e)}>
+      {isOpen(q.node) ? "▾" : "▸"}
+    </button>
+  );
+
+  const SessionRow = (q: { s: SessionNode; level: "tab" | "pane"; tab: Tab }) => {
+    const ctx = () => ctxPct(q.s.agent?.tokens ?? q.s.pane.tokens);
+    const shell = !q.s.agent && !q.s.pane.agent;
+    return (
+      <div class={`row ${q.level} ${q.s.id === p.selectedPane ? "sel" : ""}`}
+           title={q.s.pane.cwd ?? undefined}
+           onClick={() => p.onSelectPane(q.s.id)}
+           onContextMenu={(e) => { e.preventDefault(); q.level === "tab" ? p.onTabMenu(e, q.tab) : p.onPaneMenu(e, q.s.pane); }}>
+        <span class="car sp" />
+        <span class={`st ${statusClass(q.s.status)}`} />
+        <span class={`nm ${shell ? "sh" : ""}`}>{q.level === "tab" ? q.tab.label : q.s.label}</span>
+        <span class="kind">{q.s.agentKind ? q.s.agentKind.toUpperCase() : "—"}</span>
+        <Show when={ctx() !== null}>
+          <span class="seg small"><i style={{ width: `${ctx()}%` }} /></span>
+          <span class="pc">{ctx()}</span>
+        </Show>
+        <span class={`tag ${statusClass(q.s.status)}`}>{statusWord(q.s.status, shell)}</span>
+        <button class="add" title="split (pane.split)" onClick={(e) => stop(e, () => p.onSplit(q.s.id))}>+</button>
+      </div>
+    );
   };
+
+  const TabRow = (q: { t: TabNode }) => (
+    <Show when={!q.t.single} fallback={<SessionRow s={q.t.single!} level="tab" tab={q.t.tab} />}>
+      <div class={`row tab ${!isOpen(q.t) && q.t.sessions.some((s) => s.id === p.selectedPane) ? "sel" : ""}`}
+           onClick={() => select(q.t)} onContextMenu={(e) => { e.preventDefault(); p.onTabMenu(e, q.t.tab); }}>
+        <Caret node={q.t} color="cy" />
+        <span class={`st ${statusClass(q.t.status)}`} />
+        <span class="nm">{q.t.tab.label}</span>
+        <button class="add" title="split (pane.split)" onClick={(e) => stop(e, () => { const pane = firstPane(q.t); if (pane) p.onSplit(pane.pane_id); })}>+</button>
+        <span class="cnt">{q.t.sessions.length}</span>
+      </div>
+      <Show when={isOpen(q.t)}>
+        <div class="kids t"><For each={q.t.sessions}>{(s) => <SessionRow s={s} level="pane" tab={q.t.tab} />}</For></div>
+      </Show>
+    </Show>
+  );
+
+  const SpaceRow = (q: { s: SpaceNode }) => (
+    <>
+      <div class={`row space ${!isOpen(q.s) && q.s.tabs.some((t) => t.sessions.some((x) => x.id === p.selectedPane)) ? "sel" : ""}`}
+           title={q.s.workspace.worktree?.checkout_path ?? undefined}
+           onClick={() => select(q.s)} onContextMenu={(e) => { e.preventDefault(); p.onWorkspaceMenu(e, q.s.workspace); }}>
+        <Caret node={q.s} color="red" />
+        <span class={`st ${statusClass(q.s.status)}`} />
+        <span class="nm">{q.s.workspace.worktree?.branch ?? q.s.workspace.label}</span>
+        <Show when={q.s.root}><span class="badge root" title="primary checkout">root</span></Show>
+        <Show when={q.s.linked}><span class="badge" title="linked worktree">⎇</span></Show>
+        <button class="add" title="new tab (tab.create)" onClick={(e) => stop(e, () => p.onNewTab(q.s.id))}>+</button>
+        <span class="cnt">{q.s.tabs.length}</span>
+      </div>
+      <Show when={isOpen(q.s)}>
+        <div class="kids w"><For each={q.s.tabs}>{(t) => <TabRow t={t} />}</For></div>
+      </Show>
+    </>
+  );
+
+  const RepoRow = (q: { r: RepoNode }) => (
+    <>
+      <div class="row repo" onClick={(e) => toggle(q.r, e)}>
+        <Caret node={q.r} color="yel" />
+        <span class="nm">{q.r.label}</span>
+        <button class="add" title="new space in this repo (workspace.create)"
+                onClick={(e) => stop(e, () => p.onNewSpace((q.r.spaces.find((s) => s.root) ?? q.r.spaces[0])?.id))}>+</button>
+        <span class="cnt">{q.r.spaces.length} · {q.r.agents}</span>
+      </div>
+      <Show when={isOpen(q.r)}>
+        <div class="kids r"><For each={q.r.spaces}>{(s) => <SpaceRow s={s} />}</For></div>
+      </Show>
+    </>
+  );
 
   return (
     <aside class="side">
-      <div class="plate-row"><div class="plate">Spaces</div><button class="plus" title="new space (workspace.create)" onClick={() => p.onNewSpace()}>+</button></div>
+      <div class="plate-row"><div class="plate">Sessions</div><button class="plus" title="new space (workspace.create)" onClick={() => p.onNewSpace()}>+</button></div>
+
+      <Show when={waits().length > 0}>
+        <div class="pin">
+          <div class="pl"><span>WAITING · {waits().length}</span><span>F2 ↵</span></div>
+          <For each={waits()}>
+            {(w) => {
+              const i = w.path.lastIndexOf(" / ");
+              return (
+                <div class={`row ${w.session.id === p.selectedPane ? "sel" : ""}`} onClick={() => p.onSelectPane(w.session.id)}
+                     onContextMenu={(e) => { e.preventDefault(); p.onPaneMenu(e, w.session.pane); }}>
+                  <span class="st b" />
+                  <span class="nm"><span class="path">{i >= 0 ? w.path.slice(0, i + 3) : ""}</span>{i >= 0 ? w.path.slice(i + 3) : w.path}</span>
+                  <span class="kind">{w.session.agentKind?.toUpperCase() ?? ""}</span>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+
       <Show when={p.tree} fallback={<div class="row micro">connecting…</div>}>
-        <For each={spaces().top}>
-          {(w) => (
-            <>
-              <div class={`row ${panesOf(w.workspace_id).some((x) => x.pane_id === p.selectedPane) ? "sel" : ""}`}
-                   onClick={() => { const pane = panesOf(w.workspace_id).find((x) => x.focused) ?? panesOf(w.workspace_id)[0]; if (pane) p.onSelectPane(pane.pane_id); }}
-                   onContextMenu={(e) => { e.preventDefault(); p.onWorkspaceMenu(e, w); }}>
-                <span class={`st ${statusClass(w.agent_status)}`} />
-                <span class="nm ws">{w.label}</span>
-                <span class="cnt">{w.tab_count}</span>
-              </div>
-            </>
-          )}
-        </For>
-        <For each={spaces().groups}>
-          {(g) => (
-            <>
-              <div class="row"><span class="st" /><span class="nm ws">{g.label}</span><span class="cnt">{g.items.length}</span></div>
-              <For each={g.items}>
-                {(w) => (
-                  <div class={`row l2 ${panesOf(w.workspace_id).some((x) => x.pane_id === p.selectedPane) ? "sel" : ""}`}
-                       onClick={() => { const pane = panesOf(w.workspace_id).find((x) => x.focused) ?? panesOf(w.workspace_id)[0]; if (pane) p.onSelectPane(pane.pane_id); }}
-                       onContextMenu={(e) => { e.preventDefault(); p.onWorkspaceMenu(e, w); }}>
-                    <span class={`st ${statusClass(w.agent_status)}`} />
-                    <span class="nm wt">{w.worktree?.branch ?? w.label}</span>
-                    <span class="tag">{w.agent_status === "blocked" ? "WAITING" : ""}</span>
-                  </div>
-                )}
-              </For>
-            </>
-          )}
-        </For>
+        <div class="tree">
+          <For each={roots()}>{(r) => (r.kind === "repo" ? <RepoRow r={r} /> : <SpaceRow s={r} />)}</For>
+        </div>
       </Show>
 
       <div class="plate" style="margin-top:14px">Accounts</div>
@@ -141,23 +202,7 @@ export default function Sidebar(p: Props) {
         )}
       </Show>
 
-      <div class="plate" style="margin-top:8px">Agents <span class="tag lc">by recency</span></div>
-      <For each={agents()}>
-        {(a) => (
-          <div class={`row ${a.pane_id === p.selectedPane ? "sel" : ""}`} onClick={() => p.onSelectPane(a.pane_id)}
-               onContextMenu={(e) => { e.preventDefault(); p.onAgentMenu(e, a); }}>
-            <span class={`st ${statusClass(a.agent_status)}`} />
-            <span class="nm">{agentLabel(a)}</span>
-            <span class="tag">{(a.display_agent ?? a.agent ?? "").toUpperCase()}</span>
-            <Show when={ctxOf(a.tokens) !== null}>
-              <span class="seg small"><i style={{ width: `${ctxOf(a.tokens)}%` }} /></span>
-              <span class="pc">{ctxOf(a.tokens)}</span>
-            </Show>
-          </div>
-        )}
-      </For>
-
-      <SessionMap tree={p.tree} selectedPane={p.selectedPane} onSelectPane={p.onSelectPane} />
+      <SessionMap tree={p.tree} repos={roots().filter((r) => r.kind === "repo").length} selectedPane={p.selectedPane} onSelectPane={p.onSelectPane} />
     </aside>
   );
 }
@@ -173,7 +218,7 @@ function Quota(p: { label: string; pct: number | null }) {
   );
 }
 
-function SessionMap(p: { tree?: Tree; selectedPane: string | null; onSelectPane: (id: string) => void }) {
+function SessionMap(p: { tree?: Tree; repos: number; selectedPane: string | null; onSelectPane: (id: string) => void }) {
   const cells = () => {
     const t = p.tree;
     if (!t) return [];
@@ -187,7 +232,7 @@ function SessionMap(p: { tree?: Tree; selectedPane: string | null; onSelectPane:
   return (
     <div class="map">
       <div class="hd"><span>SESSION MAP</span>
-        <span class="micro">{p.tree?.workspaces.length ?? 0} SPACES · {p.tree?.tabs.length ?? 0} TABS · {p.tree?.agents.length ?? 0} AGENTS</span></div>
+        <span class="micro">{p.repos} REPOS · {p.tree?.workspaces.length ?? 0} SPACES · {p.tree?.tabs.length ?? 0} TABS · {p.tree?.agents.length ?? 0} AGENTS</span></div>
       <div class="cells">
         <For each={cells()}>
           {(c) => (

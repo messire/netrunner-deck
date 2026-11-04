@@ -104,6 +104,30 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .plate-row{display:flex;align-items:center;gap:8px}
 .plus{margin:6px 0 8px;width:22px;height:22px;border:1px solid var(--line);background:transparent;color:var(--cy);font:700 14px Consolas,monospace;cursor:pointer;line-height:1}
 .plus:hover{border-color:var(--cy);background:rgba(103,224,227,.08)}
+
+/* M6: one tree — repo (yellow) › space (red) › tab/session (cyan) */
+.tree .row{height:22px;padding:0 4px 0 2px;gap:5px}
+.tree .row .nm{min-width:40px}
+.tree .seg.small{flex:0 0 44px}.tree .pc{width:22px;font-size:11px}
+.row.repo .nm{color:var(--yel);text-transform:uppercase;letter-spacing:2px;font-size:12px;font-weight:700}
+.row.space .nm{color:#FF6B7A;font-weight:700}
+.row.tab .nm{color:var(--cy)}
+.row.pane .nm{color:var(--tcy);font-weight:400}
+.row .nm.sh{color:var(--mut);font-weight:400}
+.car{width:12px;height:22px;flex:none;border:0;background:transparent;padding:0;font:700 12px Consolas,monospace;color:var(--mut);cursor:pointer;text-align:center;line-height:22px}
+.car.yel{color:var(--yel)}.car.red{color:#FF6B7A}.car.cy{color:var(--cy)}.car.sp{cursor:default}
+.kids{margin-left:7px;padding-left:8px;border-left:1px solid}
+.kids.r{border-color:rgba(252,238,10,.3)}.kids.w{border-color:rgba(255,43,74,.35)}.kids.t{border-color:rgba(103,224,227,.3)}
+.badge{font:8px Consolas,monospace;letter-spacing:1px;color:#FF6B7A;border:1px solid rgba(255,43,74,.45);padding:0 4px;line-height:12px;flex:none}
+.badge.root{border-color:#FF6B7A}
+.kind{font:9px Consolas,monospace;color:var(--mut);width:36px;text-align:right;flex:none;letter-spacing:.5px;overflow:hidden}
+.row .add{opacity:0;width:14px;height:14px;border:1px dashed var(--line);background:transparent;color:var(--cy);font:700 11px Consolas,monospace;line-height:1;padding:0;cursor:pointer;flex:none}
+.row:hover .add{opacity:1}.row .add:hover{border-color:var(--cy);border-style:solid}
+.tag.w{color:var(--red)}.tag.b{color:var(--org)}
+.st.d{background:var(--mut);border-color:var(--mut)}
+.pin{border:1px solid var(--org);background:rgba(255,166,43,.06);margin:0 0 8px;padding:2px 0}
+.pin .pl{font:9px Consolas,monospace;letter-spacing:2px;color:var(--org);padding:3px 8px 2px;display:flex;justify-content:space-between}
+.pin .row{height:22px;padding-left:8px}.pin .path{color:var(--mut);font-weight:400}
 .tab.add{color:var(--cy);padding:0 10px;font-weight:700}
 .toast{color:var(--red);max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .upd{border:1px solid var(--yel);background:rgba(252,238,10,.08);color:var(--yel);padding:1px 8px;cursor:pointer;letter-spacing:1.5px;font-weight:700}

@@ -36,19 +36,22 @@ const fake = (() => {
   let n = 0;
   const id = (p: string) => `${p}${++n}`;
   const workspaces = [
-    { workspace_id: "w1", number: 1, label: "Elly2", focused: true, pane_count: 2, tab_count: 2, active_tab_id: "w1:t1", agent_status: "working" },
+    { workspace_id: "w1", number: 1, label: "Elly2", focused: true, pane_count: 4, tab_count: 3, active_tab_id: "w1:t1", agent_status: "working", worktree: { repo_key: "elly", repo_name: "Elly2", is_linked_worktree: false } },
     { workspace_id: "w2", number: 2, label: "SRE", focused: false, pane_count: 1, tab_count: 1, active_tab_id: "w2:t1", agent_status: "blocked" },
-    { workspace_id: "w3", number: 3, label: "attr-perf", focused: false, pane_count: 1, tab_count: 1, active_tab_id: "w3:t1", agent_status: "idle", worktree: { repo_key: "elly", repo_name: "Elly2", branch: "attr-perf" } },
+    { workspace_id: "w3", number: 3, label: "attr-perf", focused: false, pane_count: 1, tab_count: 1, active_tab_id: "w3:t1", agent_status: "idle", worktree: { repo_key: "elly", repo_name: "Elly2", branch: "attr-perf", is_linked_worktree: true } },
   ];
   const tabs = [
     { tab_id: "w1:t1", workspace_id: "w1", number: 1, label: "main", focused: true, pane_count: 1, agent_status: "working" },
     { tab_id: "w1:t2", workspace_id: "w1", number: 2, label: "tests", focused: false, pane_count: 1, agent_status: "blocked" },
+    { tab_id: "w1:t3", workspace_id: "w1", number: 3, label: "review", focused: false, pane_count: 2, agent_status: "idle" },
     { tab_id: "w2:t1", workspace_id: "w2", number: 1, label: "ops", focused: true, pane_count: 1, agent_status: "blocked" },
     { tab_id: "w3:t1", workspace_id: "w3", number: 1, label: "1", focused: true, pane_count: 1, agent_status: "idle" },
   ];
   const panes = [
     { pane_id: "w1:p1", terminal_id: "t1", workspace_id: "w1", tab_id: "w1:t1", focused: true, cwd: "C:\\Workspace\\Elly2", agent: "claude", display_agent: "Claude", title: "claude", agent_status: "working", tokens: { ctx: "42" } },
     { pane_id: "w1:p2", terminal_id: "t2", workspace_id: "w1", tab_id: "w1:t2", focused: false, cwd: "C:\\Workspace\\Elly2", agent: "claude", agent_status: "blocked", tokens: { ctx: "71" } },
+    { pane_id: "w1:p3", terminal_id: "t5", workspace_id: "w1", tab_id: "w1:t3", focused: false, cwd: "C:\\Workspace\\Elly2", agent: "codex", display_agent: "Codex", title: "codex", agent_status: "idle", tokens: { ctx: "9" } },
+    { pane_id: "w1:p4", terminal_id: "t6", workspace_id: "w1", tab_id: "w1:t3", focused: false, cwd: "C:\\Workspace\\Elly2", agent: null, title: "pwsh", agent_status: "unknown" },
     { pane_id: "w2:p1", terminal_id: "t3", workspace_id: "w2", tab_id: "w2:t1", focused: true, cwd: "C:\\Workspace\\SRE", agent: "claude", agent_status: "blocked" },
     { pane_id: "w3:p1", terminal_id: "t4", workspace_id: "w3", tab_id: "w3:t1", focused: true, cwd: "C:\\Workspace\\Elly2-attr", agent: null, title: "pwsh", agent_status: "unknown" },
   ];
@@ -113,6 +116,12 @@ const fake = (() => {
           const i = tabs.findIndex((t) => t.tab_id === target); if (i >= 0) tabs.splice(i, 1);
         } else if (action === "pane.close" && target) {
           const i = panes.findIndex((p) => p.pane_id === target); if (i >= 0) panes.splice(i, 1);
+        } else if (action === "pane.split" && target) {
+          const src = panes.find((p) => p.pane_id === target);
+          if (src) {
+            panes.push({ pane_id: `${src.tab_id}:${id("p")}`, terminal_id: id("t"), workspace_id: src.workspace_id, tab_id: src.tab_id, focused: false, cwd: src.cwd, agent: null, title: "pwsh", agent_status: "unknown" });
+            const tb = tabs.find((t) => t.tab_id === src.tab_id); if (tb) tb.pane_count++;
+          }
         } else if (action === "workspace.close" && target) {
           const w = workspaces.find((x) => x.workspace_id === target);
           if (w && !w.worktree && workspaces.some((x) => x.worktree?.repo_name === w.label) && !(args.options as any)?.close_group) throw new Error("herdr returned an error for workspace.close: workspace_group_close_required");
