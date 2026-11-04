@@ -101,7 +101,9 @@ const fake = (() => {
         if (paneId === "w1:p1") return { read: transcript() };
         return { read: { text: `PS ${panes.find((p) => p.pane_id === paneId)?.cwd ?? "C:\\"}> echo ${paneId}\n${paneId}\nPS> `, revision: 0 } };
       }
-      case "herdr_pane_send_text": case "herdr_pane_send_keys": case "herdr_focus": return null;
+      case "herdr_pane_send_text": case "herdr_pane_send_keys": console.debug("[stand-in]", cmd, JSON.stringify(args)); return null;
+      case "herdr_focus": return null;
+      case "clipboard_read_text": return navigator.clipboard.readText().catch(() => "");
       case "herdr_action": {
         const action = String(args.action), target = args.id as string | null;
         if (action === "workspace.create") {

@@ -133,3 +133,23 @@ export function mapInput(data: string): MappedInput {
   }
   return drop(`unknown escape sequence ${JSON.stringify(data)}`);
 }
+
+/**
+ * Keys decided on `keydown`, before xterm encodes them (xterm.js without the
+ * kitty protocol turns shift+enter into a plain `\r`, and it swallows ctrl+v
+ * as the C0 byte 0x16 instead of letting the browser paste).
+ */
+export type KeyDownLike = { type: string; key: string; ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean };
+export type SpecialKey = { keys: string[] } | { paste: true } | null;
+
+export function specialKeyDown(e: KeyDownLike): SpecialKey {
+  if (e.type !== "keydown") return null;
+  const noCtrlAltMeta = !e.ctrlKey && !e.altKey && !e.metaKey;
+  if (e.key === "Enter" && e.shiftKey && noCtrlAltMeta) return { keys: ["shift+enter"] };
+  if ((e.key === "v" || e.key === "V") && e.ctrlKey && !e.altKey && !e.metaKey) return { paste: true };
+  if (e.key === "Insert" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) return { paste: true };
+  return null;
+}
+
+/** Clipboard text as a terminal paste: line breaks become `\r`, like xterm's own paste. */
+export const pasteText = (text: string): string => text.replace(/\r?\n/g, "\r");

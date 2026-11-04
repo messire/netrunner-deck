@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapInput } from "./keys";
+import { mapInput, pasteText, specialKeyDown } from "./keys";
 
 const keys = (data: string) => {
   const r = mapInput(data);
@@ -247,5 +247,41 @@ describe("mapInput: every emitted key name is accepted by Herdr's parse_key_comb
     expect(rejected).toEqual([]);
     // Guard against the loop silently covering nothing.
     expect(seen.size).toBeGreaterThan(60);
+  });
+});
+
+const kd = (key: string, mods: Partial<Omit<Parameters<typeof specialKeyDown>[0], "key" | "type">> = {}, type = "keydown") =>
+  ({ type, key, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...mods });
+
+describe("specialKeyDown: keys decided before xterm encodes them", () => {
+  it("shift+enter is sent by name (xterm would send a bare \\r = enter)", () => {
+    expect(specialKeyDown(kd("Enter", { shiftKey: true }))).toEqual({ keys: ["shift+enter"] });
+  });
+
+  it("plain, ctrl and alt enter stay with xterm", () => {
+    expect(specialKeyDown(kd("Enter"))).toBeNull();
+    expect(specialKeyDown(kd("Enter", { ctrlKey: true }))).toBeNull();
+    expect(specialKeyDown(kd("Enter", { shiftKey: true, altKey: true }))).toBeNull();
+  });
+
+  it("ctrl+v, ctrl+shift+v and shift+insert paste the clipboard", () => {
+    expect(specialKeyDown(kd("v", { ctrlKey: true }))).toEqual({ paste: true });
+    expect(specialKeyDown(kd("V", { ctrlKey: true, shiftKey: true }))).toEqual({ paste: true });
+    expect(specialKeyDown(kd("Insert", { shiftKey: true }))).toEqual({ paste: true });
+  });
+
+  it("alt+v (Claude Code's own paste), plain v and keyup are not special", () => {
+    expect(specialKeyDown(kd("v", { altKey: true }))).toBeNull();
+    expect(specialKeyDown(kd("v"))).toBeNull();
+    expect(specialKeyDown(kd("v", { ctrlKey: true }, "keyup"))).toBeNull();
+    expect(specialKeyDown(kd("Enter", { shiftKey: true }, "keypress"))).toBeNull();
+  });
+});
+
+describe("pasteText", () => {
+  it("turns CRLF and LF into CR, leaves everything else", () => {
+    expect(pasteText("a\r\nb\nc\rd")).toBe("a\rb\rc\rd");
+    expect(pasteText("tabs\tand ünïcödé")).toBe("tabs\tand ünïcödé");
+    expect(pasteText("")).toBe("");
   });
 });

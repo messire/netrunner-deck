@@ -126,6 +126,8 @@ export const api = {
   /** Tree actions (M3); the Rust side maps the name to a Herdr method with a fixed param set. */
   action: (action: TreeAction, id?: string | null, options?: ActionOptions) =>
     invoke("herdr_action", { action, id: id ?? null, options: options ?? null }),
+  /** Clipboard text for ctrl+v / shift+insert; empty when the clipboard holds no text. */
+  clipboardReadText: () => invoke<string>("clipboard_read_text"),
   /** OS notification (M4); used when an agent starts waiting while its pane is not on screen. */
   notify: (title: string, body: string) => invoke<void>("notify", { title, body }),
   /** Updater (M5): `null` when up to date; errors (offline, no release yet) are advisory. */

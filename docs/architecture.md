@@ -108,6 +108,7 @@ tokio-воркеры.
 | `herdr_tree` | `workspace.list`, `tab.list` (на каждый workspace), `pane.list`, `agent.list` | падение любого `tab.list` — ошибка всей команды, не пустой tab bar (аудит п.15) |
 | `herdr_pane_read` | `pane.read` с `source: recent`, `format: ansi`, `strip_ansi: false`, `lines` (по умолчанию 400) | |
 | `herdr_pane_send_text` | `pane.send_text` | только печатный текст (см. F5) |
+| `clipboard_read_text` | — | текст буфера обмена для ctrl+v / shift+insert (`tauri-plugin-clipboard-manager`); без текста — пустая строка |
 | `herdr_pane_send_keys` | `pane.send_keys` | имена из `src/keys.ts` |
 | `herdr_focus` | `workspace.focus` / `tab.focus` / `pane.focus` | неизвестный target → `HerdrError::Shape` до обращения к серверу (`focus_method`) |
 | `herdr_action` | `workspace.create` / `workspace.close` / `tab.create` / `tab.close` / `pane.close` | M3; имя действия → метод и фиксированный набор параметров (`action_request`): create всегда `focus: true`, из `options` проходят только `cwd`, `label`, `close_group`; неизвестное действие → `Shape` |
@@ -187,6 +188,15 @@ OFFLINE.
   непрочитанного и дельта-рендера нет — это M2.
 
 ### Клавиши (`src/keys.ts`, R9)
+
+`specialKeyDown(e)` на `keydown` (custom key event handler xterm, до его кодирования):
+`shift+enter` → `pane.send_keys ["shift+enter"]` (xterm без kitty-протокола отдал бы голый `\r`,
+то есть обычный enter; Herdr кодирует по режиму панели — `CSI 13;2u` для Claude Code, проверено
+вживую 2026-11-04); `ctrl+v`, `ctrl+shift+v`, `shift+insert` → `clipboard_read_text` →
+`pasteText` (`\r?\n` → `\r`, как у собственной вставки xterm) → `pane.send_text` (Herdr оборачивает
+в bracketed paste, F5). xterm.js сам перехватывает ctrl+v как байт 0x16, поэтому без этого в
+панель уходила клавиша `ctrl+v`, а не текст; `preventDefault` гасит и браузерный `paste`, иначе
+xterm прислал бы текст второй раз. `alt+v` — собственная вставка Claude Code, не трогается.
 
 `mapInput(data)` над `xterm.onData`:
 

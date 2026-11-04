@@ -99,6 +99,8 @@ Point Deck at it with `HERDR_SOCKET_PATH`. On Windows the variable is a pipe *na
 - **Keys.** xterm input is mapped to Herdr key names (`src/keys.ts`): printable text →
   `pane.send_text`, control bytes and escape sequences → `pane.send_keys`. Herdr wraps
   `send_text` in bracketed paste, so unknown escape sequences are dropped rather than pasted.
+  `Shift+Enter` is sent by name (a newline in Claude Code); `Ctrl+V` / `Shift+Insert` paste the
+  clipboard text (read on the Rust side) as one bracketed paste.
 - **Accounts.** The sidebar shows `cswap list --json`; double-click on an account runs
   `cswap switch <n> --json` (one switch at a time; errors are shown in the card).
 - **Incremental rendering (M2).** A new snapshot is aligned with what is already in the xterm
