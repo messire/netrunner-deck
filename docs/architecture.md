@@ -109,6 +109,7 @@ tokio-воркеры.
 | `herdr_pane_read` | `pane.read` с `source: recent`, `format: ansi`, `strip_ansi: false`, `lines` (по умолчанию 400) | |
 | `herdr_pane_send_text` | `pane.send_text` | только печатный текст (см. F5) |
 | `clipboard_read_text` | — | текст буфера обмена для ctrl+v / shift+insert (`tauri-plugin-clipboard-manager`); без текста — пустая строка |
+| `diag_log` | — | строка диагностики панели в `<app log dir>/deck-diag.log` (обрезается при 2 МБ); дублируется в `tracing::warn` |
 | `herdr_pane_send_keys` | `pane.send_keys` | имена из `src/keys.ts` |
 | `herdr_focus` | `workspace.focus` / `tab.focus` / `pane.focus` | неизвестный target → `HerdrError::Shape` до обращения к серверу (`focus_method`) |
 | `herdr_action` | `workspace.create` / `workspace.close` / `tab.create` / `tab.close` / `pane.close` | M3; имя действия → метод и фиксированный набор параметров (`action_request`): create всегда `focus: true`, из `options` проходят только `cwd`, `label`, `close_group`; неизвестное действие → `Shape` |
@@ -178,9 +179,23 @@ OFFLINE.
   100 мс), по поллингу 2,5 с и через 120 мс после собственного ввода; один запрос в полёте,
   повторная просьба ставит `dirty`. Ответ для другой
   панели (`id !== p.paneId`) или после `onCleanup` отбрасывается.
-- Отрисовка: `term.reset()` + полная запись; рамки диалога — xterm decorations по
-  `classify`; курсор — в конец строки промпта `promptLine` (оценка, позиции курсора в
-  снапшоте нет).
+- Отрисовка: инкрементально по `planUpdate` (`append`/`rewrite` хвоста, `reset` только без
+  выравнивания); рамки диалога — xterm decorations по `classify`; курсор — из `cursor`
+  `pane.read` форка, без него — в конец строки промпта `promptLine` (оценка). Индексы
+  снапшота и `rendered` расходятся, как только окно снапшота сдвинулось относительно
+  истории (`offset = bestK`): виды и plain-текст строк хранятся в координатах `rendered`
+  (`renderedKinds`, `renderedPlain`), ширины рамок берутся из них.
+- **Проверка согласованности `verify`** (после каждой завершённой записи и на опросе с
+  неизменной `revision`): число логических строк в буфере = `rendered.length`, последняя
+  непустая строка буфера совпадает по буквам с `renderedPlain`, маркеры рамок внутри буфера
+  и по одному на строку, видимые подписи рамок не делят одну экранную строку (DOM
+  проверяется только при `visibilityState === "visible"`: в скрытом окне rAF не тикает и DOM
+  не перерисовывается). Расхождение пишется командой `diag_log` в
+  `<app log dir>/deck-diag.log` (`%LOCALAPPDATA%\dev.messire.netrunner-deck\logs`) вместе с
+  хвостом последних шагов рендера (`trail`) и состоянием xterm, после чего панель
+  перерисовывается с нуля (не чаще раза в 5 с; при чтении истории — через `held`, как любой
+  repaint). Повод — пустой чат с подписями всех рамок на одной строке (2026-11-05),
+  последовательность не воспроизведена ни стендом, ни стресс-прогоном.
 - **R14' hold-while-reading:** если `term.hasSelection()` или viewport не внизу
   (`viewportY < baseY`), новый снапшот откладывается в сигнал `held`, в заголовке панели
   показывается `NEW OUTPUT ↓ (scroll down)`; `onScroll`/`onSelectionChange` применяют

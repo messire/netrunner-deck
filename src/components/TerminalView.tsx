@@ -62,7 +62,14 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   // with their dialogue kind: the `prev` side of `planUpdate`.
   let rendered: string[] = [];
   let renderedKinds: LineKind[] = [];
+  // Plain text of `rendered`, for frame widths: a snapshot's own line
+  // indices stop matching `rendered` once its window has slid past history.
+  let renderedPlain: string[] = [];
   let decorations: IDecoration[] = [];
+  // Last few render steps, for the diagnostic record `verify` writes.
+  const trail: string[] = [];
+  const note = (s: string) => { trail.push(`${new Date().toISOString().slice(11, 23)} ${s}`); if (trail.length > 16) trail.shift(); };
+  let lastHeal = 0;
   // Set on dispose: pending timers/promises must not touch the disposed xterm or signals.
   let disposed = false;
   onCleanup(() => { disposed = true; clearTimeout(debounce); kick.cancel(); });
@@ -110,7 +117,9 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       setError(null);
       // Even revision = stable content (odd = a write was in flight); a known
       // even revision means the text cannot have changed. 0 = no revisions.
-      if (read.revision !== 0 && read.revision % 2 === 0 && read.revision === lastRevision) return;
+      // An idle pane is where a broken view would stay broken, so the poll
+      // doubles as the consistency check.
+      if (read.revision !== 0 && read.revision % 2 === 0 && read.revision === lastRevision) { verify("poll"); return; }
       lastRevision = read.revision;
       const snap = toSnapshot(read);
       if (last && read.text === last.text) {
@@ -199,9 +208,62 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       pending = null;
       if (next && !disposed) {
         if (render(next.snap, next.canHold)) { setHeld(null); last = next.snap; } else setHeld(next.snap);
+      } else if (!disposed) {
+        // The DOM paints on the next frame; check once it has.
+        window.setTimeout(() => verify("write"), 80);
       }
     };
   }
+
+  /**
+   * Consistency check of what the buffer, the frames and the DOM show against
+   * what the view believes it rendered. The view has been seen with an empty
+   * chat and every frame label on one row, from a sequence nobody could
+   * reproduce (2026-11-05); until the cause is known, a failed check is
+   * recorded in the diagnostic log with the state that led to it, and the
+   * view repaints from scratch (parked behind the NEW OUTPUT banner when the
+   * user is reading history, like any other repaint).
+   */
+  function verify(where: string): boolean {
+    if (disposed || writing || !last || rendered.length === 0) return true;
+    const buf = term.buffer.active;
+    const rows = rowsByLine();
+    const problems: string[] = [];
+    if (rows.length !== rendered.length) problems.push(`buffer holds ${rows.length} lines, view rendered ${rendered.length}`);
+    let lastText = -1;
+    for (let i = renderedPlain.length - 1; i >= 0; i--) if (renderedPlain[i].trim() !== "") { lastText = i; break; }
+    if (lastText >= 0 && rows[lastText]) {
+      const got = rows[lastText].map((r) => buf.getLine(r)?.translateToString(true) ?? "").join("");
+      if (letters(got) !== letters(renderedPlain[lastText])) problems.push(`line ${lastText} reads "${got.trim().slice(0, 50)}", expected "${renderedPlain[lastText].trim().slice(0, 50)}"`);
+    }
+    const lines = decorations.map((d) => d.marker.line);
+    if (lines.some((l) => l < 0 || l >= buf.length)) problems.push("a frame marker lies outside the buffer");
+    if (new Set(lines).size !== lines.length) problems.push("two frames on one buffer row");
+    // DOM positions are stale while the window is hidden (no frames are painted).
+    const visible = document.visibilityState === "visible";
+    const tops = visible ? [...host.querySelectorAll<HTMLElement>(".dlg-top, .dlg-only")].filter((e) => e.style.display !== "none").map((e) => e.style.top) : [];
+    if (new Set(tops).size !== tops.length) problems.push(`${tops.length - new Set(tops).size} frame labels share a screen row`);
+    if (problems.length === 0) return true;
+    const now = Date.now();
+    const dims = (term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: unknown } } } } })._core?._renderService?.dimensions?.css?.cell;
+    const record = {
+      at: new Date().toISOString(), where, pane: p.paneId, problems, trail,
+      term: { rows: term.rows, cols: term.cols, length: buf.length, baseY: buf.baseY, viewportY: buf.viewportY, cursorY: buf.cursorY, cell: dims },
+      view: { rendered: rendered.length, rows: rows.length, decorations: lines.length, markers: lines.slice(0, 60), domTops: tops.slice(0, 40), held: held() !== null, visible, hostPx: `${host.clientWidth}x${host.clientHeight}` },
+      heal: now - lastHeal > 5000 ? "repaint" : "skipped (healed <5 s ago)",
+    };
+    console.warn("pane view inconsistent", record);
+    api.diagLog(JSON.stringify(record)).catch(() => {});
+    if (now - lastHeal > 5000) {
+      lastHeal = now;
+      note(`heal@${where}`);
+      invalidate();
+      if (userIsReading()) setHeld(last); else render(last, false);
+    }
+    return false;
+  }
+  /** Letters and digits only: cell widths, combining marks and spacing may differ between source and buffer. */
+  const letters = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, "");
 
   /**
    * Apply a snapshot. Returns false (and changes nothing) when the update
@@ -225,18 +287,24 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       // Only viewport rows can be rewritten in place; a change above them is a repaint.
       if (cutRow === undefined || cutRow < buf.baseY) plan = { kind: "reset", lines: coloured };
     }
-    if (plan.kind === "reset" && canHold && userIsReading()) return false;
+    if (plan.kind === "reset" && canHold && userIsReading()) { note("reset held"); return false; }
 
     renderInput(box.raw, box.plain, snap.cursor, box.at);
+    // `kinds`/`plain` index the snapshot; `rendered` may start earlier (history
+    // that scrolled out of the snapshot window): offset = rendered.length - snapshot.length
+    // for append/rewrite, where the snapshot's tail is the end of `rendered`.
     switch (plan.kind) {
       case "none":
         return true;
       case "append": {
         const first = rendered.length;
+        const offset = first + plan.lines.length - coloured.length;
         rendered = rendered.concat(plan.lines);
-        renderedKinds = renderedKinds.concat(kinds.slice(first));
+        renderedKinds = renderedKinds.concat(kinds.slice(first - offset));
+        renderedPlain = renderedPlain.concat(plain.slice(first - offset));
+        note(`append ${plan.lines.length} at ${first}`);
         writing = true;
-        term.write((first ? "\r\n" : "") + plan.lines.join("\r\n"), writeDone(() => decorateFrom(first, plain)));
+        term.write((first ? "\r\n" : "") + plan.lines.join("\r\n"), writeDone(() => decorateFrom(first)));
         return true;
       }
       case "rewrite": {
@@ -245,11 +313,17 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
         const up = buf.baseY + buf.cursorY - cutRow;
         for (const d of decorations.filter((d) => d.marker.line >= cutRow)) d.dispose();
         decorations = decorations.filter((d) => !d.isDisposed);
-        rendered = rendered.slice(0, plan.fromLine).concat(plan.lines);
-        renderedKinds = renderedKinds.slice(0, plan.fromLine).concat(kinds.slice(plan.fromLine));
         const from = plan.fromLine;
+        const offset = from + plan.lines.length - coloured.length;
+        // With nothing to write the cursor stays on the erased row, which the
+        // buffer then holds as one blank line: account for it.
+        const blank = plan.lines.length === 0;
+        rendered = rendered.slice(0, from).concat(blank ? [""] : plan.lines);
+        renderedKinds = renderedKinds.slice(0, from).concat(blank ? [null] : kinds.slice(from - offset));
+        renderedPlain = renderedPlain.slice(0, from).concat(blank ? [""] : plain.slice(from - offset));
+        note(`rewrite ${plan.lines.length} from ${from} (row ${cutRow}, up ${up})`);
         writing = true;
-        term.write(`${up > 0 ? `\x1b[${up}A` : ""}\r\x1b[J${plan.lines.join("\r\n")}`, writeDone(() => decorateFrom(from, plain)));
+        term.write(`${up > 0 ? `\x1b[${up}A` : ""}\r\x1b[J${plan.lines.join("\r\n")}`, writeDone(() => decorateFrom(from)));
         return true;
       }
       case "reset": {
@@ -257,9 +331,11 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
         decorations = [];
         rendered = plan.lines;
         renderedKinds = kinds.slice();
+        renderedPlain = plain.slice();
+        note(`reset ${plan.lines.length}`);
         term.reset();
         writing = true;
-        term.write(plan.lines.join("\r\n"), writeDone(() => decorateFrom(0, plain)));
+        term.write(plan.lines.join("\r\n"), writeDone(() => decorateFrom(0)));
         return true;
       }
     }
@@ -280,8 +356,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     return map;
   }
 
-  /** Frame the dialogue blocks from the block that contains `startLine` on. */
-  function decorateFrom(startLine: number, plain: string[]) {
+  /** Frame the dialogue blocks from the block that contains `startLine` on (indices into `rendered`). */
+  function decorateFrom(startLine: number) {
     if (disposed) return;
     try {
       const kinds = renderedKinds;
@@ -293,7 +369,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
         for (const d of decorations.filter((d) => d.marker.line >= startRow)) d.dispose();
         decorations = decorations.filter((d) => !d.isDisposed);
       }
-      decorate(kinds, plain, rows, start);
+      decorate(kinds, renderedPlain, rows, start);
     } catch (err) {
       console.error("decorate failed", err);
       setError(String(err));
@@ -404,6 +480,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   function invalidate() {
     rendered = [];
     renderedKinds = [];
+    renderedPlain = [];
     for (const d of decorations) d.dispose();
     decorations = [];
   }
@@ -461,6 +538,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       if (size === lastSize) return;
       lastSize = size;
       fitCols();
+      note(`resize ${size} → ${term.cols}x${term.rows}`);
       // New width → different wrapping and rule lengths: repaint from scratch.
       if (last) { invalidate(); render(last, false); }
     });

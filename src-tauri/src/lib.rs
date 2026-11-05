@@ -226,6 +226,28 @@ async fn notify(app: AppHandle, title: String, body: String) -> Result<(), Strin
         .map_err(|e| e.to_string())
 }
 
+/// Frontend diagnostics (the pane view's consistency check, M2) appended to
+/// `<app log dir>/deck-diag.log` — the release build has no console, so this
+/// is the only trace of a glitch the user saw. The file is capped at 2 MB.
+#[tauri::command]
+fn diag_log(app: AppHandle, line: String) -> Result<(), String> {
+    use std::io::Write;
+    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("deck-diag.log");
+    let truncate = std::fs::metadata(&path).map(|m| m.len() > 2 * 1024 * 1024).unwrap_or(false);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(!truncate)
+        .write(true)
+        .truncate(truncate)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    writeln!(file, "{line}").map_err(|e| e.to_string())?;
+    tracing::warn!(target: "deck::diag", "{line}");
+    Ok(())
+}
+
 /// Clipboard text for the pane view's ctrl+v / shift+insert. Read on the
 /// Rust side: WebView2 gates `navigator.clipboard.readText` behind a
 /// permission prompt. No text on the clipboard (an image, nothing) is an
@@ -568,6 +590,7 @@ pub fn run() {
             herdr_focus,
             herdr_action,
             notify,
+            diag_log,
             clipboard_read_text,
             update_check,
             update_install,
