@@ -242,15 +242,24 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     if (new Set(lines).size !== lines.length) problems.push("two frames on one buffer row");
     // DOM positions are stale while the window is hidden (no frames are painted).
     const visible = document.visibilityState === "visible";
-    const tops = visible ? [...host.querySelectorAll<HTMLElement>(".dlg-top, .dlg-only")].filter((e) => e.style.display !== "none").map((e) => e.style.top) : [];
+    const labels = visible ? [...host.querySelectorAll<HTMLElement>(".dlg-top, .dlg-only")].filter((e) => e.style.display !== "none") : [];
+    const tops = labels.map((e) => e.style.top);
     if (new Set(tops).size !== tops.length) problems.push(`${tops.length - new Set(tops).size} frame labels share a screen row`);
     if (problems.length === 0) return true;
     const now = Date.now();
     const dims = (term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: unknown } } } } })._core?._renderService?.dimensions?.css?.cell;
+    // Every label that shares its `top` with another (seen live: all of them
+    // with an empty top, right after a one-row height change), with the
+    // decoration it belongs to, so the next record names the mechanism.
+    const hostTop = host.getBoundingClientRect().top;
+    const shared = labels.filter((e) => tops.indexOf(e.style.top) !== tops.lastIndexOf(e.style.top)).slice(0, 8).map((e) => ({
+      css: e.style.cssText.slice(0, 160), rect: Math.round(e.getBoundingClientRect().top - hostTop), who: e.dataset.who,
+      line: decorations.find((d) => d.element === e)?.marker.line ?? null, inDom: e.isConnected,
+    }));
     const record = {
       at: new Date().toISOString(), where, pane: p.paneId, problems, trail,
       term: { rows: term.rows, cols: term.cols, length: buf.length, baseY: buf.baseY, viewportY: buf.viewportY, cursorY: buf.cursorY, cell: dims },
-      view: { rendered: rendered.length, rows: rows.length, decorations: lines.length, markers: lines.slice(0, 60), domTops: tops.slice(0, 40), held: held() !== null, visible, hostPx: `${host.clientWidth}x${host.clientHeight}` },
+      view: { rendered: rendered.length, rows: rows.length, decorations: lines.length, markers: lines.slice(0, 60), domTops: tops.slice(0, 40), shared, held: held() !== null, visible, hostPx: `${host.clientWidth}x${host.clientHeight}` },
       heal: now - lastHeal > 5000 ? "repaint" : "skipped (healed <5 s ago)",
     };
     console.warn("pane view inconsistent", record);
