@@ -90,6 +90,7 @@ const fake = (() => {
     if (grown < extra.length) { grown++; revision += 2; emit("herdr://event", { event: "pane_output_changed", data: { type: "pane_output_changed", pane_id: "w1:p1", workspace_id: "w1", revision } }); }
   }, 3000);
 
+  (window as any).__deckEmit = emit;
   const tree = () => ({ workspaces, tabs, panes, agents: agents() });
   const invoke = async (cmd: string, args: Record<string, unknown>): Promise<unknown> => {
     await new Promise((r) => setTimeout(r, 30));
@@ -98,12 +99,17 @@ const fake = (() => {
       case "herdr_tree": return tree();
       case "herdr_pane_read": {
         const paneId = String(args.paneId);
+        // Test hook: a page script may script the snapshots (`window.__deckPaneRead`)
+        // and raise events (`window.__deckEmit`) to drive the pane view.
+        const hook = (window as any).__deckPaneRead as ((paneId: string, lines: number) => unknown) | undefined;
+        if (hook) return { read: hook(paneId, Number(args.lines)) };
         if (paneId === "w1:p1") return { read: transcript() };
         return { read: { text: `PS ${panes.find((p) => p.pane_id === paneId)?.cwd ?? "C:\\"}> echo ${paneId}\n${paneId}\nPS> `, revision: 0 } };
       }
       case "herdr_pane_send_text": case "herdr_pane_send_keys": console.debug("[stand-in]", cmd, JSON.stringify(args)); return null;
       case "herdr_focus": return null;
       case "clipboard_read_text": return navigator.clipboard.readText().catch(() => "");
+      case "diag_log": console.warn("[diag]", args.line); return null;
       case "herdr_action": {
         const action = String(args.action), target = args.id as string | null;
         if (action === "workspace.create") {

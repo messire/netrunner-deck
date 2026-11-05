@@ -128,6 +128,8 @@ export const api = {
     invoke("herdr_action", { action, id: id ?? null, options: options ?? null }),
   /** Clipboard text for ctrl+v / shift+insert; empty when the clipboard holds no text. */
   clipboardReadText: () => invoke<string>("clipboard_read_text"),
+  /** One line into `<app log dir>/deck-diag.log` (pane view consistency check). */
+  diagLog: (line: string) => invoke<void>("diag_log", { line }),
   /** OS notification (M4); used when an agent starts waiting while its pane is not on screen. */
   notify: (title: string, body: string) => invoke<void>("notify", { title, body }),
   /** Updater (M5): `null` when up to date; errors (offline, no release yet) are advisory. */

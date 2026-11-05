@@ -92,8 +92,11 @@ Point Deck at it with `HERDR_SOCKET_PATH`. On Windows the variable is a pipe *na
   `pane_output_changed` event (at once, then at most every 100 ms while output streams),
   shortly after your own input, and on a slow safety poll (2.5 s on upstream Herdr, which has
   no output event; 10 s once events are seen), then applies the snapshot incrementally. Dialogue frames (user turn / agent reply) are xterm decorations placed by
-  heuristics over Claude Code's screen layout (`src/dialogue.ts`); the cursor is put at the
-  end of the prompt line as an estimate — the snapshot has no cursor position. While you
+  heuristics over Claude Code's screen layout (`src/dialogue.ts`); the cursor comes from the
+  fork's `pane.read` (`cursor`), or goes to the end of the prompt line as an estimate on
+  upstream Herdr. After every write, and on the idle poll, the view checks that buffer,
+  frames and DOM still agree with what it rendered; a mismatch is written to
+  `%LOCALAPPDATA%\dev.messire.netrunner-deck\logs\deck-diag.log` and the pane repaints. While you
   scroll back or hold a selection, new snapshots are parked and a `NEW OUTPUT ↓` hint appears
   in the pane header.
 - **Keys.** xterm input is mapped to Herdr key names (`src/keys.ts`): printable text →
