@@ -140,14 +140,22 @@ export function mapInput(data: string): MappedInput {
  * as the C0 byte 0x16 instead of letting the browser paste).
  */
 export type KeyDownLike = { type: string; key: string; ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean };
-export type SpecialKey = { keys: string[] } | { paste: true } | null;
+export type SpecialKey = { keys: string[] } | { paste: true } | { copy: true } | null;
 
-export function specialKeyDown(e: KeyDownLike): SpecialKey {
+/**
+ * `hasSelection`: text is selected in the pane. Then ctrl+c copies it instead
+ * of interrupting the CLI (the terminal convention); ctrl+shift+c and
+ * ctrl+insert always mean copy and never reach the PTY.
+ */
+export function specialKeyDown(e: KeyDownLike, hasSelection = false): SpecialKey {
   if (e.type !== "keydown") return null;
   const noCtrlAltMeta = !e.ctrlKey && !e.altKey && !e.metaKey;
+  const ctrlOnly = e.ctrlKey && !e.altKey && !e.metaKey;
   if (e.key === "Enter" && e.shiftKey && noCtrlAltMeta) return { keys: ["shift+enter"] };
-  if ((e.key === "v" || e.key === "V") && e.ctrlKey && !e.altKey && !e.metaKey) return { paste: true };
+  if ((e.key === "v" || e.key === "V") && ctrlOnly) return { paste: true };
   if (e.key === "Insert" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) return { paste: true };
+  if ((e.key === "c" || e.key === "C") && ctrlOnly && (e.shiftKey || hasSelection)) return { copy: true };
+  if (e.key === "Insert" && ctrlOnly && !e.shiftKey) return { copy: true };
   return null;
 }
 

@@ -238,8 +238,17 @@ export default function App() {
   const activeAccount = () => accounts()?.accounts.find((a) => a.active);
   const win = getCurrentWindow();
 
+  // WebView2's own context menu (back, reload, print, inspect…) has nothing
+  // for Deck: every surface that has actions opens its own menu, the rest
+  // gets none. Text fields keep the browser's cut/copy/paste menu.
+  const noBrowserMenu = (e: MouseEvent) => {
+    const t = e.target as HTMLElement | null;
+    const editable = t?.closest("input, textarea, [contenteditable]") && !t?.closest(".xterm");
+    if (!editable) e.preventDefault();
+  };
+
   return (
-    <div class="frame">
+    <div class="frame" onContextMenu={noBrowserMenu}>
       <header class="titlebar" data-tauri-drag-region>
         <div class="logo">▞ NETRUNNER DECK</div>
         <span class="micro">herdr client · {offline() ? "OFFLINE" : "LINK OK"}</span>
@@ -291,7 +300,7 @@ export default function App() {
       <main class="main">
         <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} onTabMenu={tabMenu} onNewTab={(ws) => runAction("tab.create", ws)} />
         <Show when={currentPane()} fallback={<div class="empty">NO PANE SELECTED · open a workspace in Herdr</div>}>
-          {(id) => <TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} />}
+          {(id) => <TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} onMenu={setMenu} />}
         </Show>
         <Show when={offline()}>{(m) => <div class="offline">◇ HERDR OFFLINE — {m()}</div>}</Show>
       </main>

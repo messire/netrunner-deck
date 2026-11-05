@@ -264,6 +264,15 @@ async fn clipboard_read_text(app: AppHandle) -> Result<String, String> {
     }
 }
 
+/// ctrl+c / ctrl+insert / the pane menu's COPY with a selection. Written on
+/// the Rust side: the xterm holding the selection (the chat) is never the
+/// focused one (the input box), so the browser's own copy has nothing to copy.
+#[tauri::command]
+async fn clipboard_write_text(app: AppHandle, text: String) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    app.clipboard().write_text(text).map_err(|e| e.to_string())
+}
+
 /// The update `update_check` found, kept for `update_install` (M5).
 pub struct PendingUpdate(pub std::sync::Mutex<Option<tauri_plugin_updater::Update>>);
 
@@ -553,19 +562,41 @@ fn start_event_pump(app: AppHandle) {
     });
 }
 
-pub fn run() {
-    // `RUST_LOG` overrides; default to info so event-pump warnings are visible.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-    let cswap = resolve_cswap();
-    match &cswap {
-        Some(path) => tracing::info!(path = %path.display(), "cswap resolved"),
-        None => tracing::info!("cswap not found in PATH or ~/.local/bin; accounts disabled"),
+/// Tracing → `<app log dir>/deck.log` (the window has no console; truncated
+/// at 4 MB on start) and stdout, which a dev build started from a terminal
+/// still has. `RUST_LOG` overrides; the default is info so event-pump
+/// warnings are visible.
+fn init_tracing(app: &AppHandle) {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let file = app.path().app_log_dir().ok().and_then(|dir| {
+        std::fs::create_dir_all(&dir).ok()?;
+        let path = dir.join("deck.log");
+        let truncate = std::fs::metadata(&path)
+            .map(|m| m.len() > 4 * 1024 * 1024)
+            .unwrap_or(false);
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(!truncate)
+            .write(true)
+            .truncate(truncate)
+            .open(path)
+            .ok()
+    });
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false);
+    match file {
+        Some(file) => builder
+            .with_writer(std::sync::Mutex::new(file).and(std::io::stdout))
+            .init(),
+        None => builder.with_writer(std::io::stdout).init(),
     }
+}
+
+pub fn run() {
+    let cswap = resolve_cswap();
     tauri::Builder::default()
         // Window size/position survive restarts (UI-only state, roadmap M4).
         .plugin(tauri_plugin_window_state::Builder::new().build())
@@ -575,6 +606,11 @@ pub fn run() {
         .manage(CswapPath(cswap))
         .manage(PendingUpdate(std::sync::Mutex::new(None)))
         .setup(|app| {
+            init_tracing(app.handle());
+            match &app.state::<CswapPath>().0 {
+                Some(path) => tracing::info!(path = %path.display(), "cswap resolved"),
+                None => tracing::info!("cswap not found in PATH or ~/.local/bin; accounts disabled"),
+            }
             start_event_pump(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Netrunner Deck");
@@ -592,6 +628,7 @@ pub fn run() {
             notify,
             diag_log,
             clipboard_read_text,
+            clipboard_write_text,
             update_check,
             update_install,
             cswap_list,

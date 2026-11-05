@@ -103,7 +103,17 @@ Point Deck at it with `HERDR_SOCKET_PATH`. On Windows the variable is a pipe *na
   `pane.send_text`, control bytes and escape sequences → `pane.send_keys`. Herdr wraps
   `send_text` in bracketed paste, so unknown escape sequences are dropped rather than pasted.
   `Shift+Enter` is sent by name (a newline in Claude Code); `Ctrl+V` / `Shift+Insert` paste the
-  clipboard text (read on the Rust side) as one bracketed paste.
+  clipboard text (read on the Rust side) as one bracketed paste. `Ctrl+C` with a selection,
+  `Ctrl+Shift+C` and `Ctrl+Insert` copy the selection (without one, `Ctrl+C` interrupts the CLI
+  as usual); right-click in the pane opens its menu (copy, paste, select all). The browser's own
+  context menu is suppressed everywhere except text fields.
+- **No console.** The window never opens a console; the Rust log goes to
+  `%LOCALAPPDATA%\dev.messire.netrunner-deck\logs\deck.log` (truncated at 4 MB on start) and,
+  for a dev build started from a terminal, to that terminal as well. Deck itself intercepts no
+  system keys: if `PrtSc` or another global hotkey stops working while Deck is focused, Deck is
+  running elevated (because Herdr is) and Windows blocks the hotkey's unelevated owner; run Herdr
+  unelevated, or set `allow_unelevated_clients = true` under `[server]` in Herdr's config and run
+  Deck unelevated.
 - **Accounts.** The sidebar shows `cswap list --json`; double-click on an account runs
   `cswap switch <n> --json` (one switch at a time; errors are shown in the card).
 - **Incremental rendering (M2).** A new snapshot is aligned with what is already in the xterm

@@ -7,6 +7,7 @@ import { mapInput, pasteText, specialKeyDown } from "../keys";
 import { planUpdate } from "../render-plan";
 import { hotkeyOf } from "../actions";
 import { throttleLeading } from "../events";
+import type { MenuState } from "./ContextMenu";
 
 const COLOR: Record<Exclude<LineKind, null>, string> = {
   user: "\x1b[38;2;255;246;168m",
@@ -43,7 +44,7 @@ export const OUTPUT_THROTTLE_MS = 100;
 
 type Snapshot = { text: string; cursor: PaneCursor | null | undefined };
 
-export default function TerminalView(p: { paneId: string; tree?: Tree; outputTick?: number }) {
+export default function TerminalView(p: { paneId: string; tree?: Tree; outputTick?: number; onMenu?: (menu: MenuState) => void }) {
   let host!: HTMLDivElement;
   let inputHost!: HTMLDivElement;
   // Two terminals: the chat scrolls; the CLI's input box (rules, prompt,
@@ -476,6 +477,37 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     }
   }
 
+  const hasSelection = () => term.hasSelection() || inputTerm.hasSelection();
+
+  /** ctrl+c with a selection / ctrl+shift+c / ctrl+insert / menu COPY: the selection → clipboard, then deselect. */
+  async function copy() {
+    const text = term.hasSelection() ? term.getSelection() : inputTerm.getSelection();
+    if (!text) return;
+    try {
+      await api.clipboardWriteText(text);
+      term.clearSelection();
+      inputTerm.clearSelection();
+    } catch (err) {
+      if (!disposed) setError(String(err));
+    }
+  }
+
+  /** Right-click anywhere in the pane: the terminal's own menu, not WebView2's. */
+  function openMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const selected = hasSelection();
+    p.onMenu?.({
+      x: e.clientX, y: e.clientY, title: header().title,
+      items: [
+        { label: "COPY", hint: "ctrl+c", disabled: !selected, run: () => void copy() },
+        { label: "PASTE", hint: "ctrl+v", run: () => void paste() },
+        { label: "SELECT ALL", run: () => term.selectAll() },
+        { label: "CLEAR SELECTION", disabled: !selected, run: () => { term.clearSelection(); inputTerm.clearSelection(); } },
+      ],
+    });
+  }
+
   /** Forget what is on screen so the next snapshot repaints from scratch. */
   function invalidate() {
     rendered = [];
@@ -516,13 +548,16 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     // if a listener order ever lets them past App's capture handler. Keys xterm
     // would mangle (shift+enter → `\r`, ctrl+v → 0x16) are handled here on
     // keydown; preventDefault also stops the browser's own paste event, which
-    // xterm would otherwise forward as a second copy of the text.
+    // xterm would otherwise forward as a second copy of the text. ctrl+c with
+    // a selection copies it (the selection lives in the chat xterm, the focus
+    // in the input box, so the browser's own copy would copy nothing).
     const notForPty = (e: KeyboardEvent) => {
       if (e.type === "keydown" && hotkeyOf(e, false) !== null) return false;
-      const special = specialKeyDown(e);
+      const special = specialKeyDown(e, hasSelection());
       if (!special) return true;
       e.preventDefault();
       if ("paste" in special) void paste();
+      else if ("copy" in special) void copy();
       else api.sendKeys(p.paneId, special.keys).then(schedule, (err) => setError(String(err)));
       return false;
     };
@@ -577,7 +612,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   }, { defer: true }));
 
   return (
-    <div class="term">
+    <div class="term" onContextMenu={openMenu}>
       <div class="th"><span>◆ {header().title}</span><span class="micro">{header().where}</span><span class="micro right" style={error() ? "color:#FF2B4A" : held() !== null ? "color:#FCEE0A" : ""}>{error() ?? (held() !== null ? "NEW OUTPUT ↓ (scroll down)" : header().ctx)}</span></div>
       <div class="pane-body">
         <div class="xterm-host" ref={host} />
