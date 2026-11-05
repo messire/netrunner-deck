@@ -260,6 +260,11 @@ GitHub Release с NSIS-инсталлятором и `.exe`, pre-release по с
     `deck-diag.log` (`diag_log`) и repaint; попутно — виды/ширины рамок в координатах
     `rendered` (после сдвига окна снапшота брались не те строки). Открыто: первопричина —
     ждём первой записи в логе.
+16. ✅ 2026-11-05: консоли нет ни в одной сборке (лог в `deck.log`, debug-сборка из терминала
+    через `AttachConsole`); `ctrl+c` при выделении / `ctrl+shift+c` / `ctrl+insert` копируют
+    (`clipboard_write_text`), меню панели по правому клику, штатное меню WebView2 подавлено.
+    `PrtSc` при фокусе на Deck — не перехват Deck, а UIPI: Deck повышен вслед за Herdr; решение
+    на стороне запуска (`allow_unelevated_clients` + непривилегированный Deck).
 
 Ранние сигналы (из критики): нет зелёного `npm run typecheck && npm test` к концу дня 1; R3 на второй итерации проверки; `src/__fixtures__/pane-read/` пуст к старту R12; в `architecture.md` всё ещё «[предположение]» у формата событий; ADR 0001 без упоминания `PaneSurfacePatch`.
 

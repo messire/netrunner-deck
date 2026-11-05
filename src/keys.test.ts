@@ -270,6 +270,15 @@ describe("specialKeyDown: keys decided before xterm encodes them", () => {
     expect(specialKeyDown(kd("Insert", { shiftKey: true }))).toEqual({ paste: true });
   });
 
+  it("ctrl+c copies only with a selection; ctrl+shift+c and ctrl+insert always copy", () => {
+    expect(specialKeyDown(kd("c", { ctrlKey: true }), true)).toEqual({ copy: true });
+    expect(specialKeyDown(kd("c", { ctrlKey: true }), false)).toBeNull();
+    expect(specialKeyDown(kd("C", { ctrlKey: true, shiftKey: true }), false)).toEqual({ copy: true });
+    expect(specialKeyDown(kd("Insert", { ctrlKey: true }), false)).toEqual({ copy: true });
+    expect(specialKeyDown(kd("c", { ctrlKey: true, altKey: true }), true)).toBeNull();
+    expect(specialKeyDown(kd("c", {}), true)).toBeNull();
+  });
+
   it("alt+v (Claude Code's own paste), plain v and keyup are not special", () => {
     expect(specialKeyDown(kd("v", { altKey: true }))).toBeNull();
     expect(specialKeyDown(kd("v"))).toBeNull();

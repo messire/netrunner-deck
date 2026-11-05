@@ -109,6 +109,7 @@ tokio-воркеры.
 | `herdr_pane_read` | `pane.read` с `source: recent`, `format: ansi`, `strip_ansi: false`, `lines` (по умолчанию 400) | |
 | `herdr_pane_send_text` | `pane.send_text` | только печатный текст (см. F5) |
 | `clipboard_read_text` | — | текст буфера обмена для ctrl+v / shift+insert (`tauri-plugin-clipboard-manager`); без текста — пустая строка |
+| `clipboard_write_text` | — | выделение панели в буфер обмена (ctrl+c при выделении, ctrl+shift+c, ctrl+insert, меню COPY); выделение живёт в xterm чата, а фокус — в поле ввода, поэтому браузерное копирование не работает |
 | `diag_log` | — | строка диагностики панели в `<app log dir>/deck-diag.log` (обрезается при 2 МБ); дублируется в `tracing::warn` |
 | `herdr_pane_send_keys` | `pane.send_keys` | имена из `src/keys.ts` |
 | `herdr_focus` | `workspace.focus` / `tab.focus` / `pane.focus` | неизвестный target → `HerdrError::Shape` до обращения к серверу (`focus_method`) |
@@ -212,6 +213,16 @@ OFFLINE.
 в bracketed paste, F5). xterm.js сам перехватывает ctrl+v как байт 0x16, поэтому без этого в
 панель уходила клавиша `ctrl+v`, а не текст; `preventDefault` гасит и браузерный `paste`, иначе
 xterm прислал бы текст второй раз. `alt+v` — собственная вставка Claude Code, не трогается.
+`specialKeyDown(e, hasSelection)`: `ctrl+c` при выделении, `ctrl+shift+c`, `ctrl+insert` →
+`clipboard_write_text` и сброс выделения (без выделения `ctrl+c` уходит в панель как обычно);
+правый клик в панели — своё меню (COPY / PASTE / SELECT ALL / CLEAR SELECTION), штатное меню
+WebView2 подавлено на всём окне, кроме текстовых полей (`App.tsx` `noBrowserMenu`).
+
+Системные клавиши Deck не перехватывает. Если при фокусе на Deck перестаёт работать `PrtSc`
+или другой глобальный хоткей, причина — Deck запущен с повышением (как и Herdr): Windows (UIPI)
+не доставляет события окна администратора в хук непривилегированного приложения. Лечится
+запуском Herdr без повышения либо `allow_unelevated_clients = true` в `[server]` конфига Herdr
+и непривилегированным Deck.
 
 `mapInput(data)` над `xterm.onData`:
 
@@ -301,7 +312,10 @@ data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost`
 - `HERDR_SOCKET_PATH` — явный путь к сокету/пайпу Herdr (на Windows — имя пайпа без `\\.\pipe\`).
 - `HERDR_CONFIG_DIR` — каталог конфигурации Herdr (по умолчанию `%APPDATA%\herdr`; на unix
   `$XDG_CONFIG_HOME/herdr` или `~/.config/herdr`).
-- `RUST_LOG` — фильтр `tracing` Rust-стороны (по умолчанию `info`).
+- `RUST_LOG` — фильтр `tracing` Rust-стороны (по умолчанию `info`). Лог пишется в
+  `<app log dir>/deck.log` (обрезается при 4 МБ на старте) и в stdout; консоли у окна нет ни в
+  одной сборке (`windows_subsystem = "windows"`), debug-сборка из терминала подключается к его
+  консоли через `AttachConsole`, так что `npm run tauri dev` лог по-прежнему показывает.
 
 ## Открытые вопросы
 
