@@ -42,7 +42,9 @@ export interface Command {
     | { kind: "select"; paneId: string }
     | { kind: "switch"; account: number }
     | { kind: "action"; action: "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.close" | "pane.split"; id?: string }
-    | { kind: "refresh" };
+    | { kind: "refresh" }
+    | { kind: "archive"; id: string; group: boolean }
+    | { kind: "view"; view: "deck" | "archive" };
 }
 
 /** Palette entries for the current tree and accounts; order: context actions, agents, accounts. */
@@ -55,8 +57,10 @@ export function commands(tree: Tree | undefined, accounts: CswapAccount[], curre
   if (ws) {
     out.push({ id: "tab.new", label: `NEW TAB IN ${ws.label.toUpperCase()}`, hint: "tab.create", do: { kind: "action", action: "tab.create", id: ws.workspace_id } });
     if (tab) out.push({ id: "tab.close", label: `CLOSE TAB ${tab.label.toUpperCase()}`, hint: "tab.close", danger: true, do: { kind: "action", action: "tab.close", id: tab.tab_id } });
+    out.push({ id: "ws.archive", label: `CLOSE · ARCHIVE ${ws.label.toUpperCase()}`, hint: "keep for restore", keys: "archive close store", do: { kind: "archive", id: ws.workspace_id, group: false } });
     out.push({ id: "ws.close", label: `CLOSE SPACE ${ws.label.toUpperCase()}`, hint: "workspace.close", danger: true, do: { kind: "action", action: "workspace.close", id: ws.workspace_id } });
   }
+  out.push({ id: "view.archive", label: "OPEN ARCHIVE", hint: "cold storage · restore / delete", keys: "history archive sessions", do: { kind: "view", view: "archive" } });
   out.push({ id: "accounts.refresh", label: "REFRESH ACCOUNTS", hint: "cswap list", do: { kind: "refresh" } });
   for (const a of tree?.agents ?? []) {
     out.push({

@@ -150,3 +150,30 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .palette-input:focus{border-color:var(--cy)}
 .palette-list{max-height:52vh;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 .keys .o{color:var(--org)}
+/* titlebar view tabs (DECK / ARCHIVE) */
+.vtabs{display:flex;align-items:stretch;height:100%}
+.vtab{display:flex;align-items:center;padding:0 14px 0 10px;font-weight:900;letter-spacing:2px;color:var(--tcy);background:none;border:0;cursor:pointer;clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);margin-right:-6px;font:inherit;font-weight:900;letter-spacing:2px}
+.vtab.on{background:var(--red);color:#120A10;pointer-events:none}
+.vtab:not(.on):hover{color:var(--txt)}
+/* archive view */
+.archive{grid-column:1/3;overflow:auto;padding:12px 18px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.arc-head{display:flex;align-items:center;gap:16px;margin-bottom:8px}
+.arc-empty{margin-top:40px;text-align:center;color:var(--mut);letter-spacing:2px}
+.arc{width:100%;border-collapse:collapse;font-size:12px}
+.arc th{font:9px Consolas,monospace;letter-spacing:1.5px;color:var(--mut);text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}
+.arc td{padding:8px 10px;border-bottom:1px solid rgba(74,16,32,.5);vertical-align:top}
+.arc tr:hover td{background:rgba(255,43,74,.05)}
+.arc tr.dim td{opacity:.55}
+.arc .nm{font-weight:700;letter-spacing:.3px;color:var(--yel)}
+.arc .mono{font:11px Consolas,monospace;color:var(--cy);white-space:nowrap}
+.arc .desc{max-width:520px;line-height:1.35}
+.arc .desc.pending{color:var(--mut);font-style:italic}
+.arc .desc.failed{color:var(--org)}
+.arc .desc.none{color:var(--mut)}
+.arc .acts{white-space:nowrap;text-align:right}
+.abtn{font:10px Consolas,monospace;letter-spacing:1px;padding:3px 8px;margin-left:6px;border:1px solid var(--tcy);color:var(--cy);background:none;cursor:pointer}
+.abtn:hover{background:rgba(103,224,227,.1)}
+.abtn:disabled{opacity:.4;cursor:default}
+.abtn.ok{border-color:var(--grn);color:var(--grn)}
+.abtn.danger{border-color:var(--dred);color:#FF6B7A}
+.abtn.armed{background:var(--red);border-color:var(--red);color:#120A10}

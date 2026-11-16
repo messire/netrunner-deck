@@ -66,9 +66,11 @@ describe("commands", () => {
   it("offers context actions for the current pane's space and tab, then agents and accounts", () => {
     const c = commands(tree, accounts, "p2");
     expect(c.map((x) => x.id)).toEqual([
-      "ws.new", "tab.new", "tab.close", "ws.close", "accounts.refresh",
+      "ws.new", "tab.new", "tab.close", "ws.archive", "ws.close", "view.archive", "accounts.refresh",
       "agent:p1", "agent:p2", "agent:p3", "account:1", "account:2",
     ]);
+    expect(c.find((x) => x.id === "ws.archive")!.do).toEqual({ kind: "archive", id: "w1", group: false });
+    expect(c.find((x) => x.id === "ws.archive")!.danger).toBeFalsy();
     expect(c.find((x) => x.id === "tab.close")).toMatchObject({ danger: true, do: { kind: "action", action: "tab.close", id: "t2" } });
     expect(c.find((x) => x.id === "ws.new")!.do).toEqual({ kind: "action", action: "workspace.create", id: "w1" });
     expect(c.find((x) => x.id === "account:2")!.do).toEqual({ kind: "switch", account: 2 });
@@ -80,7 +82,7 @@ describe("commands", () => {
   });
   it("without a selected pane only offers a new space and refresh before the lists", () => {
     const c = commands(tree, [], null);
-    expect(c.slice(0, 2).map((x) => x.id)).toEqual(["ws.new", "accounts.refresh"]);
+    expect(c.slice(0, 3).map((x) => x.id)).toEqual(["ws.new", "view.archive", "accounts.refresh"]);
     expect(c[0].do).toEqual({ kind: "action", action: "workspace.create", id: undefined });
   });
 });
