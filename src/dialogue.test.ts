@@ -258,3 +258,11 @@ describe("inputBoxStart: the pinned input area", () => {
     expect(inputBoxStart(lines)).toBe(4);
   });
 });
+
+describe("classify with the input box already split off (livePrompt: false)", () => {
+  it("the last ❯ line is a user turn, not the live prompt", () => {
+    const lines = ["● reply", "", "❯ 4 задача уже сделана", "  3 задача относится ко 2", "", "● Skill(clickup-task)"];
+    expect(classify(lines, lines, { livePrompt: false }).slice(2, 4)).toEqual(["user", "user"]);
+    expect(classify(lines, lines)[2]).toBeNull();
+  });
+});

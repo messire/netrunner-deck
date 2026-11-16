@@ -171,7 +171,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     const raw = boxAt >= 0 ? all.slice(0, boxAt) : all;
     const rawPlain = boxAt >= 0 ? allPlain.slice(0, boxAt) : allPlain;
     const box = { raw: boxAt >= 0 ? all.slice(boxAt) : [], plain: boxAt >= 0 ? allPlain.slice(boxAt) : [], at: boxAt };
-    const rawKinds = classify(rawPlain, raw);
+    // The input box (live prompt) is already split off: no line left is the prompt.
+    const rawKinds = classify(rawPlain, raw, { livePrompt: boxAt < 0 });
     // Every dialogue block gets its own blank row inside the frame at the top
     // and bottom; blank lines around it in the output stay outside as the gap.
     const lines: string[] = [], plain: string[] = [], kinds: LineKind[] = [];
@@ -187,7 +188,9 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       push("", "", k);
       i = j + 1;
     }
-    const coloured = lines.map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${kinds[i] === "user" ? stripBackground(line) : line}\x1b[39m` : line));
+    // Framed lines get one cell of inner margin so the bullet does not touch the border.
+    const coloured = lines.map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]} ${kinds[i] === "user" ? stripBackground(line) : line}\x1b[39m` : line));
+    for (let i = 0; i < plain.length; i++) if (kinds[i]) plain[i] = ` ${plain[i]}`;
     return { coloured, plain, kinds, box };
   }
 

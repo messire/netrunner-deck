@@ -82,9 +82,12 @@ const isContinuation = (line: string) =>
 const isBlank = (line: string) => line.trim() === "";
 
 /** `raw` (with ANSI) is optional: dim-styled indented lines are tool summaries, never message text. */
-export function classify(lines: string[], raw?: string[]): LineKind[] {
+export function classify(lines: string[], raw?: string[], options: { livePrompt?: boolean } = {}): LineKind[] {
   const kinds: LineKind[] = new Array(lines.length).fill(null);
-  const prompt = promptLine(lines);
+  // The live prompt also starts with "❯"; it is excluded by index — unless the
+  // caller already cut the input box off (`livePrompt: false`), in which case
+  // the last "❯ text" line is a user turn like any other.
+  const prompt = options.livePrompt === false ? -1 : promptLine(lines);
   let current: LineKind = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
