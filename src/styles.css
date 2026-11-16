@@ -170,6 +170,11 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .arc .desc.pending{color:var(--mut);font-style:italic}
 .arc .desc.failed{color:var(--org)}
 .arc .desc.none{color:var(--mut)}
+.arc .desc.prompt{color:var(--txt);opacity:.8}
+.arc .src{font:8px Consolas,monospace;letter-spacing:1px;padding:0 4px;margin-left:6px;border:1px solid var(--line);color:var(--mut);vertical-align:middle}
+.arc .src.herdr{border-color:var(--tcy);color:var(--tcy)}
+.arc-q{width:300px;background:rgba(18,10,16,.8);border:1px solid var(--line);color:var(--txt);font:12px "Rajdhani",sans-serif;padding:4px 8px;outline:none}
+.arc-q:focus{border-color:var(--cy)}
 .arc .acts{white-space:nowrap;text-align:right}
 .abtn{font:10px Consolas,monospace;letter-spacing:1px;padding:3px 8px;margin-left:6px;border:1px solid var(--tcy);color:var(--cy);background:none;cursor:pointer}
 .abtn:hover{background:rgba(103,224,227,.1)}
