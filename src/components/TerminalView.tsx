@@ -92,8 +92,30 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   const [held, setHeld] = createSignal<Snapshot | null>(null);
   const userIsReading = () => {
     const buf = term.buffer.active;
-    return term.hasSelection() || buf.viewportY < buf.baseY;
+    return term.hasSelection() || nativeSelection() !== null || buf.viewportY < buf.baseY;
   };
+
+  // Text in the chat is selected the browser's way (DOM renderer rows are
+  // real text), so a selection follows the words, not whole grid rows as in a
+  // terminal. xterm's own drag-selection is kept out of the chat pane by
+  // stopping its mousedown; the input box keeps the terminal behaviour.
+  function nativeSelection(): string | null {
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !host) return null;
+    const node = sel.anchorNode;
+    if (!node || !host.contains(node)) return null;
+    const text = sel.toString();
+    return text.trim() ? text : null;
+  }
+  /** Row divs become lines; trailing pad goes, the common bubble indent too (relative indentation stays). */
+  function tidySelection(text: string): string {
+    const lines = text.replace(/\r/g, "").split("\n").map((l) => l.replace(/\s+$/, ""));
+    while (lines.length && lines[0] === "") lines.shift();
+    while (lines.length && lines[lines.length - 1] === "") lines.pop();
+    const indents = lines.filter((l) => l.trim()).map((l) => /^ */.exec(l)![0].length);
+    const common = indents.length ? Math.min(...indents) : 0;
+    return lines.map((l) => l.slice(Math.min(common, l.length))).join("\n");
+  }
   const applyHeld = () => {
     const snap = held();
     if (snap === null || disposed || userIsReading()) return;
@@ -503,16 +525,17 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     }
   }
 
-  const hasSelection = () => term.hasSelection() || inputTerm.hasSelection();
+  const hasSelection = () => nativeSelection() !== null || term.hasSelection() || inputTerm.hasSelection();
+  const clearSelections = () => { window.getSelection()?.removeAllRanges(); term.clearSelection(); inputTerm.clearSelection(); };
 
   /** ctrl+c with a selection / ctrl+shift+c / ctrl+insert / menu COPY: the selection → clipboard, then deselect. */
   async function copy() {
-    const text = term.hasSelection() ? term.getSelection() : inputTerm.getSelection();
+    const native = nativeSelection();
+    const text = native !== null ? tidySelection(native) : term.hasSelection() ? term.getSelection() : inputTerm.getSelection();
     if (!text) return;
     try {
       await api.clipboardWriteText(text);
-      term.clearSelection();
-      inputTerm.clearSelection();
+      clearSelections();
     } catch (err) {
       if (!disposed) setError(String(err));
     }
@@ -529,7 +552,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
         { label: "COPY", hint: "ctrl+c", disabled: !selected, run: () => void copy() },
         { label: "PASTE", hint: "ctrl+v", run: () => void paste() },
         { label: "SELECT ALL", run: () => term.selectAll() },
-        { label: "CLEAR SELECTION", disabled: !selected, run: () => { term.clearSelection(); inputTerm.clearSelection(); } },
+        { label: "CLEAR SELECTION", disabled: !selected, run: clearSelections },
       ],
     });
   }
@@ -593,6 +616,14 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     term.onData(onData);
     term.onScroll(() => applyHeld());
     term.onSelectionChange(() => applyHeld());
+    // Left-button presses in the chat never reach xterm's selection service;
+    // the browser selects text instead. A plain click (nothing selected) puts
+    // the caret back into the input box, as xterm's own mousedown would have.
+    host.addEventListener("mousedown", (e) => { if (e.button === 0) e.stopPropagation(); }, true);
+    host.addEventListener("mouseup", () => { if (nativeSelection() === null) inputTerm.focus(); });
+    const onSel = () => applyHeld();
+    document.addEventListener("selectionchange", onSel);
+    onCleanup(() => document.removeEventListener("selectionchange", onSel));
     let lastSize = "";
     const ro = new ResizeObserver(() => {
       const size = `${host.clientWidth}x${host.clientHeight}`;
