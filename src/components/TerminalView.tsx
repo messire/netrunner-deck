@@ -218,9 +218,13 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       const width = blockWidth(bodyPlain, bubbleMax); // widest line + 2 (margins)
       const off = k === "user" ? Math.max(0, term.cols - 1 - width) : 0;
       const pad = " ".repeat(off + 1);
-      push(pad, pad, k, off);
-      for (let r = 0; r < body.length; r++) push(`${pad}${body[r]}`, `${pad}${bodyPlain[r]}`, k, off);
-      push(pad, pad, k, off);
+      // The pad before a right-aligned bubble is drawn in palette colour 16 so
+      // its DOM spans get their own class (`xterm-fg-16`): a browser selection
+      // across the bubble does not paint the empty space to its left.
+      const padAnsi = `\x1b[38;5;16m${pad}${COLOR[k]}`;
+      push(padAnsi, pad, k, off);
+      for (let r = 0; r < body.length; r++) push(`${padAnsi}${body[r]}`, `${pad}${bodyPlain[r]}`, k, off);
+      push(padAnsi, pad, k, off);
       i = j + 1;
     }
     const coloured = lines.map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${line}\x1b[39m` : line));

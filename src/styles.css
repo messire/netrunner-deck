@@ -86,6 +86,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 /* browser text selection in the chat (see TerminalView: xterm's drag-select is stopped there) */
 .xterm-host .xterm,.xterm-host .xterm-screen,.xterm-host .xterm-rows,.xterm-host .xterm-rows *{user-select:text;-webkit-user-select:text;cursor:text}
 .xterm-host .xterm-rows ::selection{background:rgba(103,224,227,.35);color:inherit}
+.xterm-host .xterm-rows .xterm-fg-16::selection{background:transparent}
 /* The CLI's input box, pinned under the chat; same grid, no scrollback. */
 .xterm-input{min-width:0;overflow:hidden;padding:4px 12px 6px 14px;border-top:1px solid var(--line);user-select:text}
 .xterm-input .xterm .xterm-viewport{overflow:hidden}
