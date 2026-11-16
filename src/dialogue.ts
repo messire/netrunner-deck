@@ -237,3 +237,69 @@ export function inputBoxStart(lines: string[]): number {
   }
   return prompt;
 }
+
+/**
+ * Word-wrap one ANSI-coloured line to `maxW` cells. Escape sequences are
+ * zero-width and travel with the character that follows them; the SGR state
+ * in force at a break is re-emitted at the start of the continuation line,
+ * which is indented like Claude Code's own continuations (2 cells). Breaks
+ * happen at the last space before the limit, or mid-word when there is none.
+ */
+export function wrapAnsi(raw: string, maxW: number, widthOf: WidthOf = defaultWidthOf): string[] {
+  if (maxW < 4) return [raw];
+  const tokens: { text: string; ansi: boolean }[] = [];
+  let last = 0;
+  for (const m of raw.matchAll(ANSI)) {
+    if (m.index! > last) tokens.push({ text: raw.slice(last, m.index), ansi: false });
+    tokens.push({ text: m[0], ansi: true });
+    last = m.index! + m[0].length;
+  }
+  if (last < raw.length) tokens.push({ text: raw.slice(last), ansi: false });
+  // Flatten into per-character cells, each carrying the escapes that precede it.
+  const cells: { ch: string; pre: string; w: number }[] = [];
+  let pre = "";
+  for (const t of tokens) {
+    if (t.ansi) { pre += t.text; continue; }
+    const chars = [...t.text];
+    for (let i = 0; i < chars.length; i++) {
+      cells.push({ ch: chars[i], pre, w: widthOf(chars[i], chars[i + 1]) });
+      pre = "";
+    }
+  }
+  if (pre) cells.push({ ch: "", pre, w: 0 });
+  const indent = /^\s*/.exec(stripAnsi(raw))?.[0].length ?? 0;
+  const contIndent = " ".repeat(Math.min(indent + 2, Math.max(0, maxW - 8)) || 2);
+  const out: string[] = [];
+  let line = "", width = 0, sgr = "", lastSpace = -1, lineStart = 0;
+  const flush = (upTo: number, from: number) => {
+    out.push(line.slice(0, upTo));
+    line = (out.length ? contIndent : "") + sgr + line.slice(from).replace(/^\s+/, "");
+    width = lineWidthOf(line, widthOf);
+    lastSpace = -1;
+    lineStart = out.length ? contIndent.length : 0;
+  };
+  for (const c of cells) {
+    if (c.pre) {
+      // Track the SGR state: a reset clears it, anything else accumulates.
+      for (const m of c.pre.matchAll(/\x1b\[([0-9;]*)m/g)) sgr = m[1] === "" || m[1] === "0" ? "" : sgr + m[0];
+    }
+    // A space may overflow (trailing spaces have no width); the next
+    // visible character then breaks the line at that space.
+    if (width + c.w > maxW && width > 0 && c.ch !== " ") {
+      if (lastSpace > lineStart) flush(lastSpace, lastSpace + 1);
+      else flush(line.length, line.length);
+    }
+    if (c.ch === " ") lastSpace = line.length + c.pre.length;
+    line += c.pre + c.ch;
+    width += c.w;
+  }
+  out.push(line);
+  return out.map((l) => l.replace(/ +$/, ""));
+}
+
+function lineWidthOf(raw: string, widthOf: WidthOf): number {
+  const chars = [...stripAnsi(raw)];
+  let w = 0;
+  for (let i = 0; i < chars.length; i++) w += widthOf(chars[i], chars[i + 1]);
+  return w;
+}
