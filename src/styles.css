@@ -96,6 +96,9 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .keys .right{margin-left:auto;display:flex;gap:18px;font:11px Consolas,monospace;color:var(--mut)}
 /* dialogue frames drawn under the text by xterm decorations */
 .xterm .xterm-decoration-container{overflow:visible}
+/* xterm's DOM renderer paints decorations (z 6) above the row text; the rows
+   go above the bottom layer so an opaque bubble fill never hides the text. */
+.xterm .xterm-rows{position:relative;z-index:7}
 /* Frame edges sit on the text grid: left border at column 0, right border at the last cell of the block, so full-width frames and the CLI rules start and end on the same lines. */
 /* Chat bubbles over the terminal grid (Cyberpunk 2077 phone): each buffer row
    of a block is one decoration; the element's background is the border
@@ -134,9 +137,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .row .car.sp{display:none}
 .car{width:16px;height:22px;flex:none;border:0;background:transparent;padding:0;font:700 14px Consolas,monospace;color:var(--cy);cursor:pointer;text-align:center;line-height:22px}
 .car.yel,.car.red,.car.cy{color:var(--cy)}.car.sp{cursor:default}
-.kids{margin-left:18px;padding-left:6px;border-left:1px solid rgba(255,43,74,.45);position:relative}
-.kids:before{content:"";position:absolute;left:-1px;top:0;width:10px;height:1px;background:rgba(255,43,74,.45)}
-.kids.r,.kids.w,.kids.t{border-color:rgba(255,43,74,.45)}
+.kids{margin-left:22px;position:relative}
 .badge{font:8px Consolas,monospace;letter-spacing:1px;color:#FF6B7A;border:1px solid rgba(255,43,74,.45);padding:0 4px;line-height:12px;flex:none}
 .badge.root{border-color:#FF6B7A}
 .kind{font:9px Consolas,monospace;color:var(--mut);width:36px;text-align:right;flex:none;letter-spacing:.5px;overflow:hidden}
