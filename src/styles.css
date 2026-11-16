@@ -99,6 +99,9 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 /* xterm's DOM renderer paints decorations (z 6) above the row text; the rows
    go above the bottom layer so an opaque bubble fill never hides the text. */
 .xterm .xterm-rows{position:relative;z-index:7}
+/* …and the bubbles go under xterm's selection layer (z 1), so a selection
+   is painted the same inside and outside a bubble. */
+.xterm-screen .xterm-decoration-container .xterm-decoration.dlg{z-index:0}
 /* Frame edges sit on the text grid: left border at column 0, right border at the last cell of the block, so full-width frames and the CLI rules start and end on the same lines. */
 /* Chat bubbles over the terminal grid (Cyberpunk 2077 phone): each buffer row
    of a block is one decoration; the element's background is the border
