@@ -25,9 +25,9 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
    fills solid red. The plate is the :after layer so the tab (:before) can sit
    outside the chamfer's clip-path. */
 .row{display:flex;align-items:center;gap:8px;height:30px;margin:5px 0 5px 16px;padding:0 10px 0 12px;white-space:nowrap;position:relative;cursor:pointer;isolation:isolate;text-transform:uppercase;letter-spacing:1px}
-.row:after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,rgba(120,14,34,.55),rgba(60,8,20,.35));border:1px solid rgba(255,43,74,.55);clip-path:polygon(11px 0,100% 0,100% 100%,0 100%,0 11px)}
+.row:after{content:"";position:absolute;inset:0;z-index:-1;background:rgba(14,5,9,.75);border:1px solid rgba(255,43,74,.5);clip-path:polygon(11px 0,100% 0,100% 100%,0 100%,0 11px)}
 .row:before{content:"";position:absolute;left:-15px;top:5px;width:8px;height:calc(100% - 10px);background:rgba(255,43,74,.5);clip-path:polygon(0 0,100% 25%,100% 100%,0 75%)}
-.row:hover:after{background:linear-gradient(90deg,rgba(160,20,44,.6),rgba(90,12,28,.4));border-color:var(--red)}
+.row:hover:after{background:linear-gradient(90deg,rgba(192,19,42,.55),rgba(90,12,28,.35));border-color:var(--red)}
 .row.sel:after{background:linear-gradient(90deg,#C0132A,#8a0e22);border-color:#FF6B7A}
 .row.sel:before{background:var(--yel)}
 .row.sel .nm,.row.sel .cnt,.row.sel .kind,.row.sel .tag,.row.sel .car{color:#120A10!important}
@@ -171,22 +171,23 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .arc-head .micro{font-size:11px}
 .arc-empty{margin-top:40px;text-align:center;color:var(--mut);letter-spacing:2px;font-size:14px}
 .arow{display:flex;align-items:center;gap:12px;padding:6px 12px 6px 14px;min-height:36px;position:relative;isolation:isolate;margin:6px 0 6px 18px}
-.arow:after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,rgba(120,14,34,.5),rgba(60,8,20,.3));border:1px solid rgba(255,43,74,.5);clip-path:polygon(12px 0,100% 0,100% 100%,0 100%,0 12px)}
+.arow:after{content:"";position:absolute;inset:0;z-index:-1;background:rgba(14,5,9,.75);border:1px solid rgba(255,43,74,.5);clip-path:polygon(12px 0,100% 0,100% 100%,0 100%,0 12px)}
 .arow:before{content:"";position:absolute;left:-17px;top:6px;width:9px;height:calc(100% - 12px);background:rgba(255,43,74,.5);clip-path:polygon(0 0,100% 25%,100% 100%,0 75%)}
-.arow:hover:after{background:linear-gradient(90deg,rgba(160,20,44,.55),rgba(90,12,28,.35));border-color:var(--red)}
+.arow:hover:after{background:linear-gradient(90deg,rgba(192,19,42,.55),rgba(90,12,28,.35));border-color:var(--red)}
 .arow.head{min-height:26px;margin:0 0 4px 18px;font:10px Consolas,monospace;letter-spacing:1.5px;color:var(--mut)}
 .arow.head:after,.arow.head:before{display:none}
 .arow.repo{cursor:grab;min-height:40px}
-.arow.repo.open:after{background:linear-gradient(90deg,rgba(192,19,42,.75),rgba(120,14,34,.45));border-color:#FF6B7A}
+.arow.repo.open:after{border-color:#FF6B7A}
 .arow.wt{cursor:pointer;margin-left:48px}
-.arow.wt.open:after{background:linear-gradient(90deg,rgba(192,19,42,.55),rgba(120,14,34,.3))}
+.arow.wt.open:after{border-color:#FF6B7A}
 .arow.sess{margin-left:78px;align-items:flex-start}
 .arow.sess.dim{opacity:.55}
 .arow .tw{width:22px;flex:none;color:var(--cy);font-size:16px;line-height:1;text-align:center;order:50}
 .arow.repo .tw,.arow.wt .tw{margin-left:auto}
 .arow.repo .sp,.arow.wt .sp{flex:0}
 .arow.grp{margin:16px 0 8px 18px;min-height:40px;position:sticky;top:0;z-index:2;cursor:default}
-.arow.grp:after{background:linear-gradient(90deg,rgba(103,224,227,.14),rgba(103,224,227,.04));border-color:rgba(103,224,227,.6)}
+.arow.grp:after{background:rgba(14,5,9,.8);border-color:rgba(103,224,227,.6)}
+.arow.grp:hover:after{background:rgba(103,224,227,.08);border-color:var(--cy)}
 .arow.grp.over:after{background:rgba(252,238,10,.16);border:1px dashed var(--yel)}
 .arow.grp.hid .gn{color:var(--mut);text-decoration:line-through}
 .arow.grp .tw{order:0;margin-left:0}
