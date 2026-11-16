@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ArchiveEntry } from "./api";
-import { buildArchiveTree, deletePlan, placement } from "./archive-tree";
+import { buildArchiveTree, deletePlan, groupRepos, moveRepo, placement } from "./archive-tree";
 
 const e = (over: Partial<ArchiveEntry>): ArchiveEntry => ({
   id: "x", source: "claude", label: "L", cwd: "C:\\x", linked_worktree: false, sessions: [], last_active_ms: 1, prompts: 1,
@@ -59,5 +59,24 @@ describe("buildArchiveTree / deletePlan", () => {
     expect(deletePlan(tree[0].worktrees[1])).toEqual([{ id: "b", removeWorktree: false }, { id: "d", removeWorktree: false }, { id: "c", removeWorktree: true }]);
     expect(deletePlan(tree[0].worktrees[0])).toEqual([{ id: "a", removeWorktree: false }]);
     expect(deletePlan(tree[0]).map((x) => x.id)).toEqual(["a", "b", "d", "c"]);
+  });
+});
+
+describe("groupRepos / moveRepo", () => {
+  const repos = buildArchiveTree([e({ id: "1", cwd: "C:\\w\\Atlas" }), e({ id: "2", cwd: "C:\\w\\lupex" }), e({ id: "3", cwd: "C:\\w\\deck" })]);
+  const groups = [{ id: "p", name: "Personal", repos: ["LUPEX", "gone"], hidden: true }, { id: "e", name: "Empty", repos: [], hidden: false }];
+  it("main group first, then the user's groups in order; membership by case-insensitive key", () => {
+    const sec = groupRepos(repos, groups);
+    expect(sec.map((s) => s.group?.name ?? "main")).toEqual(["main", "Personal", "Empty"]);
+    expect(sec[0].repos.map((r) => r.name).sort()).toEqual(["Atlas", "deck"]);
+    expect(sec[1].repos.map((r) => r.name)).toEqual(["lupex"]);
+    expect(sec[2].repos).toEqual([]);
+  });
+  it("moveRepo puts a repo in exactly one group, or back to main with null", () => {
+    const moved = moveRepo(groups, "Atlas", "e");
+    expect(moved[1].repos).toEqual(["atlas"]);
+    const back = moveRepo(moved, "atlas", null);
+    expect(back.every((g) => !g.repos.includes("atlas"))).toBe(true);
+    expect(moveRepo(groups, "lupex", "e").map((g) => g.repos)).toEqual([["gone"], ["lupex"]]);
   });
 });

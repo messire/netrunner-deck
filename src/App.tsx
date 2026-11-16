@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
-import { api, type ArchiveEntry, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
+import { api, type ArchiveEntry, type RepoGroup, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SwitchError } from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
@@ -152,6 +152,13 @@ export default function App() {
     archiveRun(plan[0].id, (async () => { for (const step of plan) await api.archiveDelete(step.id, step.removeWorktree); })());
   };
   const archiveSummarize = (id: string) => archiveRun(id, api.archiveSummarize(id));
+  const [groups, { refetch: refetchGroups, mutate: setGroups }] = createResource<RepoGroup[]>(async () => {
+    try { return await api.archiveGroupsGet(); } catch { return []; }
+  }, { initialValue: [] });
+  const saveGroups = (next: RepoGroup[]) => {
+    setGroups(next);
+    api.archiveGroupsSet(next).then((saved) => setGroups(saved)).catch((e) => { setArchiveError(String(e)); refetchGroups(); });
+  };
 
   const [menu, setMenu] = createSignal<MenuState | null>(null);
   const [overlay, setOverlay] = createSignal<"palette" | "accounts" | null>(null);
@@ -325,7 +332,7 @@ export default function App() {
       </header>
 
       <Show when={view() === "archive"}>
-        <ArchiveView entries={archive()} busy={archiveBusy()} error={archiveError()} onRestore={archiveRestore} onDeleteMany={archiveDeleteMany} onSummarize={archiveSummarize} onRefresh={() => refetchArchive()} />
+        <ArchiveView entries={archive()} busy={archiveBusy()} error={archiveError()} onRestore={archiveRestore} onDeleteMany={archiveDeleteMany} onSummarize={archiveSummarize} onRefresh={() => refetchArchive()} groups={groups()} onGroups={saveGroups} />
       </Show>
       <Show when={view() === "deck"}>
       <Sidebar

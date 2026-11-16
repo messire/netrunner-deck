@@ -140,6 +140,9 @@ export interface ArchiveEntry {
   restored_workspace_id?: string | null;
 }
 
+/** A user-made group of repositories in the ARCHIVE tree; repos in no group are in the main group. */
+export interface RepoGroup { id: string; name: string; repos: string[]; hidden: boolean }
+
 export const api = {
   ping: () => invoke<{ version: string; protocol: number }>("herdr_ping"),
   tree: () => { count("herdr_tree"); return invoke<Tree>("herdr_tree"); },
@@ -169,6 +172,8 @@ export const api = {
   archiveRestore: (id: string) => invoke<{ workspace_id: string; resumed: number }>("archive_restore", { id }),
   archiveDelete: (id: string, removeWorktree = false) => invoke<{ removed_worktree: string | null }>("archive_delete", { id, removeWorktree }),
   archiveSummarize: (id: string) => invoke<void>("archive_summarize", { id }),
+  archiveGroupsGet: () => invoke<RepoGroup[]>("archive_groups_get"),
+  archiveGroupsSet: (groups: RepoGroup[]) => invoke<RepoGroup[]>("archive_groups_set", { groups }),
   onArchive: (cb: () => void): Promise<UnlistenFn> => listen("deck://archive", () => cb()),
   cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
   cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
