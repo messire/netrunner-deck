@@ -439,6 +439,19 @@ async fn archive_delete(
 }
 
 #[tauri::command]
+async fn archive_groups_get(app: AppHandle) -> Result<Vec<archive::RepoGroup>, String> {
+    Ok(archive::groups(&app))
+}
+
+#[tauri::command]
+async fn archive_groups_set(
+    app: AppHandle,
+    groups: Vec<archive::RepoGroup>,
+) -> Result<Vec<archive::RepoGroup>, String> {
+    archive::set_groups(&app, groups)
+}
+
+#[tauri::command]
 async fn archive_summarize(app: AppHandle, id: String) -> Result<(), String> {
     archive::resummarize(&app, &id)
 }
@@ -688,6 +701,8 @@ pub fn run() {
             archive_restore,
             archive_delete,
             archive_summarize,
+            archive_groups_get,
+            archive_groups_set,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Netrunner Deck");

@@ -135,6 +135,19 @@ pub struct Saved {
     /// Workspaces Deck itself closed, so a short-lived space missing from every Herdr snapshot is still known.
     #[serde(default)]
     pub closed: Vec<WorkspaceRecord>,
+    /// User-made repository groups for the ARCHIVE tree (repos not listed are in the main group).
+    #[serde(default)]
+    pub groups: Vec<RepoGroup>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RepoGroup {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub repos: Vec<String>,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 pub struct Store {
@@ -819,6 +832,28 @@ pub fn list(app: &AppHandle) -> Vec<Entry> {
     entries
 }
 
+// ---- repository groups ---------------------------------------------------------
+
+pub fn groups(app: &AppHandle) -> Vec<RepoGroup> {
+    app.state::<Store>().snapshot().groups
+}
+
+/// Replace the groups; a repo may sit in one group only, empty names are dropped.
+pub fn set_groups(app: &AppHandle, groups: Vec<RepoGroup>) -> Result<Vec<RepoGroup>, String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let cleaned: Vec<RepoGroup> = groups
+        .into_iter()
+        .filter(|g| !g.id.trim().is_empty() && !g.name.trim().is_empty())
+        .map(|mut g| {
+            g.repos.retain(|r| seen.insert(r.to_lowercase()));
+            g
+        })
+        .collect();
+    app.state::<Store>()
+        .update(|s| s.groups = cleaned.clone())?;
+    Ok(cleaned)
+}
+
 // ---- close to archive -----------------------------------------------------------
 
 /// Close a live workspace and remember it even if no Herdr snapshot ever caught it.
@@ -1382,6 +1417,46 @@ mod tests {
             restored_at_ms: None,
             restored_workspace_id: None,
         }
+    }
+
+    #[test]
+    fn groups_keep_a_repo_in_one_group_only() {
+        let dir = std::env::temp_dir().join(format!("deck-groups-{}", now_ms()));
+        let store = Store::open(&dir);
+        let g = vec![
+            RepoGroup {
+                id: "a".into(),
+                name: "Personal".into(),
+                repos: vec!["X".into(), "y".into()],
+                hidden: true,
+            },
+            RepoGroup {
+                id: "b".into(),
+                name: "Work".into(),
+                repos: vec!["x".into(), "z".into()],
+                hidden: false,
+            },
+            RepoGroup {
+                id: "".into(),
+                name: "bad".into(),
+                repos: vec![],
+                hidden: false,
+            },
+        ];
+        let mut seen: HashSet<String> = HashSet::new();
+        let cleaned: Vec<RepoGroup> = g
+            .into_iter()
+            .filter(|g| !g.id.trim().is_empty() && !g.name.trim().is_empty())
+            .map(|mut g| {
+                g.repos.retain(|r| seen.insert(r.to_lowercase()));
+                g
+            })
+            .collect();
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaned[1].repos, vec!["z".to_string()]);
+        store.update(|s| s.groups = cleaned.clone()).unwrap();
+        assert_eq!(Store::open(&dir).snapshot().groups, cleaned);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

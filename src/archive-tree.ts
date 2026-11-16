@@ -1,4 +1,4 @@
-import type { ArchiveEntry } from "./api";
+import type { ArchiveEntry, RepoGroup } from "./api";
 import { matches } from "./archive";
 
 /**
@@ -90,4 +90,34 @@ export function deletePlan(node: RepoNode | WorktreeNode): { id: string; removeW
     w.sessions.forEach((s, i) => out.push({ id: s.entry.id, removeWorktree: w.linked && !w.root && i === w.sessions.length - 1 }));
   }
   return out;
+}
+
+/** A section of the tree: one user group (or the main group, `group: null`) and the repos in it. */
+export interface GroupSection { group: RepoGroup | null; repos: RepoNode[] }
+
+/**
+ * Split repos into the user's groups, in the groups' order, main group first.
+ * Repo membership is by repo key (lowercased name); a group keeps its place
+ * even when none of its repos is in the current scan, so it can be renamed or
+ * removed. Hidden groups are returned too — the view decides what to draw.
+ */
+export function groupRepos(repos: RepoNode[], groups: RepoGroup[]): GroupSection[] {
+  const owner = new Map<string, RepoGroup>();
+  for (const g of groups) for (const r of g.repos) if (!owner.has(r.toLowerCase())) owner.set(r.toLowerCase(), g);
+  const main: GroupSection = { group: null, repos: [] };
+  const sections = new Map<string, GroupSection>(groups.map((g) => [g.id, { group: g, repos: [] }]));
+  for (const r of repos) {
+    const g = owner.get(r.id);
+    (g ? sections.get(g.id)! : main).repos.push(r);
+  }
+  return [main, ...groups.map((g) => sections.get(g.id)!)];
+}
+
+/** Groups with `repoKey` moved into `groupId` (null = main group). */
+export function moveRepo(groups: RepoGroup[], repoKey: string, groupId: string | null): RepoGroup[] {
+  const key = repoKey.toLowerCase();
+  return groups.map((g) => ({
+    ...g,
+    repos: g.id === groupId ? [...g.repos.filter((r) => r.toLowerCase() !== key), key] : g.repos.filter((r) => r.toLowerCase() !== key),
+  }));
 }
