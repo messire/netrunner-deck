@@ -120,7 +120,8 @@ export default function ArchiveView(p: {
   const PromptBox = (q: { title: string; value: string; ok: (v: string) => void }) => {
     let input!: HTMLInputElement;
     onMount(() => { input.focus(); input.select(); });
-    const submit = () => { const v = input.value.trim(); setAsk(null); if (v) q.ok(v); };
+    // Read the props before closing: once `ask` is null the <Show> accessor behind them is gone.
+    const submit = () => { const v = input.value.trim(); const ok = q.ok; setAsk(null); if (v) ok(v); };
     return (
       <div class="veil" onClick={() => setAsk(null)}>
         <div class="dlgbox" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") setAsk(null); }}>
