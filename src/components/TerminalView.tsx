@@ -2,7 +2,7 @@ import { createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type PaneCursor, type PaneRead, type Tree } from "../api";
-import { blockWidth, classify, fitRules, inputBoxStart, promptLine, stripAnsi, stripBackground, type LineKind } from "../dialogue";
+import { blockWidth, classify, fitRules, inputBoxStart, promptLine, stripAnsi, stripBackground, wrapAnsi, type LineKind } from "../dialogue";
 import { mapInput, pasteText, specialKeyDown } from "../keys";
 import { planUpdate } from "../render-plan";
 import { hotkeyOf } from "../actions";
@@ -173,25 +173,36 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     const box = { raw: boxAt >= 0 ? all.slice(boxAt) : [], plain: boxAt >= 0 ? allPlain.slice(boxAt) : [], at: boxAt };
     // The input box (live prompt) is already split off: no line left is the prompt.
     const rawKinds = classify(rawPlain, raw, { livePrompt: boxAt < 0 });
-    // Every dialogue block gets its own blank row inside the frame at the top
-    // and bottom; blank lines around it in the output stay outside as the gap.
-    const lines: string[] = [], plain: string[] = [], kinds: LineKind[] = [];
-    const push = (l: string, pl: string, k: LineKind) => { lines.push(l); plain.push(pl); kinds.push(k); };
+    // Dialogue blocks become chat bubbles: text re-wrapped to at most 80 % of
+    // the width, one cell of inner margin on each side, a blank row inside the
+    // bubble at the top and bottom; the user's bubbles sit at the right edge
+    // (lines left-padded to the bubble's column), the agent's at the left.
+    // `offsets[i]` is the bubble's first column for framed lines (0 otherwise).
+    const bubbleMax = Math.max(20, Math.floor(term.cols * 0.8));
+    const lines: string[] = [], plain: string[] = [], kinds: LineKind[] = [], offsets: number[] = [];
+    const push = (l: string, pl: string, k: LineKind, off = 0) => { lines.push(l); plain.push(pl); kinds.push(k); offsets.push(off); };
     let i = 0;
     while (i < raw.length) {
       const k = rawKinds[i];
       if (!k) { push(raw[i], rawPlain[i], null); i++; continue; }
       let j = i;
       while (j + 1 < raw.length && rawKinds[j + 1] === k) j++;
-      push("", "", k);
-      for (let r = i; r <= j; r++) push(raw[r], rawPlain[r], k);
-      push("", "", k);
+      const body: string[] = [];
+      for (let r = i; r <= j; r++) {
+        const src = k === "user" ? stripBackground(raw[r]) : raw[r];
+        body.push(...wrapAnsi(src, bubbleMax - 2));
+      }
+      const bodyPlain = body.map(stripAnsi);
+      const width = blockWidth(bodyPlain, bubbleMax); // widest line + 2 (margins)
+      const off = k === "user" ? Math.max(0, term.cols - 1 - width) : 0;
+      const pad = " ".repeat(off + 1);
+      push(pad, pad, k, off);
+      for (let r = 0; r < body.length; r++) push(`${pad}${body[r]}`, `${pad}${bodyPlain[r]}`, k, off);
+      push(pad, pad, k, off);
       i = j + 1;
     }
-    // Framed lines get one cell of inner margin so the bullet does not touch the border.
-    const coloured = lines.map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]} ${kinds[i] === "user" ? stripBackground(line) : line}\x1b[39m` : line));
-    for (let i = 0; i < plain.length; i++) if (kinds[i]) plain[i] = ` ${plain[i]}`;
-    return { coloured, plain, kinds, box };
+    const coloured = lines.map((line, i) => (kinds[i] ? `${COLOR[kinds[i]!]}${line}\x1b[39m` : line));
+    return { coloured, plain, kinds, offsets, box };
   }
 
   function renderInputFromText(snap: Snapshot) {
@@ -401,13 +412,16 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       const first = rows[i]?.[0];
       const last = rows[j]?.[rows[j].length - 1];
       if (first !== undefined && last !== undefined) {
-        // Capped at the column count: every full-width frame ends on the same
-        // line as the rules the CLI draws (fitRules cuts those to term.cols).
-        const width = blockWidth(plain.slice(i, j + 1), term.cols);
+        // The block's first row is its blank spacer: pure padding, so its
+        // length is the bubble's column + 1 (inner margin). Width = widest
+        // line from that column, plus the right margin, capped at the edge.
+        const off = Math.max(0, plain[i].length - 1);
+        const widest = blockWidth(plain.slice(i, j + 1), 1 << 20) - 2;
+        const width = Math.max(4, Math.min(term.cols - off, widest - off + 1));
         for (let r = first; r <= last; r++) {
           const marker = term.registerMarker(r - cursorRow);
           if (!marker) continue;
-          const deco = term.registerDecoration({ marker, x: 0, width, layer: "bottom" });
+          const deco = term.registerDecoration({ marker, x: off, width, layer: "bottom" });
           if (!deco) continue;
           const pos = r === first ? (r === last ? "only" : "top") : r === last ? "bottom" : "mid";
           deco.onRender((el) => {

@@ -97,13 +97,22 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 /* dialogue frames drawn under the text by xterm decorations */
 .xterm .xterm-decoration-container{overflow:visible}
 /* Frame edges sit on the text grid: left border at column 0, right border at the last cell of the block, so full-width frames and the CLI rules start and end on the same lines. */
-.xterm .dlg{box-sizing:border-box;pointer-events:none;border:0 solid;border-left-width:1px;border-right-width:1px;overflow:visible;padding:0;margin-left:-1px}
-.xterm .dlg-agent{border-color:#2BFF88;background:rgba(43,255,136,.06)}
-.xterm .dlg-user{border-color:#FCEE0A;background:rgba(252,238,10,.06)}
-.xterm .dlg-top,.xterm .dlg-only{border-top-width:1px;border-top-style:solid}
-.xterm .dlg-bottom,.xterm .dlg-only{border-bottom-width:1px;border-bottom-style:solid}
-.xterm .dlg-top:after,.xterm .dlg-only:after{content:attr(data-who);position:absolute;right:8px;top:-6px;padding:0 4px;font:8px Consolas,monospace;letter-spacing:1.5px;background:#080406;color:inherit}
-.xterm .dlg-agent:after{color:#2BFF88}.xterm .dlg-user:after{color:#FCEE0A}
+/* Chat bubbles over the terminal grid (Cyberpunk 2077 phone): each buffer row
+   of a block is one decoration; the element's background is the border
+   colour, clipped to the bubble outline, and :before paints the fill 1px
+   inside — so the chamfers (top-right of the first row, bottom-left of the
+   last) carry a real diagonal border. */
+.xterm .dlg{box-sizing:border-box;pointer-events:none;overflow:visible;position:absolute}
+.xterm .dlg:before{content:"";position:absolute;inset:0 1px;background:var(--bub)}
+.xterm .dlg-agent{--bub:#0c1a13;--bubb:#2BFF88;background:var(--bubb)}
+.xterm .dlg-user{--bub:#1a1808;--bubb:#FCEE0A;background:var(--bubb)}
+.xterm .dlg-top,.xterm .dlg-only{clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%)}
+.xterm .dlg-top:before,.xterm .dlg-only:before{top:1px;clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%)}
+.xterm .dlg-bottom{clip-path:polygon(0 0,100% 0,100% 100%,9px 100%,0 calc(100% - 9px))}
+.xterm .dlg-bottom:before{bottom:1px;clip-path:polygon(0 0,100% 0,100% 100%,9px 100%,0 calc(100% - 9px))}
+.xterm .dlg-only{clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,9px 100%,0 calc(100% - 9px))}
+.xterm .dlg-only:before{top:1px;bottom:1px;clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,9px 100%,0 calc(100% - 9px))}
+.xterm .dlg-top:after,.xterm .dlg-only:after{content:attr(data-who);position:absolute;right:14px;top:2px;padding:0 4px;font:8px Consolas,monospace;letter-spacing:1.5px;color:var(--bubb);opacity:.85}
 
 /* M3: context menus, palette, action toast, add buttons */
 .plate-row{display:flex;align-items:center;gap:8px}

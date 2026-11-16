@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { blockWidth, classify, defaultWidthOf, fitRules, hasBackground, inputBoxStart, promptLine, snapshotCols, stripAnsi, stripBackground, type LineKind } from "./dialogue";
+import { blockWidth, classify, defaultWidthOf, fitRules, hasBackground, inputBoxStart, promptLine, snapshotCols, stripAnsi, stripBackground, wrapAnsi, type LineKind } from "./dialogue";
 
 const FIXTURES = new URL("./__fixtures__/pane-read/", import.meta.url);
 function loadFixture(name: string) {
@@ -264,5 +264,30 @@ describe("classify with the input box already split off (livePrompt: false)", ()
     const lines = ["● reply", "", "❯ 4 задача уже сделана", "  3 задача относится ко 2", "", "● Skill(clickup-task)"];
     expect(classify(lines, lines, { livePrompt: false }).slice(2, 4)).toEqual(["user", "user"]);
     expect(classify(lines, lines)[2]).toBeNull();
+  });
+});
+
+describe("wrapAnsi", () => {
+  const widths = (lines: string[]) => lines.map((l) => [...stripAnsi(l)].length);
+  it("breaks at spaces, never beyond maxW, continuation indented by 2", () => {
+    const out = wrapAnsi("● one two three four five six seven", 14);
+    expect(out[0]).toBe("● one two");
+    expect(out.slice(1).every((l) => l.startsWith("  "))).toBe(true);
+    expect(Math.max(...widths(out))).toBeLessThanOrEqual(14);
+    expect(stripAnsi(out.join(" ")).replace(/\s+/g, " ")).toBe("● one two three four five six seven");
+  });
+  it("keeps the SGR state across the break and does not count escapes", () => {
+    const out = wrapAnsi("\x1b[1mbold words here\x1b[0m plain", 12);
+    expect(out[0]).toBe("\x1b[1mbold words");
+    expect(out[1].startsWith("  \x1b[1mhere")).toBe(true);
+    expect(Math.max(...widths(out))).toBeLessThanOrEqual(12);
+  });
+  it("a word longer than the line is cut mid-word", () => {
+    const out = wrapAnsi("x ".repeat(2) + "a".repeat(30), 10);
+    expect(Math.max(...widths(out))).toBeLessThanOrEqual(10);
+  });
+  it("short lines and wide cells are left alone or counted at 2", () => {
+    expect(wrapAnsi("short", 20)).toEqual(["short"]);
+    expect(wrapAnsi("日本語 日本語 日本語", 8).length).toBe(3);
   });
 });
