@@ -113,6 +113,26 @@ const count = (name: string) => {
 /** A newer signed release the updater found (M5). */
 export type UpdateInfo = { version: string; current: string; notes: string | null; date: string | null };
 
+/** Session archive ("cold storage"): a closed space that can be reopened with `claude --resume`. */
+export interface ArchivedSession { tab_label: string; agent?: string | null; session_id?: string | null; cwd: string }
+export interface ArchiveEntry {
+  id: string;
+  archived_at_ms: number;
+  label: string;
+  repo_name?: string | null;
+  branch?: string | null;
+  cwd: string;
+  repo_root?: string | null;
+  linked_worktree: boolean;
+  sessions: ArchivedSession[];
+  summary?: string | null;
+  summary_state: "pending" | "ready" | "failed" | "none";
+  summary_error?: string | null;
+  status: "archived" | "restored";
+  restored_at_ms?: number | null;
+  restored_workspace_id?: string | null;
+}
+
 export const api = {
   ping: () => invoke<{ version: string; protocol: number }>("herdr_ping"),
   tree: () => { count("herdr_tree"); return invoke<Tree>("herdr_tree"); },
@@ -137,6 +157,12 @@ export const api = {
   /** Updater (M5): `null` when up to date; errors (offline, no release yet) are advisory. */
   updateCheck: () => invoke<UpdateInfo | null>("update_check"),
   updateInstall: () => invoke<void>("update_install"),
+  archiveList: () => invoke<ArchiveEntry[]>("archive_list"),
+  archiveClose: (workspaceId: string, closeGroup = false) => invoke<ArchiveEntry>("archive_close", { workspaceId, closeGroup }),
+  archiveRestore: (id: string) => invoke<{ workspace_id: string; resumed: number }>("archive_restore", { id }),
+  archiveDelete: (id: string, removeWorktree = false) => invoke<{ removed_worktree: string | null }>("archive_delete", { id, removeWorktree }),
+  archiveSummarize: (id: string) => invoke<void>("archive_summarize", { id }),
+  onArchive: (cb: () => void): Promise<UnlistenFn> => listen("deck://archive", () => cb()),
   cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
   cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
   // The payload is whatever Herdr sent; `routeEvent` validates the shape.

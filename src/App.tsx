@@ -1,12 +1,13 @@
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
-import { api, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
+import { api, type ArchiveEntry, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SwitchError } from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
 import KeyBar from "./components/KeyBar";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import Palette, { type PaletteItem } from "./components/Palette";
+import ArchiveView from "./components/ArchiveView";
 import { createLatestGate } from "./latest";
 import { debounceTrailing, routeEvent } from "./events";
 import { agentName, commands, hotkeyOf, nextBlockedPane, type Command } from "./actions";
@@ -118,6 +119,35 @@ export default function App() {
         showError(`${action}: ${m}`);
       });
 
+  // ---- ARCHIVE (cold storage): closed spaces that can be restored ----------
+  const [view, setViewRaw] = createSignal<"deck" | "archive">(remembered("deck.view") === "archive" ? "archive" : "deck");
+  const setView = (v: "deck" | "archive") => { setViewRaw(v); remember("deck.view", v); };
+  const [archive, { refetch: refetchArchive }] = createResource<ArchiveEntry[] | undefined>(async (_, { value }) => {
+    try { return await api.archiveList(); } catch (e) { showError(`archive: ${e}`); return value; }
+  });
+  const [archiveBusy, setArchiveBusy] = createSignal<string | null>(null);
+  const [archiveError, setArchiveError] = createSignal<string | null>(null);
+  const archiveRun = (id: string, work: Promise<unknown>, after?: () => void) => {
+    setArchiveBusy(id);
+    setArchiveError(null);
+    work.then(() => { after?.(); }).catch((e) => setArchiveError(String(e))).finally(() => { setArchiveBusy(null); refetchArchive(); });
+  };
+  const archiveClose = (w: Workspace, closeGroup = false) =>
+    api.archiveClose(w.workspace_id, closeGroup)
+      .then(() => { refetchTree(); refetchArchive(); })
+      .catch((e) => {
+        const m = String(e);
+        if (m.includes("workspace_group_close_required") && !closeGroup) {
+          showError("space has linked worktrees — use CLOSE · ARCHIVE + WORKTREES to close the group");
+          return;
+        }
+        showError(`archive: ${m}`);
+      });
+  const archiveRestore = (id: string) =>
+    archiveRun(id, api.archiveRestore(id).then((r) => { setView("deck"); refetchTree(); return r; }));
+  const archiveDelete = (id: string, removeWorktree: boolean) => archiveRun(id, api.archiveDelete(id, removeWorktree));
+  const archiveSummarize = (id: string) => archiveRun(id, api.archiveSummarize(id));
+
   const [menu, setMenu] = createSignal<MenuState | null>(null);
   const [overlay, setOverlay] = createSignal<"palette" | "accounts" | null>(null);
   const overlayOpen = () => menu() !== null || overlay() !== null;
@@ -129,9 +159,13 @@ export default function App() {
       { label: "FOCUS IN HERDR", hint: "workspace.focus", run: () => api.focus("workspace", w.workspace_id).catch((er) => showError(String(er))) },
       { label: "NEW TAB", hint: "tab.create", run: () => runAction("tab.create", w.workspace_id) },
       { label: "NEW SPACE", hint: "workspace.create", run: () => runAction("workspace.create", w.workspace_id) },
+      { label: "CLOSE · ARCHIVE", hint: "keep for restore", run: () => archiveClose(w) },
       { label: "CLOSE SPACE", hint: "workspace.close", danger: true, run: () => runAction("workspace.close", w.workspace_id) },
       // A primary repo workspace with linked worktrees refuses a plain close (workspace_group_close_required).
-      ...(w.worktree ? [] : [{ label: "CLOSE SPACE + WORKTREES", hint: "close_group", danger: true, run: () => runAction("workspace.close", w.workspace_id, { close_group: true }) }]),
+      ...(w.worktree ? [] : [
+        { label: "CLOSE · ARCHIVE + WORKTREES", hint: "close_group, keep for restore", run: () => archiveClose(w, true) },
+        { label: "CLOSE SPACE + WORKTREES", hint: "close_group", danger: true, run: () => runAction("workspace.close", w.workspace_id, { close_group: true }) },
+      ]),
     ],
   });
   // The pane a tab-level action applies to: its focused pane, else the first.
@@ -166,7 +200,9 @@ export default function App() {
 
   const perform = (c: Command) => {
     const d = c.do;
-    if (d.kind === "select") selectPane(d.paneId);
+    if (d.kind === "archive") { const w = tree()?.workspaces.find((x) => x.workspace_id === d.id); if (w) archiveClose(w, d.group); }
+    else if (d.kind === "view") setView(d.view);
+    else if (d.kind === "select") selectPane(d.paneId);
     else if (d.kind === "switch") switchAccount(d.account);
     else if (d.kind === "refresh") refetchAccounts();
     else runAction(d.action, d.id);
@@ -209,12 +245,14 @@ export default function App() {
       else if (route === "tick") setOutputTick((n) => n + 1);
     }).then((u) => (un1 = u));
     api.onOffline((m) => setOffline(m)).then((u) => (un2 = u));
+    let un3: (() => void) | undefined;
+    api.onArchive(() => refetchArchive()).then((u) => (un3 = u));
     const timer = setInterval(() => { refetchTree(); refetchAccounts(); }, 15000);
     checkUpdate();
     const updTimer = setInterval(checkUpdate, 4 * 3600_000);
     // Capture phase: Deck's keys are decided before xterm's textarea sees them.
     window.addEventListener("keydown", onKey, true);
-    onCleanup(() => { un1?.(); un2?.(); clearInterval(timer); clearInterval(updTimer); refetchTreeSoon.cancel(); window.removeEventListener("keydown", onKey, true); clearTimeout(errorTimer); });
+    onCleanup(() => { un1?.(); un2?.(); un3?.(); clearInterval(timer); clearInterval(updTimer); refetchTreeSoon.cancel(); window.removeEventListener("keydown", onKey, true); clearTimeout(errorTimer); });
   });
 
   // M4: an agent that starts waiting for input while its pane is not on
@@ -250,7 +288,10 @@ export default function App() {
   return (
     <div class="frame" onContextMenu={noBrowserMenu}>
       <header class="titlebar" data-tauri-drag-region>
-        <div class="logo">▞ NETRUNNER DECK</div>
+        <div class="vtabs">
+          <button class={`vtab ${view() === "deck" ? "on" : ""}`} onClick={() => setView("deck")}>▞ NETRUNNER DECK</button>
+          <button class={`vtab ${view() === "archive" ? "on" : ""}`} onClick={() => setView("archive")} title="closed spaces kept for restore">▞ ARCHIVE{(archive() ?? []).some((e) => e.status === "archived") ? ` · ${(archive() ?? []).filter((e) => e.status === "archived").length}` : ""}</button>
+        </div>
         <span class="micro">herdr client · {offline() ? "OFFLINE" : "LINK OK"}</span>
         <Show when={actionError()}>{(m) => <span class="micro toast" title={m()}>✕ {m()}</span>}</Show>
         <Show when={update()}>{(u) => (
@@ -278,6 +319,10 @@ export default function App() {
         </div>
       </header>
 
+      <Show when={view() === "archive"}>
+        <ArchiveView entries={archive()} busy={archiveBusy()} error={archiveError()} onRestore={archiveRestore} onDelete={archiveDelete} onSummarize={archiveSummarize} onRefresh={() => refetchArchive()} />
+      </Show>
+      <Show when={view() === "deck"}>
       <Sidebar
         tree={tree()}
         accounts={accounts()}
@@ -304,6 +349,7 @@ export default function App() {
         </Show>
         <Show when={offline()}>{(m) => <div class="offline">◇ HERDR OFFLINE — {m()}</div>}</Show>
       </main>
+      </Show>
 
       <KeyBar tree={tree()} selectedPane={currentPane()} account={activeAccount()} waiting={waiting()} />
 

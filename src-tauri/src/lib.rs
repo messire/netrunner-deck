@@ -1,3 +1,4 @@
+mod archive;
 mod herdr;
 
 use std::path::{Path, PathBuf};
@@ -235,7 +236,9 @@ fn diag_log(app: AppHandle, line: String) -> Result<(), String> {
     let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("deck-diag.log");
-    let truncate = std::fs::metadata(&path).map(|m| m.len() > 2 * 1024 * 1024).unwrap_or(false);
+    let truncate = std::fs::metadata(&path)
+        .map(|m| m.len() > 2 * 1024 * 1024)
+        .unwrap_or(false);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(!truncate)
@@ -398,6 +401,46 @@ fn resolve_cswap() -> Option<PathBuf> {
         .filter(|dir| !dir.as_os_str().is_empty())
         .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|candidate| candidate.is_file())
+}
+
+// ---- session archive (cold storage) ---------------------------------------
+
+#[tauri::command]
+async fn archive_list(app: AppHandle) -> Result<Vec<archive::Entry>, String> {
+    Ok(app.state::<archive::Store>().list())
+}
+
+/// Remember the workspace (label, checkout, Claude session ids), close it in
+/// Herdr, then write its description in the background.
+#[tauri::command]
+async fn archive_close(
+    app: AppHandle,
+    workspace_id: String,
+    close_group: Option<bool>,
+) -> Result<archive::Entry, String> {
+    blocking(move || archive::archive_and_close(&app, &workspace_id, close_group.unwrap_or(false)))
+        .await
+}
+
+/// Reopen the archived space in Herdr and `claude --resume` each session in its own tab.
+#[tauri::command]
+async fn archive_restore(app: AppHandle, id: String) -> Result<Value, String> {
+    blocking(move || archive::restore(&app, &id)).await
+}
+
+/// Forget the entry; with `remove_worktree`, also `git worktree remove` its linked checkout.
+#[tauri::command]
+async fn archive_delete(
+    app: AppHandle,
+    id: String,
+    remove_worktree: Option<bool>,
+) -> Result<Value, String> {
+    blocking(move || archive::delete(&app, &id, remove_worktree.unwrap_or(false))).await
+}
+
+#[tauri::command]
+async fn archive_summarize(app: AppHandle, id: String) -> Result<(), String> {
+    archive::resummarize(&app, &id)
 }
 
 /// `cswap list --json`, as the accounts section needs it.
@@ -607,9 +650,16 @@ pub fn run() {
         .manage(PendingUpdate(std::sync::Mutex::new(None)))
         .setup(|app| {
             init_tracing(app.handle());
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir());
+            app.manage(archive::Store::open(&data_dir));
             match &app.state::<CswapPath>().0 {
                 Some(path) => tracing::info!(path = %path.display(), "cswap resolved"),
-                None => tracing::info!("cswap not found in PATH or ~/.local/bin; accounts disabled"),
+                None => {
+                    tracing::info!("cswap not found in PATH or ~/.local/bin; accounts disabled")
+                }
             }
             start_event_pump(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
@@ -633,6 +683,11 @@ pub fn run() {
             update_install,
             cswap_list,
             cswap_switch,
+            archive_list,
+            archive_close,
+            archive_restore,
+            archive_delete,
+            archive_summarize,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Netrunner Deck");
