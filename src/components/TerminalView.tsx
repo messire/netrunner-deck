@@ -467,11 +467,17 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
    * to the end of the prompt line as an estimate.
    */
   let inputWriting = false;
+  let lastInputKey = "";
   let inputPending: [string[], string[], PaneCursor | null | undefined, number] | null = null;
   function renderInput(raw: string[], plain: string[], cursor: PaneCursor | null | undefined, boxAt: number) {
     if (inputWriting) { inputPending = [raw, plain, cursor, boxAt]; return; }
     while (raw.length && plain[plain.length - 1].trim() === "") { raw.pop(); plain.pop(); }
     const rows = raw.length;
+    // Same box as last time (text and cursor): leave it alone — reset+write
+    // would blank it for a frame on every snapshot while the agent works.
+    const key = `${inputTerm.cols}|${cursor?.line ?? "-"}|${cursor?.col ?? "-"}|${cursor?.visible ?? "-"}|${cursor?.shape ?? "-"}|${boxAt}|${raw.join("\n")}`;
+    if (key === lastInputKey) return;
+    lastInputKey = key;
     inputHost.style.display = rows ? "" : "none";
     if (!rows) { inputTerm.reset(); return; }
     if (inputTerm.rows !== rows) inputTerm.resize(inputTerm.cols, rows);
@@ -563,6 +569,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
 
   /** Forget what is on screen so the next snapshot repaints from scratch. */
   function invalidate() {
+    lastInputKey = "";
     rendered = [];
     renderedKinds = [];
     renderedPlain = [];
@@ -633,10 +640,15 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
       const size = `${host.clientWidth}x${host.clientHeight}`;
       if (size === lastSize) return;
       lastSize = size;
+      const colsBefore = term.cols;
+      const atBottom = term.buffer.active.viewportY >= term.buffer.active.baseY;
       fitCols();
       note(`resize ${size} → ${term.cols}x${term.rows}`);
       // New width → different wrapping and rule lengths: repaint from scratch.
-      if (last) { invalidate(); render(last, false); }
+      // A height-only change (the input box grew or shrank) keeps the buffer:
+      // xterm just shows more or fewer rows, nothing is rewritten.
+      if (term.cols !== colsBefore) { if (last) { invalidate(); render(last, false); } }
+      else if (atBottom) term.scrollToBottom();
     });
     ro.observe(host);
     // Self-rescheduling poll so the period can relax once output events arrive.
