@@ -145,7 +145,12 @@ export default function App() {
       });
   const archiveRestore = (id: string) =>
     archiveRun(id, api.archiveRestore(id).then((r) => { setView("deck"); refetchTree(); return r; }));
-  const archiveDelete = (id: string, removeWorktree: boolean) => archiveRun(id, api.archiveDelete(id, removeWorktree));
+  // Several sessions (a worktree or a whole repo) go one after another; the
+  // table refreshes once at the end. The first failure stops the rest.
+  const archiveDeleteMany = (plan: { id: string; removeWorktree: boolean }[]) => {
+    if (!plan.length) return;
+    archiveRun(plan[0].id, (async () => { for (const step of plan) await api.archiveDelete(step.id, step.removeWorktree); })());
+  };
   const archiveSummarize = (id: string) => archiveRun(id, api.archiveSummarize(id));
 
   const [menu, setMenu] = createSignal<MenuState | null>(null);
@@ -320,7 +325,7 @@ export default function App() {
       </header>
 
       <Show when={view() === "archive"}>
-        <ArchiveView entries={archive()} busy={archiveBusy()} error={archiveError()} onRestore={archiveRestore} onDelete={archiveDelete} onSummarize={archiveSummarize} onRefresh={() => refetchArchive()} />
+        <ArchiveView entries={archive()} busy={archiveBusy()} error={archiveError()} onRestore={archiveRestore} onDeleteMany={archiveDeleteMany} onSummarize={archiveSummarize} onRefresh={() => refetchArchive()} />
       </Show>
       <Show when={view() === "deck"}>
       <Sidebar
