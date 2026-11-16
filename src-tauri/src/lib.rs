@@ -407,7 +407,7 @@ fn resolve_cswap() -> Option<PathBuf> {
 
 #[tauri::command]
 async fn archive_list(app: AppHandle) -> Result<Vec<archive::Entry>, String> {
-    Ok(app.state::<archive::Store>().list())
+    blocking(move || Ok::<_, String>(archive::list(&app))).await
 }
 
 /// Remember the workspace (label, checkout, Claude session ids), close it in
@@ -417,7 +417,7 @@ async fn archive_close(
     app: AppHandle,
     workspace_id: String,
     close_group: Option<bool>,
-) -> Result<archive::Entry, String> {
+) -> Result<Value, String> {
     blocking(move || archive::archive_and_close(&app, &workspace_id, close_group.unwrap_or(false)))
         .await
 }

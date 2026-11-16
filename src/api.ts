@@ -113,11 +113,15 @@ const count = (name: string) => {
 /** A newer signed release the updater found (M5). */
 export type UpdateInfo = { version: string; current: string; notes: string | null; date: string | null };
 
-/** Session archive ("cold storage"): a closed space that can be reopened with `claude --resume`. */
-export interface ArchivedSession { tab_label: string; agent?: string | null; session_id?: string | null; cwd: string }
+/**
+ * Session archive ("cold storage"): every Claude session on this computer that
+ * is not open in Herdr — scanned from Herdr's session snapshots and Claude's
+ * transcripts, so nothing has to be archived first. Keyed by session ids.
+ */
+export interface ArchivedSession { tab_label: string; agent?: string | null; session_id?: string | null; cwd: string; resumable: boolean }
 export interface ArchiveEntry {
   id: string;
-  archived_at_ms: number;
+  source: "herdr" | "claude";
   label: string;
   repo_name?: string | null;
   branch?: string | null;
@@ -125,10 +129,13 @@ export interface ArchiveEntry {
   repo_root?: string | null;
   linked_worktree: boolean;
   sessions: ArchivedSession[];
+  last_active_ms: number;
+  prompt?: string | null;
+  prompts: number;
   summary?: string | null;
   summary_state: "pending" | "ready" | "failed" | "none";
   summary_error?: string | null;
-  status: "archived" | "restored";
+  status: "closed" | "restored";
   restored_at_ms?: number | null;
   restored_workspace_id?: string | null;
 }
@@ -158,7 +165,7 @@ export const api = {
   updateCheck: () => invoke<UpdateInfo | null>("update_check"),
   updateInstall: () => invoke<void>("update_install"),
   archiveList: () => invoke<ArchiveEntry[]>("archive_list"),
-  archiveClose: (workspaceId: string, closeGroup = false) => invoke<ArchiveEntry>("archive_close", { workspaceId, closeGroup }),
+  archiveClose: (workspaceId: string, closeGroup = false) => invoke<{ id: string | null }>("archive_close", { workspaceId, closeGroup }),
   archiveRestore: (id: string) => invoke<{ workspace_id: string; resumed: number }>("archive_restore", { id }),
   archiveDelete: (id: string, removeWorktree = false) => invoke<{ removed_worktree: string | null }>("archive_delete", { id, removeWorktree }),
   archiveSummarize: (id: string) => invoke<void>("archive_summarize", { id }),

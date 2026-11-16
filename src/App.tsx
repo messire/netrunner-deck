@@ -290,7 +290,7 @@ export default function App() {
       <header class="titlebar" data-tauri-drag-region>
         <div class="vtabs">
           <button class={`vtab ${view() === "deck" ? "on" : ""}`} onClick={() => setView("deck")}>▞ NETRUNNER DECK</button>
-          <button class={`vtab ${view() === "archive" ? "on" : ""}`} onClick={() => setView("archive")} title="closed spaces kept for restore">▞ ARCHIVE{(archive() ?? []).some((e) => e.status === "archived") ? ` · ${(archive() ?? []).filter((e) => e.status === "archived").length}` : ""}</button>
+          <button class={`vtab ${view() === "archive" ? "on" : ""}`} onClick={() => setView("archive")} title="closed spaces kept for restore">▞ ARCHIVE{(archive() ?? []).length ? ` · ${(archive() ?? []).filter((e) => e.status === "closed").length}` : ""}</button>
         </div>
         <span class="micro">herdr client · {offline() ? "OFFLINE" : "LINK OK"}</span>
         <Show when={actionError()}>{(m) => <span class="micro toast" title={m()}>✕ {m()}</span>}</Show>
