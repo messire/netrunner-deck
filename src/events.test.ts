@@ -198,3 +198,14 @@ describe("throttleLeading", () => {
     expect(() => { t.cancel(); t.cancel(); }).not.toThrow();
   });
 });
+
+describe("outputPaneOf", () => {
+  it("names the pane of an output event, for any pane, and nothing else", async () => {
+    const { outputPaneOf } = await import("./events");
+    expect(outputPaneOf({ event: "pane_output_changed", data: { type: "pane_output_changed", pane_id: "p9", revision: 4 } })).toBe("p9");
+    expect(outputPaneOf({ event: "pane.output_changed", data: { pane_id: "p9" } })).toBe("p9");
+    expect(outputPaneOf({ event: "tab_created", data: { pane_id: "p9" } })).toBeNull();
+    expect(outputPaneOf({ event: "pane_output_changed", data: {} })).toBeNull();
+    expect(outputPaneOf(null)).toBeNull();
+  });
+});

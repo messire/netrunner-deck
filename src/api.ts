@@ -37,6 +37,8 @@ export interface Pane {
   title?: string | null;
   agent_status: AgentStatus;
   tokens?: Record<string, string>;
+  /** The agent's own session identity (Claude Code: `{kind:"id", value:<uuid>}`), when Herdr detected one. */
+  agent_session?: { source?: string; agent?: string; kind?: string; value?: string } | null;
 }
 export interface Agent {
   terminal_id: string;
@@ -77,7 +79,7 @@ export interface CswapList { activeAccountNumber: number; accounts: CswapAccount
  */
 export type HerdrEvent = { event: string; [k: string]: unknown };
 
-export type TreeAction = "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.close" | "pane.split";
+export type TreeAction = "workspace.create" | "workspace.close" | "workspace.rename" | "tab.create" | "tab.close" | "tab.rename" | "pane.close" | "pane.split" | "pane.rename";
 export type ActionOptions = { cwd?: string; label?: string; close_group?: boolean; direction?: "right" | "down" };
 
 /**
@@ -143,6 +145,24 @@ export interface ArchiveEntry {
 /** A user-made group of repositories in the ARCHIVE tree; repos in no group are in the main group. */
 export interface RepoGroup { id: string; name: string; repos: string[]; hidden: boolean }
 
+/** One Claude Code configuration file of a repository (HARNESS view). */
+export interface HarnessItem { kind: string; name: string; path: string; size: number; mtime_ms: number; local: boolean; description?: string | null; tags: string[]; argument_hint?: string | null }
+export interface HarnessRepo { key: string; name: string; root: string; personal: boolean; exists: boolean; items: HarnessItem[] }
+
+/** A harness entry pinned to the QUICKHACKS panel. */
+export interface Hack { id: string; name: string; kind: string; source: "personal" | "project"; repo_key?: string | null; repo_name?: string | null; path: string; description?: string | null; argument_hint?: string | null }
+export interface HacksSaved { hacks: Hack[]; collapsed: boolean }
+export interface WorktreeInfo { path: string; branch?: string | null; is_bare: boolean; is_detached: boolean; is_prunable: boolean; is_linked_worktree: boolean; open_workspace_id?: string | null; label: string }
+export interface QuickhackEvent { run: string; stage: "workspace" | "shell" | "agent" | "prompt" | "done" | "error"; detail: unknown }
+
+/** UPLINK: git state of a checkout and what a pull brought in. */
+export interface GitSync { branch?: string | null; upstream?: string | null; behind: number; ahead: number; dirty: boolean }
+export interface UplinkCommit { sha: string; title: string; pr?: number | null; url?: string | null; author: string; at_ms: number }
+export interface Update { id: string; repo: string; path: string; branch: string; from: string; to: string; at_ms: number; commits: UplinkCommit[]; seen: boolean }
+
+/** A line-aligned slice of a Claude Code transcript (`~/.claude/projects/…/<session>.jsonl`). */
+export interface TranscriptChunk { session_id: string; path: string; start: number; end: number; len: number; lines: string[] }
+
 export const api = {
   ping: () => invoke<{ version: string; protocol: number }>("herdr_ping"),
   tree: () => { count("herdr_tree"); return invoke<Tree>("herdr_tree"); },
@@ -175,6 +195,42 @@ export const api = {
   archiveGroupsGet: () => invoke<RepoGroup[]>("archive_groups_get"),
   archiveGroupsSet: (groups: RepoGroup[]) => invoke<RepoGroup[]>("archive_groups_set", { groups }),
   onArchive: (cb: () => void): Promise<UnlistenFn> => listen("deck://archive", () => cb()),
+  /** http(s) links from chat/harness markdown open in the system browser, never in the webview. */
+  openExternal: (url: string) => invoke<void>("open_external", { url }),
+  uplinkSync: (paths: string[]) => invoke<Record<string, GitSync>>("uplink_sync", { paths }),
+  uplinkFetch: (roots: string[]) => invoke<Record<string, string>>("uplink_fetch", { roots }),
+  uplinkPull: (repo: string, path: string) => invoke<Update>("uplink_pull", { repo, path }),
+  uplinkList: () => invoke<{ updates: Update[] }>("uplink_list"),
+  uplinkSeen: () => invoke<{ updates: Update[] }>("uplink_seen"),
+  uplinkRemove: (id: string) => invoke<{ updates: Update[] }>("uplink_remove", { id }),
+  onUplink: (cb: () => void): Promise<UnlistenFn> => listen("deck://uplink", () => cb()),
+  /** Sidebar "+": open a repository folder as a workspace; a new linked worktree in a repository. */
+  repoOpen: (path: string, label?: string) => invoke<{ workspace_id: string; pane_id: string }>("repo_open", { path, label: label ?? null }),
+  worktreeCreate: (cwd: string, branch: string, base?: string) => invoke<{ workspace_id: string; pane_id: string; path?: string | null }>("worktree_create", { cwd, branch, base: base ?? null }),
+  quickhacksGet: () => invoke<HacksSaved>("quickhacks_get"),
+  quickhacksSet: (saved: HacksSaved) => invoke<HacksSaved>("quickhacks_set", { saved }),
+  /** `worktree.list` of the repository containing `cwd`. */
+  quickhackWorktrees: (cwd: string) => invoke<{ worktrees: WorktreeInfo[]; source?: { repo_root?: string } }>("quickhack_worktrees", { cwd }),
+  /** Open a session in `cwd`, start `agent`, send `prompt`; progress on `deck://quickhack` keyed by `run`. */
+  quickhackLaunch: (run: string, launch: { cwd: string; repo_root: string; label?: string; agent: string; prompt: string }) =>
+    invoke<{ workspace_id: string; pane_id: string }>("quickhack_launch", { run, launch }),
+  onQuickhack: (cb: (e: QuickhackEvent) => void): Promise<UnlistenFn> => listen<QuickhackEvent>("deck://quickhack", (e) => cb(e.payload)),
+  /** Personal (`~/.claude`) first, then the given repositories' Claude Code files. */
+  harnessScan: (repos: { key: string; name: string; root: string }[]) => invoke<HarnessRepo[]>("harness_scan", { repos }),
+  harnessRead: (path: string) => invoke<string>("harness_read", { path }),
+  /** Tag the untagged items of one repo (shadow claude -p → `tags:` in each file); false when already running. */
+  harnessClassify: (key: string, items: HarnessItem[]) => invoke<boolean>("harness_classify", { key, items }),
+  onHarness: (cb: (e: { key: string; written?: number; error?: string }) => void): Promise<UnlistenFn> =>
+    listen<{ key: string; written?: number; error?: string }>("deck://harness", (e) => cb(e.payload)),
+  /** `from`: continue after this byte offset; `tail`: only the last N bytes (initial load). */
+  transcriptRead: (sessionId: string, from?: number, tail?: number) =>
+    invoke<TranscriptChunk>("transcript_read", { sessionId, from: from ?? null, tail: tail ?? null }),
+  /** Transcript modified time (ms) per session id; sessions without a transcript are absent. */
+  transcriptMtimes: (sessionIds: string[]) => invoke<Record<string, number>>("transcript_mtimes", { sessionIds }),
+  /** Tell the poller which transcript to watch for growth (`null` = none). */
+  transcriptWatch: (sessionId: string | null) => invoke<void>("transcript_watch", { sessionId }),
+  onTranscript: (cb: (e: { session_id: string; len: number }) => void): Promise<UnlistenFn> =>
+    listen<{ session_id: string; len: number }>("deck://transcript", (e) => cb(e.payload)),
   cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
   cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
   // The payload is whatever Herdr sent; `routeEvent` validates the shape.

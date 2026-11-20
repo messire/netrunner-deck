@@ -46,8 +46,11 @@ suite("archive helpers", () => {
     const a = base({ id: "a", last_active_ms: 1 }), b = base({ id: "b", last_active_ms: 2 }), r = base({ id: "r", last_active_ms: 3, status: "restored" });
     expect(sorted([r, a, b]).map((e) => e.id)).toEqual(["b", "a", "r"]);
   });
-  it("matches searches every word across label, repo, branch, cwd, prompt, summary and id", () => {
+  it("matches searches every word across label, repo, branch, cwd, prompt, summary, id and tab names", () => {
     expect(matches(base(), "atlas recover")).toBe(true);
+    const named = base();
+    named.sessions = named.sessions.length ? named.sessions.map((s) => ({ ...s, tab_label: "Pack coordination" })) : [{ tab_label: "Pack coordination", agent: "claude", session_id: null, cwd: "", resumable: false }];
+    expect(matches(named, "coordination")).toBe(true);
     expect(matches(base(), "мониторинг")).toBe(true);
     expect(matches(base(), "7f0cff8f")).toBe(true);
     expect(matches(base(), "nope")).toBe(false);

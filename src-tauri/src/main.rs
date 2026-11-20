@@ -1,11 +1,14 @@
 // No console window in any build: tracing goes to `<app log dir>/deck.log`
 // (lib.rs `init_tracing`). A debug build started from a terminal (`npm run
-// tauri dev`) attaches to that terminal so the log is still visible there.
+// tauri dev`) attaches to that terminal so the log is still visible there —
+// unless `DECK_DETACH=1`, which a launcher sets so Deck outlives its window.
 #![windows_subsystem = "windows"]
 
 fn main() {
     #[cfg(all(windows, debug_assertions))]
-    attach_parent_console();
+    if std::env::var_os("DECK_DETACH").is_none() {
+        attach_parent_console();
+    }
     netrunner_deck_lib::run()
 }
 

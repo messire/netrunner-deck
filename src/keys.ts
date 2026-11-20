@@ -161,3 +161,9 @@ export function specialKeyDown(e: KeyDownLike, hasSelection = false): SpecialKey
 
 /** Clipboard text as a terminal paste: line breaks become `\r`, like xterm's own paste. */
 export const pasteText = (text: string): string => text.replace(/\r?\n/g, "\r");
+
+/**
+ * The key Claude Code reads a clipboard image with: Ctrl+V on macOS/Linux,
+ * Alt+V on Windows, where terminals keep Ctrl+V for themselves.
+ */
+export const IMAGE_PASTE_KEY: string = /win/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "alt+v" : "ctrl+v";

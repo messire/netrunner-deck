@@ -18,3 +18,7 @@ src/__fixtures__/pane-read/*.txt
 src/__fixtures__/pane-read/_*
 !src/__fixtures__/pane-read/synthetic-*.ans
 src/__fixtures__/pane-read/*.err
+
+# local chat history and agent bundles
+.local/
+claude-agents.tgz

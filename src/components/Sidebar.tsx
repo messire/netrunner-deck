@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
-import { accountLabel, usageOf, type AgentStatus, type CswapAccount, type CswapList, type Pane, type Tab, type Tree, type Workspace } from "../api";
+import { accountLabel, usageOf, type AgentStatus, type CswapAccount, type CswapList, type GitSync, type Pane, type Tab, type Tree, type Workspace } from "../api";
 import {
   buildTree, ctxPct, defaultOpen, firstPane, loadOpen, saveOpen, waiting,
   type RepoNode, type RootNode, type SessionNode, type SpaceNode, type TabNode,
@@ -19,13 +19,23 @@ interface Props {
   onSelectPane: (paneId: string) => void;
   onSwitchAccount: (number: number) => void;
   onRefreshAccounts: () => void;
+  /** Last message/output time per pane (ms); orders the session map, newest first. */
+  activity?: Map<string, number>;
+  /** Clock for the map's active/idle colouring (ticks once a minute). */
+  now?: number;
+  /** Git behind/ahead per checkout path (UPLINK). */
+  gitSync?: Record<string, GitSync>;
   /** Right-click menus; App owns the actions. */
   onWorkspaceMenu: (e: MouseEvent, w: Workspace) => void;
   onTabMenu: (e: MouseEvent, t: Tab) => void;
   onPaneMenu: (e: MouseEvent, pane: Pane) => void;
   onAccountMenu: (e: MouseEvent, a: CswapAccount) => void;
   /** Create at any level, like Herdr: space (optionally cloned from one), tab, split. */
-  onNewSpace: (sourceWorkspaceId?: string) => void;
+  /** "+" next to SESSIONS: open a repository as a new space. */
+  onNewRepo: () => void;
+  /** "+" on a repository row: a new linked worktree inside it (`root` = its main checkout). */
+  onNewWorktree: (repoLabel: string, root: string) => void;
+  /** "+" on a space (worktree) row: a new tab/session in it. */
   onNewTab: (workspaceId: string) => void;
   onSplit: (paneId: string) => void;
 }
@@ -44,8 +54,32 @@ const storage = () => (typeof localStorage === "undefined" ? undefined : localSt
  * every level; urgency is a pinned WAITING strip above the tree, not a sort.
  */
 export default function Sidebar(p: Props) {
+  // Folded sections (a click on the plate toggles; remembered per section).
+  const folded = (key: string) => { try { return localStorage.getItem(`deck.${key}Folded`) === "1"; } catch { return false; } };
+  const remember = (key: string, v: boolean) => { try { localStorage.setItem(`deck.${key}Folded`, v ? "1" : "0"); } catch { /* storage unavailable */ } };
+  const [accountsFolded, setAccountsFoldedRaw] = createSignal(folded("accounts"));
+  const setAccountsFolded = (v: boolean) => { setAccountsFoldedRaw(v); remember("accounts", v); };
+  const [sessionsFolded, setSessionsFoldedRaw] = createSignal(folded("sessions"));
+  const setSessionsFolded = (v: boolean) => { setSessionsFoldedRaw(v); remember("sessions", v); };
+  const [mapFolded, setMapFoldedRaw] = createSignal(folded("map"));
+  const setMapFolded = (v: boolean) => { setMapFoldedRaw(v); remember("map", v); };
   const roots = createMemo(() => buildTree(p.tree));
+  const normPath = (x: string) => x.replace(/^\\\\\?\\/, "").replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
+  const gitOf = (s: SpaceNode): GitSync | undefined => {
+    const path = s.workspace.worktree?.checkout_path;
+    if (!path || !p.gitSync) return undefined;
+    const key = Object.keys(p.gitSync).find((k) => normPath(k) === normPath(path));
+    return key ? p.gitSync[key] : undefined;
+  };
   const waits = createMemo(() => waiting(roots()));
+  // Totals for the folded SESSIONS plate: repos · worktrees (spaces) · sessions (panes with an agent).
+  const totals = createMemo(() => {
+    const t = p.tree;
+    const repos = roots().filter((r) => r.kind === "repo").length;
+    const spaces = t?.workspaces.length ?? 0;
+    const sessions = t?.panes.filter((x) => x.agent).length ?? 0;
+    return { repos, spaces, sessions };
+  });
 
   // Manual open/closed overrides; everything else follows `defaultOpen`.
   const [open, setOpen] = createSignal<Record<string, boolean>>(loadOpen(storage()));
@@ -113,7 +147,13 @@ export default function Sidebar(p: Props) {
         <span class="nm">{q.s.workspace.worktree?.branch ?? q.s.workspace.label}</span>
         <Show when={q.s.root}><span class="badge root" title="primary checkout">root</span></Show>
         <Show when={q.s.linked}><span class="badge" title="linked worktree">⎇</span></Show>
-        <button class="add" title="new tab (tab.create)" onClick={(e) => stop(e, () => p.onNewTab(q.s.id))}>+</button>
+        <Show when={gitOf(q.s)}>{(g) => (
+          <>
+            <Show when={g().behind}><span class="git behind" title={`${g().behind} commit(s) behind ${g().upstream ?? "upstream"} · right-click → PULL`}>↓{g().behind}</span></Show>
+            <Show when={g().ahead}><span class="git ahead" title={`${g().ahead} commit(s) ahead of ${g().upstream ?? "upstream"}`}>↑{g().ahead}</span></Show>
+          </>
+        )}</Show>
+        <button class="add" title="new session in this worktree (tab.create)" onClick={(e) => stop(e, () => p.onNewTab(q.s.id))}>+</button>
         <span class="cnt">{q.s.tabs.length}</span>
       </div>
       <Show when={isOpen(q.s)}>
@@ -127,8 +167,8 @@ export default function Sidebar(p: Props) {
       <div class="row repo" onClick={(e) => toggle(q.r, e)}>
         <Caret node={q.r} color="yel" />
         <span class="nm">{q.r.label}</span>
-        <button class="add" title="new space in this repo (workspace.create)"
-                onClick={(e) => stop(e, () => p.onNewSpace((q.r.spaces.find((s) => s.root) ?? q.r.spaces[0])?.id))}>+</button>
+        <button class="add" title="new worktree in this repo (worktree.create)"
+                onClick={(e) => stop(e, () => { const root = (q.r.spaces.find((s) => s.root) ?? q.r.spaces[0])?.workspace.worktree?.checkout_path; if (root) p.onNewWorktree(q.r.label, root); })}>+</button>
         <span class="cnt">{q.r.spaces.length} · {q.r.agents}</span>
       </div>
       <Show when={isOpen(q.r)}>
@@ -139,7 +179,17 @@ export default function Sidebar(p: Props) {
 
   return (
     <aside class="side">
-      <div class="plate-row"><div class="plate">Sessions</div><button class="plus" title="new space (workspace.create)" onClick={() => p.onNewSpace()}>+</button></div>
+      <div class="plate-row">
+        <div class="plate click" title="click to fold / unfold" onClick={() => setSessionsFolded(!sessionsFolded())}>Sessions {sessionsFolded() ? "▸" : "▾"}</div>
+        <button class="plus" title="open a repository (new space)" onClick={() => p.onNewRepo()}>+</button>
+        <Show when={sessionsFolded()}>
+          <div class="fold-stats" onClick={() => setSessionsFolded(false)}>
+            <span class="y"><b>{totals().repos}</b> repo</span><span class="g"><b>{totals().spaces}</b> worktree</span><span class="d"><b>{totals().sessions}</b> session</span>
+            <Show when={waits().length}><span class="o"><b>{waits().length}</b> waiting</span></Show>
+          </div>
+        </Show>
+      </div>
+      <Show when={!sessionsFolded()}>
 
       <Show when={waits().length > 0}>
         <div class="pin">
@@ -164,9 +214,24 @@ export default function Sidebar(p: Props) {
         <div class="tree">
           <For each={roots()}>{(r) => (r.kind === "repo" ? <RepoRow r={r} /> : <SpaceRow s={r} />)}</For>
         </div>
+        <div class="lg tree-lg"><span class="y">■ REPO</span><span class="g">■ WORKTREE</span><span class="d">■ SESSION</span><span>□ SHELL</span></div>
+      </Show>
       </Show>
 
-      <div class="plate" style="margin-top:14px">Accounts</div>
+      <div class="plate click" style="margin-top:14px" title="click to fold / unfold" onClick={() => setAccountsFolded(!accountsFolded())}>Accounts {accountsFolded() ? "▸" : "▾"}</div>
+      <Show when={accountsFolded() && p.accounts}>
+        {(acc) => {
+          const active = () => acc().accounts.find((a) => a.active);
+          const u = () => (active() ? usageOf(active()!) : null);
+          return (
+            <div class="bio fold" onClick={() => setAccountsFolded(false)} title={active()?.email ?? ""}>
+              <div class="hd"><span class="acc">{active() ? accountLabel(active()!) : "—"}</span>
+                <span class="tag">5H <b>{u()?.five ?? "--"}</b> · 7D <b>{u()?.week ?? "--"}</b></span></div>
+            </div>
+          );
+        }}
+      </Show>
+      <Show when={!accountsFolded()}>
       <Show when={p.accountsError}>
         {(e) => <div class="row micro" style="color:var(--red)" title={e()}>cswap недоступен: {e()}</div>}
       </Show>
@@ -187,12 +252,10 @@ export default function Sidebar(p: Props) {
                   <Show when={failed()}>{(m) => <div class="micro" style="color:var(--red)" title={m()}>switch failed: {m()}</div>}</Show>
                   <Quota label="5H" pct={u.five} />
                   <Quota label="7D" pct={u.week} />
-                  <For each={u.scoped}>{(s) => <Quota label={s.name.slice(0, 3).toUpperCase()} pct={s.pct} />}</For>
                   <Show when={a.active}>
                     <div class="cool">
                       <div><div class="ic">⟳</div><div class="t">{u.fiveReset ?? "--"}</div><div class="l">5H RESET</div></div>
                       <div><div class="ic">⟳</div><div class="t">{u.weekReset ?? "--"}</div><div class="l">7D RESET</div></div>
-                      <For each={u.scoped}>{(s) => <div><div class="ic">◈</div><div class="t">{s.reset ?? "--"}</div><div class="l">{s.name.toUpperCase()}</div></div>}</For>
                     </div>
                   </Show>
                 </div>
@@ -201,8 +264,9 @@ export default function Sidebar(p: Props) {
           </For>
         )}
       </Show>
+      </Show>
 
-      <SessionMap tree={p.tree} repos={roots().filter((r) => r.kind === "repo").length} selectedPane={p.selectedPane} onSelectPane={p.onSelectPane} />
+      <SessionMap tree={p.tree} repos={roots().filter((r) => r.kind === "repo").length} selectedPane={p.selectedPane} activity={p.activity} now={p.now} onSelectPane={p.onSelectPane} folded={mapFolded()} onFold={setMapFolded} />
     </aside>
   );
 }
@@ -218,30 +282,62 @@ function Quota(p: { label: string; pct: number | null }) {
   );
 }
 
-function SessionMap(p: { tree?: Tree; repos: number; selectedPane: string | null; onSelectPane: (id: string) => void }) {
+/** red = working · yellow = waiting for you · teal = stopped recently · dark = idle · outline = shell. */
+function cellClass(c: { pane?: Pane; status: AgentStatus; last: number }, now: number): string {
+  if (!c.pane?.agent) return "";
+  if (c.status === "working") return "w";
+  if (c.status === "blocked") return "b";
+  return c.last && now - c.last < ACTIVE_MS ? "a" : "i";
+}
+
+/** An agent that stopped less than this long ago is "active" (teal), later "idle" (dark). */
+const ACTIVE_MS = 15 * 60_000;
+
+function SessionMap(p: { tree?: Tree; repos: number; selectedPane: string | null; activity?: Map<string, number>; now?: number; onSelectPane: (id: string) => void; folded: boolean; onFold: (v: boolean) => void }) {
   const cells = () => {
     const t = p.tree;
     if (!t) return [];
-    return t.tabs.map((tab) => {
+    const act = p.activity ?? new Map<string, number>();
+    return t.tabs.map((tab, order) => {
       const panes = t.panes.filter((x) => x.tab_id === tab.tab_id);
       const agent = panes.find((x) => x.agent);
       const ws = t.workspaces.find((w) => w.workspace_id === tab.workspace_id);
-      return { tab, pane: agent ?? panes[0], status: tab.agent_status, title: `${ws?.label ?? ""} / ${tab.label}` };
-    });
+      const last = Math.max(0, ...panes.map((x) => act.get(x.pane_id) ?? 0));
+      return { tab, order, last, pane: agent ?? panes[0], status: tab.agent_status, title: `${ws?.label ?? ""} / ${tab.label}` };
+    // Most recent output first; tabs that have not spoken since Deck started keep Herdr's order after them.
+    }).sort((a, b) => b.last - a.last || a.order - b.order);
   };
+  // Folded: the same cells grouped by state, as counts.
+  const byState = createMemo(() => {
+    const now = p.now ?? Date.now();
+    const n: Record<string, number> = { w: 0, b: 0, a: 0, i: 0, "": 0 };
+    for (const c of cells()) n[cellClass(c, now)] += 1;
+    return n;
+  });
   return (
-    <div class="map">
-      <div class="hd"><span>SESSION MAP</span>
-        <span class="micro">{p.repos} REPOS · {p.tree?.workspaces.length ?? 0} SPACES · {p.tree?.tabs.length ?? 0} TABS · {p.tree?.agents.length ?? 0} AGENTS</span></div>
+    <>
+      <div class="plate-row">
+        <div class="plate click" style="margin-top:14px" title="click to fold / unfold" onClick={() => p.onFold(!p.folded)}>Session map {p.folded ? "▸" : "▾"}</div>
+        <Show when={p.folded}>
+          <div class="fold-stats map-stats" style="margin-top:14px" onClick={() => p.onFold(false)}>
+            <span class="r"><b>{byState().w}</b> working</span><span class="y"><b>{byState().b}</b> waiting</span><span class="t"><b>{byState().a}</b> active</span><span class="m"><b>{byState().i}</b> idle</span><span><b>{byState()[""]}</b> shell</span>
+          </div>
+        </Show>
+      </div>
+      <Show when={!p.folded}>
+      <div class="map">
+        <div class="hd"><span class="micro">{p.repos} REPOS · {p.tree?.workspaces.length ?? 0} SPACES · {p.tree?.tabs.length ?? 0} TABS · {p.tree?.agents.length ?? 0} AGENTS</span></div>
       <div class="cells">
         <For each={cells()}>
           {(c) => (
-            <b class={`${c.pane?.agent ? statusClass(c.status) || "i" : ""} ${c.pane?.pane_id === p.selectedPane ? "cur" : ""}`}
-               title={c.title} onClick={() => c.pane && p.onSelectPane(c.pane.pane_id)} />
+            <b class={`${cellClass(c, p.now ?? Date.now())} ${c.pane?.pane_id === p.selectedPane ? "cur" : ""}`}
+               title={`${c.title}${c.last ? ` · ${new Date(c.last).toLocaleString([], { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}` : ""}`} onClick={() => c.pane && p.onSelectPane(c.pane.pane_id)} />
           )}
         </For>
       </div>
-      <div class="lg"><span class="r">■ WORKING</span><span class="o">■ WAITING</span><span class="t">■ IDLE</span><span>□ SHELL</span></div>
-    </div>
+      <div class="lg"><span class="r">■ WORKING</span><span class="y">■ WAITING</span><span class="t">■ ACTIVE</span><span class="m">■ IDLE</span><span>□ SHELL</span></div>
+      </div>
+      </Show>
+    </>
   );
 }
