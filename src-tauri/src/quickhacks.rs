@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
 use crate::archive::str_at;
-use crate::herdr;
+use crate::runtime::{self, Runtime};
 
 pub const EVENT: &str = "deck://quickhack";
 
@@ -84,12 +84,8 @@ impl Store {
 }
 
 /// Worktrees of the repository that contains `cwd` (main checkout first).
-pub fn worktrees(cwd: &str) -> Result<Value, String> {
-    herdr::call(
-        "worktree.list",
-        json!({ "cwd": cwd, "trust_repository": true }),
-    )
-    .map_err(|e| e.to_string())
+pub fn worktrees(rt: &dyn Runtime, cwd: &str) -> Result<Value, String> {
+    rt.worktree_list(cwd).map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -122,14 +118,23 @@ fn last_line(text: &str) -> String {
 }
 
 /// Poll the pane until `ready(screen)` holds or `limit` passes; true when it held.
-fn wait_for(pane: &str, limit: Duration, source: &str, ready: impl Fn(&str) -> bool) -> bool {
+fn wait_for(
+    rt: &dyn Runtime,
+    pane: &str,
+    limit: Duration,
+    source: &str,
+    ready: impl Fn(&str) -> bool,
+) -> bool {
     let t0 = Instant::now();
     while t0.elapsed() < limit {
         std::thread::sleep(Duration::from_millis(350));
-        if let Ok(v) = herdr::call(
-            "pane.read",
-            json!({ "pane_id": pane, "source": source, "format": "text", "lines": 40 }),
-        ) {
+        if let Ok(v) = rt.pane_read(runtime::PaneRead {
+            pane_id: pane.to_string(),
+            source: source.to_string(),
+            lines: 40,
+            format: "text".into(),
+            strip_ansi: None,
+        }) {
             if let Some(text) = str_at(&v, &["read", "text"]) {
                 if ready(text) {
                     return true;
@@ -140,14 +145,9 @@ fn wait_for(pane: &str, limit: Duration, source: &str, ready: impl Fn(&str) -> b
     false
 }
 
-fn type_line(pane: &str, text: &str) -> Result<(), String> {
-    herdr::call("pane.send_text", json!({ "pane_id": pane, "text": text }))
-        .and_then(|_| {
-            herdr::call(
-                "pane.send_keys",
-                json!({ "pane_id": pane, "keys": ["enter"] }),
-            )
-        })
+fn type_line(rt: &dyn Runtime, pane: &str, text: &str) -> Result<(), String> {
+    rt.pane_send_text(pane, text)
+        .and_then(|_| rt.pane_send_keys(pane, &["enter"]))
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -173,8 +173,9 @@ pub fn launch(app: AppHandle, run: String, l: Launch) -> Result<Value, String> {
     if !Path::new(&l.cwd).is_dir() {
         return Err(format!("directory is gone: {}", l.cwd));
     }
+    let rt = runtime::of(&app);
     let (workspace_id, pane_id) =
-        open_session_dir(&l.cwd, Some(&l.repo_root), l.label.as_deref(), true)?;
+        open_session_dir(&*rt, &l.cwd, Some(&l.repo_root), l.label.as_deref(), true)?;
     emit(
         &app,
         &run,
@@ -184,18 +185,30 @@ pub fn launch(app: AppHandle, run: String, l: Launch) -> Result<Value, String> {
     let pane = pane_id.clone();
     std::thread::spawn(move || {
         let result = (|| -> Result<(), String> {
-            if !wait_for(&pane, Duration::from_secs(10), "viewport", shell_ready) {
+            if !wait_for(
+                &*rt,
+                &pane,
+                Duration::from_secs(10),
+                "viewport",
+                shell_ready,
+            ) {
                 tracing::warn!(pane, "shell prompt not seen; typing anyway");
             }
             emit(&app, &run, "shell", Value::Null);
-            type_line(&pane, &l.agent)?;
-            if !wait_for(&pane, Duration::from_secs(90), "detection", agent_ready) {
+            type_line(&*rt, &pane, &l.agent)?;
+            if !wait_for(
+                &*rt,
+                &pane,
+                Duration::from_secs(90),
+                "detection",
+                agent_ready,
+            ) {
                 return Err("the agent did not show its prompt within 90 s".into());
             }
             emit(&app, &run, "agent", Value::Null);
             // the CLI settles its input box a moment after the prompt appears
             std::thread::sleep(Duration::from_millis(600));
-            type_line(&pane, &l.prompt)?;
+            type_line(&*rt, &pane, &l.prompt)?;
             emit(&app, &run, "prompt", Value::Null);
             Ok(())
         })();
@@ -208,8 +221,8 @@ pub fn launch(app: AppHandle, run: String, l: Launch) -> Result<Value, String> {
 }
 
 /// A workspace already open on `dir` (by worktree checkout path, else cwd).
-pub fn open_workspace_for(dir: &str) -> Option<String> {
-    let v = herdr::call("workspace.list", json!({})).ok()?;
+pub fn open_workspace_for(rt: &dyn Runtime, dir: &str) -> Option<String> {
+    let v = rt.workspace_list().ok()?;
     v.get("workspaces")?.as_array()?.iter().find_map(|w| {
         let path = str_at(w, &["worktree", "checkout_path"]).or_else(|| str_at(w, &["cwd"]))?;
         same_dir(path, dir).then(|| str_at(w, &["workspace_id"]).map(str::to_string))?
@@ -223,32 +236,44 @@ pub fn open_workspace_for(dir: &str) -> Option<String> {
 /// linked alike — with `workspace.create` as the fallback for plain folders.
 /// Returns `(workspace_id, pane_id)`.
 pub fn open_session_dir(
+    rt: &dyn Runtime,
     dir: &str,
     repo_root: Option<&str>,
     label: Option<&str>,
     focus: bool,
 ) -> Result<(String, String), String> {
-    if let Some(ws) = open_workspace_for(dir) {
-        let mut params = json!({ "workspace_id": ws, "cwd": dir, "focus": focus });
-        if let Some(label) = label {
-            params["label"] = Value::String(label.to_string());
-        }
-        let tab = herdr::call("tab.create", params).map_err(|e| e.to_string())?;
+    if let Some(ws) = open_workspace_for(rt, dir) {
+        let tab = rt
+            .tab_create(runtime::TabCreate {
+                workspace_id: ws.clone(),
+                cwd: Some(dir.to_string()),
+                label: label.map(str::to_string),
+                focus,
+            })
+            .map_err(|e| e.to_string())?;
         let pane = str_at(&tab, &["root_pane", "pane_id"])
             .ok_or("tab.create: no root pane")?
             .to_string();
         return Ok((ws, pane));
     }
     let root = repo_root.filter(|r| Path::new(r).is_dir()).unwrap_or(dir);
-    let opened = herdr::call(
-        "worktree.open",
-        json!({ "cwd": root, "path": dir, "label": label, "focus": focus, "trust_repository": true }),
-    )
-    .or_else(|first| {
-        tracing::warn!(%first, dir, "worktree.open failed; falling back to workspace.create");
-        herdr::call("workspace.create", json!({ "cwd": dir, "label": label, "focus": focus }))
-    })
-    .map_err(|e| e.to_string())?;
+    let opened = rt
+        .worktree_open(runtime::WorktreeOpen {
+            cwd: root.to_string(),
+            path: dir.to_string(),
+            label: label.map(str::to_string),
+            focus,
+        })
+        .or_else(|first| {
+            tracing::warn!(%first, dir, "worktree.open failed; falling back to workspace.create");
+            rt.workspace_create(runtime::WorkspaceCreate {
+                cwd: Some(dir.to_string()),
+                label: label.map(str::to_string),
+                source_workspace_id: None,
+                focus,
+            })
+        })
+        .map_err(|e| e.to_string())?;
     let ws = str_at(&opened, &["workspace", "workspace_id"])
         .ok_or("no workspace in Herdr's reply")?
         .to_string();
@@ -270,27 +295,37 @@ fn same_dir(a: &str, b: &str) -> bool {
 
 /// Open a repository (or any folder) as a workspace: a new tab when it is
 /// already open, else attached through `worktree.open` on itself.
-pub fn repo_open(path: &str, label: Option<&str>) -> Result<Value, String> {
+pub fn repo_open(rt: &dyn Runtime, path: &str, label: Option<&str>) -> Result<Value, String> {
     if !Path::new(path).is_dir() {
         return Err(format!("not a directory: {path}"));
     }
-    let (workspace_id, pane_id) = open_session_dir(path, None, label, true)?;
+    let (workspace_id, pane_id) = open_session_dir(rt, path, None, label, true)?;
     Ok(json!({ "workspace_id": workspace_id, "pane_id": pane_id }))
 }
 
 /// A new linked worktree of the repository at `cwd` (Herdr creates the
 /// checkout and its workspace + tab): `{workspace_id, pane_id}`.
-pub fn worktree_create(cwd: &str, branch: &str, base: Option<&str>) -> Result<Value, String> {
+pub fn worktree_create(
+    rt: &dyn Runtime,
+    cwd: &str,
+    branch: &str,
+    base: Option<&str>,
+) -> Result<Value, String> {
     let branch = branch.trim();
     if branch.is_empty() || branch.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("branch name must be one word".into());
     }
-    let mut params =
-        json!({ "cwd": cwd, "branch": branch, "focus": true, "trust_repository": true });
-    if let Some(b) = base.map(str::trim).filter(|b| !b.is_empty()) {
-        params["base"] = Value::String(b.to_string());
-    }
-    let v = herdr::call("worktree.create", params).map_err(|e| e.to_string())?;
+    let v = rt
+        .worktree_create(runtime::WorktreeCreate {
+            cwd: cwd.to_string(),
+            branch: branch.to_string(),
+            base: base
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .map(str::to_string),
+            focus: true,
+        })
+        .map_err(|e| e.to_string())?;
     let ws = str_at(&v, &["workspace", "workspace_id"]).ok_or("no workspace in Herdr's reply")?;
     let pane = str_at(&v, &["root_pane", "pane_id"]).ok_or("no root pane in Herdr's reply")?;
     Ok(json!({ "workspace_id": ws, "pane_id": pane, "path": str_at(&v, &["worktree", "path"]) }))
