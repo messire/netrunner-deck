@@ -66,6 +66,6 @@ export function sorted(entries: ArchiveEntry[]): ArchiveEntry[] {
 export function matches(e: ArchiveEntry, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  const hay = [e.label, e.repo_name, e.branch, e.cwd, e.prompt, e.summary, e.id].filter(Boolean).join(" ").toLowerCase();
+  const hay = [e.label, e.repo_name, e.branch, e.cwd, e.prompt, e.summary, e.id, ...e.sessions.map((s) => s.tab_label)].filter(Boolean).join(" ").toLowerCase();
   return q.split(/\s+/).every((w) => hay.includes(w));
 }

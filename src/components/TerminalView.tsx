@@ -1,9 +1,9 @@
-import { createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
+import { Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Terminal, type IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { api, type PaneCursor, type PaneRead, type Tree } from "../api";
 import { blockWidth, classify, fitRules, inputBoxStart, promptLine, stripAnsi, stripBackground, wrapAnsi, type LineKind } from "../dialogue";
-import { mapInput, pasteText, specialKeyDown } from "../keys";
+import { IMAGE_PASTE_KEY, mapInput, pasteText, specialKeyDown } from "../keys";
 import { planUpdate } from "../render-plan";
 import { hotkeyOf } from "../actions";
 import { throttleLeading } from "../events";
@@ -44,7 +44,7 @@ export const OUTPUT_THROTTLE_MS = 100;
 
 type Snapshot = { text: string; cursor: PaneCursor | null | undefined };
 
-export default function TerminalView(p: { paneId: string; tree?: Tree; outputTick?: number; onMenu?: (menu: MenuState) => void }) {
+export default function TerminalView(p: { paneId: string; tree?: Tree; outputTick?: number; onMenu?: (menu: MenuState) => void; chat?: () => void }) {
   let host!: HTMLDivElement;
   let inputHost!: HTMLDivElement;
   // Two terminals: the chat scrolls; the CLI's input box (rules, prompt,
@@ -173,7 +173,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
   // box, separators) are cut to our width so they never wrap. The font never
   // changes. Columns are fitted to the host minus the viewport scrollbar plus
   // one spare cell, so neither text nor frames ever run under the scrollbar.
-  const FONT = 13.5;
+  const FONT = 15.5;
   function fitCols() {
     fit.fit();
     const vp = host.querySelector<HTMLElement>(".xterm-viewport");
@@ -478,8 +478,13 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     const key = `${inputTerm.cols}|${cursor?.line ?? "-"}|${cursor?.col ?? "-"}|${cursor?.visible ?? "-"}|${cursor?.shape ?? "-"}|${boxAt}|${raw.join("\n")}`;
     if (key === lastInputKey) return;
     lastInputKey = key;
+    const wasHidden = inputHost.style.display === "none";
     inputHost.style.display = rows ? "" : "none";
-    if (!rows) { inputTerm.reset(); return; }
+    // The box just appeared (an agent started in a shell): take the caret with it.
+    if (rows && wasHidden && document.activeElement === term.textarea) inputTerm.focus();
+    // A pane without an input box (a shell, a CLI menu) types into the main
+    // terminal; a hidden xterm cannot hold the focus, so hand it over.
+    if (!rows) { inputTerm.reset(); if (document.activeElement === inputTerm.textarea) term.focus(); return; }
     if (inputTerm.rows !== rows) inputTerm.resize(inputTerm.cols, rows);
     inputTerm.reset();
     inputWriting = true;
@@ -527,8 +532,11 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     const id = p.paneId;
     try {
       const text = pasteText(await api.clipboardReadText());
-      if (!text || disposed || id !== p.paneId) return;
-      await api.sendText(id, text);
+      if (disposed || id !== p.paneId) return;
+      // No text on the clipboard (an image, say): let the CLI read the
+      // clipboard itself — Claude Code takes an image on ctrl+v.
+      if (!text) await api.sendKeys(id, [IMAGE_PASTE_KEY]);
+      else await api.sendText(id, text);
       schedule();
     } catch (err) {
       if (!disposed) setError(String(err));
@@ -579,7 +587,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
 
   onMount(() => {
     term = new Terminal({
-      fontFamily: '"Cascadia Mono", Consolas, "JetBrains Mono", monospace',
+      fontFamily: '"JetBrains Mono Variable", "Cascadia Mono", Consolas, monospace',
       fontSize: FONT,
       lineHeight: 1.25,
       cursorBlink: false,
@@ -602,8 +610,11 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     inputTerm = new Terminal({ ...term.options, scrollback: 0, rows: 1, cols: term.cols, cursorBlink: true });
     inputTerm.open(inputHost);
     inputTerm.onData(onData);
-    // Keys typed anywhere in the pane go to the CLI; the caret lives in the input box.
-    term.textarea?.addEventListener("focus", () => inputTerm.focus());
+    // Keys typed anywhere in the pane go to the CLI; the caret lives in the
+    // input box while there is one (agent CLIs), in the terminal otherwise (shells).
+    const hasInputBox = () => inputHost.style.display !== "none";
+    const focusTyping = () => (hasInputBox() ? inputTerm.focus() : term.focus());
+    term.textarea?.addEventListener("focus", () => { if (hasInputBox()) inputTerm.focus(); });
     // Deck's own keys (F1/F2/Ctrl+K, src/actions.ts) never reach the PTY even
     // if a listener order ever lets them past App's capture handler. Keys xterm
     // would mangle (shift+enter → `\r`, ctrl+v → 0x16) are handled here on
@@ -624,6 +635,8 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     term.attachCustomKeyEventHandler(notForPty);
     inputTerm.attachCustomKeyEventHandler(notForPty);
     fitCols();
+    // Web fonts arrive after first paint: measure the cell again once they are in.
+    document.fonts?.ready.then(() => { if (!disposed) { fitCols(); refresh(); } }).catch(() => {});
     term.onData(onData);
     term.onScroll(() => applyHeld());
     term.onSelectionChange(() => applyHeld());
@@ -631,7 +644,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
     // the browser selects text instead. A plain click (nothing selected) puts
     // the caret back into the input box, as xterm's own mousedown would have.
     host.addEventListener("mousedown", (e) => { if (e.button === 0) e.stopPropagation(); }, true);
-    host.addEventListener("mouseup", () => { if (nativeSelection() === null) inputTerm.focus(); });
+    host.addEventListener("mouseup", () => { if (nativeSelection() === null) focusTyping(); });
     const onSel = () => applyHeld();
     document.addEventListener("selectionchange", onSel);
     onCleanup(() => document.removeEventListener("selectionchange", onSel));
@@ -686,7 +699,7 @@ export default function TerminalView(p: { paneId: string; tree?: Tree; outputTic
 
   return (
     <div class="term" onContextMenu={openMenu}>
-      <div class="th"><span>◆ {header().title}</span><span class="micro">{header().where}</span><span class="micro right" style={error() ? "color:#FF2B4A" : held() !== null ? "color:#FCEE0A" : ""}>{error() ?? (held() !== null ? "NEW OUTPUT ↓ (scroll down)" : header().ctx)}</span></div>
+      <div class="th"><span>◆ {header().title}</span><span class="micro">{header().where}</span><span class="micro right" style={error() ? "color:#FF2B4A" : held() !== null ? "color:#FCEE0A" : ""}>{error() ?? (held() !== null ? "NEW OUTPUT ↓ (scroll down)" : header().ctx)}</span><Show when={p.chat}>{(back) => <button class="abtn" style="margin-left:10px" title="back to the chat view" onClick={() => back()()}>CHAT</button>}</Show></div>
       <div class="pane-body">
         <div class="xterm-host" ref={host} />
         <div class="xterm-input" ref={inputHost} />

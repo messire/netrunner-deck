@@ -1,15 +1,24 @@
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
-import { api, type ArchiveEntry, type RepoGroup, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
+import { api, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SwitchError } from "./components/Sidebar";
-import TabBar from "./components/TabBar";
+import TabBar, { Clock, Pulse } from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
+import ChatView from "./components/ChatView";
 import KeyBar from "./components/KeyBar";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import Palette, { type PaletteItem } from "./components/Palette";
 import ArchiveView from "./components/ArchiveView";
+import PromptBox from "./components/PromptBox";
+import NewTabBox, { type TabKind } from "./components/NewTabBox";
+import QuickHacks from "./components/QuickHacks";
+import NewRepoBox, { type KnownRepo } from "./components/NewRepoBox";
+import NewWorktreeBox from "./components/NewWorktreeBox";
+import HarnessView from "./components/HarnessView";
+import UplinkView from "./components/UplinkView";
+import { harnessRepos } from "./harness";
 import { createLatestGate } from "./latest";
-import { debounceTrailing, routeEvent } from "./events";
+import { debounceTrailing, outputPaneOf, routeEvent } from "./events";
 import { agentName, commands, hotkeyOf, nextBlockedPane, type Command } from "./actions";
 
 /** UI-only preferences in the webview's storage; never session state (that lives in Herdr). */
@@ -20,9 +29,51 @@ function remember(key: string, value: string | null) {
   try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); } catch { /* storage unavailable */ }
 }
 
+function loadActivity(): Map<string, number> {
+  try { return new Map(Object.entries(JSON.parse(remembered("deck.activity") ?? "{}") as Record<string, number>)); } catch { return new Map(); }
+}
+function saveActivity(m: Map<string, number>) {
+  // Keep it bounded: the 200 most recent panes.
+  const top = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 200);
+  remember("deck.activity", JSON.stringify(Object.fromEntries(top)));
+}
+
+const SIDE_MIN = 320;
+/** Panel widths (px): both side panels share the minimum and may grow to a third of the window — three open panels split it evenly. */
+function clampSide(px: number) { return Math.max(SIDE_MIN, Math.min(px, Math.floor(window.innerWidth / 3))); }
+
 export default function App() {
+  const [sideWidth, setSideWidth] = createSignal(clampSide(Number(remembered("deck.sideWidth")) || SIDE_MIN));
+  const startSideDrag = (e: PointerEvent) => {
+    e.preventDefault();
+    const move = (ev: PointerEvent) => setSideWidth(clampSide(ev.clientX));
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); remember("deck.sideWidth", String(sideWidth())); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  // The QUICKHACKS panel resizes from its left edge under the same limits.
+  const [hacksWidthRaw, setHacksWidthRaw] = createSignal(clampSide(Number(remembered("deck.hacksWidth")) || SIDE_MIN));
+  const startHacksDrag = (e: PointerEvent) => {
+    e.preventDefault();
+    const move = (ev: PointerEvent) => setHacksWidthRaw(clampSide(window.innerWidth - ev.clientX));
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); remember("deck.hacksWidth", String(hacksWidthRaw())); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  onMount(() => { const onResize = () => { setSideWidth((w) => clampSide(w)); setHacksWidthRaw((w) => clampSide(w)); }; window.addEventListener("resize", onResize); onCleanup(() => window.removeEventListener("resize", onResize)); });
   const [selectedPane, setSelectedPaneRaw] = createSignal<string | null>(remembered("deck.selectedPane"));
   const setSelectedPane = (id: string | null) => { setSelectedPaneRaw(id); remember("deck.selectedPane", id); };
+  // Panes the user switched to the raw terminal (chat is the default for a
+  // pane with a Claude session). Per pane, forgotten with the pane.
+  const [termPanes, setTermPanes] = createSignal<Set<string>>(new Set());
+  const setPaneView = (id: string, view: "chat" | "term") =>
+    setTermPanes((s) => { const n = new Set(s); if (view === "term") n.add(id); else n.delete(id); return n; });
+  /** The Claude session id behind a pane, when Herdr identified one (`agent_session`). */
+  const claudeSession = (id: string) => {
+    const x = tree()?.panes.find((p) => p.pane_id === id);
+    const s = x?.agent_session;
+    return x && (x.agent ?? "").toLowerCase().includes("claude") && s?.kind === "id" && s.value ? s.value : null;
+  };
   const [offline, setOffline] = createSignal<string | null>(null);
   const [accountsError, setAccountsError] = createSignal<string | null>(null);
   // Account number of the `cswap switch` in flight (null = idle) and the last switch failure.
@@ -120,8 +171,9 @@ export default function App() {
       });
 
   // ---- ARCHIVE (cold storage): closed spaces that can be restored ----------
-  const [view, setViewRaw] = createSignal<"deck" | "archive">(remembered("deck.view") === "archive" ? "archive" : "deck");
-  const setView = (v: "deck" | "archive") => { setViewRaw(v); remember("deck.view", v); };
+  type View = "deck" | "harness" | "archive" | "uplink";
+  const [view, setViewRaw] = createSignal<View>((["harness", "archive", "uplink"] as const).find((v) => v === remembered("deck.view")) ?? "deck");
+  const setView = (v: View) => { setViewRaw(v); remember("deck.view", v); };
   const [archive, { refetch: refetchArchive }] = createResource<ArchiveEntry[] | undefined>(async (_, { value }) => {
     try { return await api.archiveList(); } catch (e) { showError(`archive: ${e}`); return value; }
   });
@@ -159,8 +211,121 @@ export default function App() {
     setGroups(next);
     api.archiveGroupsSet(next).then((saved) => setGroups(saved)).catch((e) => { setArchiveError(String(e)); refetchGroups(); });
   };
+  const [harnessError, setHarnessError] = createSignal<string | null>(null);
+  // HARNESS: Claude Code config of the archive's repositories (+ ~/.claude); rescanned when the repo set changes.
+  const harnessRefs = createMemo(() => JSON.stringify(harnessRepos(archive() ?? [])));
+  const [harness, { refetch: refetchHarness }] = createResource(harnessRefs, async (refs) => {
+    try { setHarnessError(null); return await api.harnessScan(JSON.parse(refs)); } catch (e) { setHarnessError(String(e)); return []; }
+  });
+
+  // QUICKHACKS: pinned harness launchers (Deck's quickhacks.json).
+  const [hacksSaved, { mutate: setHacksSaved }] = createResource(() => api.quickhacksGet().catch(() => ({ hacks: [], collapsed: false })));
+  const saveHacks = (next: { hacks: Hack[]; collapsed: boolean }) => {
+    setHacksSaved(next);
+    api.quickhacksSet(next).then((saved) => setHacksSaved(saved)).catch((e) => showError(String(e)));
+  };
+  const hacksWidth = () => (hacksSaved()?.collapsed ? 30 : hacksWidthRaw());
+
+  // UPLINK: behind/ahead per open checkout (local git, after each tree and
+  // every minute), `git fetch` of each repo root every 5 minutes, the pull log.
+  const [gitSync, setGitSync] = createSignal<Record<string, GitSync>>({});
+  const checkoutPaths = () => [...new Set((tree()?.workspaces ?? []).map((w) => w.worktree?.checkout_path).filter((x): x is string => !!x))];
+  const repoRoots = () => [...new Set((tree()?.workspaces ?? []).filter((w) => w.worktree && !w.worktree.is_linked_worktree).map((w) => w.worktree!.checkout_path).filter((x): x is string => !!x))];
+  let syncAt = 0;
+  const refreshSync = async (force = false) => {
+    if (!force && Date.now() - syncAt < 20_000) return;
+    syncAt = Date.now();
+    const paths = checkoutPaths();
+    if (!paths.length) return;
+    try { setGitSync(await api.uplinkSync(paths)); } catch { /* git missing or busy: keep the last state */ }
+  };
+  createEffect(() => { if (tree()) void refreshSync(); });
+  onMount(() => {
+    const t1 = setInterval(() => void refreshSync(true), 60_000);
+    const t2 = setInterval(() => { const r = repoRoots(); if (r.length) api.uplinkFetch(r).then(() => refreshSync(true)).catch(() => {}); }, 5 * 60_000);
+    setTimeout(() => { const r = repoRoots(); if (r.length) api.uplinkFetch(r).then(() => refreshSync(true)).catch(() => {}); }, 8_000);
+    onCleanup(() => { clearInterval(t1); clearInterval(t2); });
+  });
+  const [uplink, { refetch: refetchUplink, mutate: setUplink }] = createResource(() => api.uplinkList().then((r) => r.updates).catch(() => []));
+  const [uplinkError, setUplinkError] = createSignal<string | null>(null);
+  const unseenUpdates = () => (uplink() ?? []).filter((u) => !u.seen).length;
+  const pull = async (w: Workspace) => {
+    const path = w.worktree?.checkout_path;
+    if (!path) { showError("not a git checkout"); return; }
+    const repo = w.worktree?.repo_name ?? w.label;
+    showError(`pulling ${repo} · ${w.worktree?.branch ?? w.label}…`);
+    try {
+      const u = await api.uplinkPull(repo, path);
+      setUplinkError(null);
+      refetchUplink();
+      refreshSync(true);
+      showError(u.commits.length ? `pulled ${u.commits.length} commit${u.commits.length > 1 ? "s" : ""} into ${repo} · ${u.branch} — see UPLINK` : `${repo} · ${u.branch}: already up to date`);
+    } catch (e) { setUplinkError(String(e)); showError(`pull: ${String(e)}`); }
+  };
+  onMount(() => { let un: (() => void) | undefined; api.onUplink(() => refetchUplink()).then((u) => (un = u)); onCleanup(() => un?.()); });
+  createEffect(() => { if (view() === "uplink" && unseenUpdates()) api.uplinkSeen().then((r) => setUplink(r.updates)).catch(() => {}); });
 
   const [menu, setMenu] = createSignal<MenuState | null>(null);
+  // "+ new tab" asks what to run: the tab is created, then the command is typed
+  // into its shell once the prompt is up (as ARCHIVE's restore does).
+  // The "+" picker: on a space it creates a tab, after OPEN REPOSITORY / NEW
+  // WORKTREE it runs in the fresh space's own first pane (`pane`).
+  const [newTabFor, setNewTabFor] = createSignal<{ workspaceId: string; pane?: string } | null>(null);
+  const newTab = (workspaceId: string, pane?: string) => setNewTabFor({ workspaceId, pane });
+  /** Wait for the shell prompt (≤ 6 s), then type `command` + Enter into `paneId`. */
+  const startIn = async (paneId: string, command: string) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 6000) {
+      await new Promise((res) => setTimeout(res, 300));
+      try {
+        const { read } = await api.paneRead(paneId, 8);
+        const last = read.text.split("\n").map((l) => l.trimEnd()).filter(Boolean).pop() ?? "";
+        if (/[>$%❯#]\s*$/.test(last)) break;
+      } catch { /* not readable yet */ }
+    }
+    await api.sendText(paneId, command);
+    await api.sendKeys(paneId, ["enter"]);
+  };
+  const openTab = async (target: { workspaceId: string; pane?: string }, kind: TabKind) => {
+    remember("deck.newTabKind", kind.id === "custom" ? "claude" : kind.id);
+    try {
+      let paneId = target.pane;
+      if (!paneId) {
+        const r = (await api.action("tab.create", target.workspaceId)) as { root_pane?: { pane_id?: string } } | null;
+        refetchTree();
+        paneId = r?.root_pane?.pane_id;
+      }
+      if (!paneId) return;
+      setSelectedPane(paneId);
+      if (kind.command) await startIn(paneId, kind.command);
+    } catch (e) { showError(`tab.create: ${String(e)}`); }
+  };
+  // "+" next to SESSIONS: open a repository as a space, then ask what to run in it.
+  const [repoBox, setRepoBox] = createSignal(false);
+  const knownRepos = (): KnownRepo[] => {
+    const open = new Set((tree()?.workspaces ?? []).map((w) => (w.worktree?.checkout_path ?? "").replace(/^\\\\\?\\/, "").replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase()).filter(Boolean));
+    return (harness() ?? []).filter((r) => !r.personal && r.exists).map((r) => ({ name: r.name, root: r.root, open: open.has(r.root.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase()) }));
+  };
+  const openRepo = async (root: string) => {
+    try {
+      const r = await api.repoOpen(root);
+      refetchTree();
+      newTab(r.workspace_id, r.pane_id);
+    } catch (e) { showError(`open repository: ${String(e)}`); }
+  };
+  // "+" on a repository row: a new linked worktree, then ask what to run in it.
+  const [wtBox, setWtBox] = createSignal<{ repo: string; root: string } | null>(null);
+  const createWorktree = async (root: string, branch: string, base: string) => {
+    try {
+      const r = await api.worktreeCreate(root, branch, base || undefined);
+      refetchTree();
+      newTab(r.workspace_id, r.pane_id);
+    } catch (e) { showError(`worktree.create: ${String(e)}`); }
+  };
+  // RENAME for a space / tab / pane: Deck's prompt → `*.rename {label}`.
+  const [ask, setAsk] = createSignal<{ title: string; value: string; ok: (v: string) => void } | null>(null);
+  const rename = (kind: "workspace" | "tab" | "pane", id: string, current: string) =>
+    setAsk({ title: `RENAME ${kind.toUpperCase()}`, value: current, ok: (label) => { if (label !== current) runAction(`${kind}.rename` as TreeAction, id, { label }); } });
   const [overlay, setOverlay] = createSignal<"palette" | "accounts" | null>(null);
   const overlayOpen = () => menu() !== null || overlay() !== null;
   const closeOverlays = () => { setMenu(null); setOverlay(null); };
@@ -169,7 +334,9 @@ export default function App() {
     x: e.clientX, y: e.clientY, title: w.label.toUpperCase(),
     items: [
       { label: "FOCUS IN HERDR", hint: "workspace.focus", run: () => api.focus("workspace", w.workspace_id).catch((er) => showError(String(er))) },
-      { label: "NEW TAB", hint: "tab.create", run: () => runAction("tab.create", w.workspace_id) },
+      { label: "RENAME", hint: "workspace.rename", run: () => rename("workspace", w.workspace_id, w.label) },
+      ...(w.worktree?.checkout_path ? [{ label: "PULL · UPDATE", hint: "git pull --ff-only · log in UPLINK", run: () => pull(w) }] : []),
+      { label: "NEW TAB", hint: "tab.create", run: () => newTab(w.workspace_id) },
       { label: "NEW SPACE", hint: "workspace.create", run: () => runAction("workspace.create", w.workspace_id) },
       { label: "CLOSE · ARCHIVE", hint: "keep for restore", run: () => archiveClose(w) },
       { label: "CLOSE SPACE", hint: "workspace.close", danger: true, run: () => runAction("workspace.close", w.workspace_id) },
@@ -186,7 +353,8 @@ export default function App() {
     x: e.clientX, y: e.clientY, title: t.label.toUpperCase(),
     items: [
       { label: "FOCUS IN HERDR", hint: "tab.focus", run: () => api.focus("tab", t.tab_id).catch((er) => showError(String(er))) },
-      { label: "NEW TAB", hint: "tab.create", run: () => runAction("tab.create", t.workspace_id) },
+      { label: "RENAME", hint: "tab.rename", run: () => rename("tab", t.tab_id, t.label) },
+      { label: "NEW TAB", hint: "tab.create", run: () => newTab(t.workspace_id) },
       { label: "SPLIT RIGHT", hint: "pane.split", run: () => runAction("pane.split", tabPane(t)?.pane_id, { direction: "right" }) },
       { label: "SPLIT DOWN", hint: "pane.split", run: () => runAction("pane.split", tabPane(t)?.pane_id, { direction: "down" }) },
       { label: "CLOSE TAB", hint: "tab.close", danger: true, run: () => runAction("tab.close", t.tab_id) },
@@ -197,6 +365,7 @@ export default function App() {
     items: [
       { label: "OPEN", run: () => selectPane(pane.pane_id) },
       { label: "FOCUS IN HERDR", hint: "pane.focus", run: () => api.focus("pane", pane.pane_id).catch((er) => showError(String(er))) },
+      { label: "RENAME", hint: "pane.rename", run: () => rename("pane", pane.pane_id, pane.label ?? "") },
       { label: "SPLIT RIGHT", hint: "pane.split", run: () => runAction("pane.split", pane.pane_id, { direction: "right" }) },
       { label: "SPLIT DOWN", hint: "pane.split", run: () => runAction("pane.split", pane.pane_id, { direction: "down" }) },
       { label: "CLOSE PANE", hint: "pane.close", danger: true, run: () => runAction("pane.close", pane.pane_id) },
@@ -217,6 +386,8 @@ export default function App() {
     else if (d.kind === "select") selectPane(d.paneId);
     else if (d.kind === "switch") switchAccount(d.account);
     else if (d.kind === "refresh") refetchAccounts();
+    else if (d.action === "tab.create" && d.id) newTab(d.id);
+    else if (d.action === "workspace.create") setRepoBox(true);
     else runAction(d.action, d.id);
   };
   const paletteItems = createMemo((): PaletteItem[] =>
@@ -247,11 +418,67 @@ export default function App() {
   // `outputTick`, which TerminalView turns into a debounced `pane.read`.
   const refetchTreeSoon = debounceTrailing(() => { refetchTree(); }, 200);
   const [outputTick, setOutputTick] = createSignal(0);
+  // Last output time per pane (any pane, not only the one on screen), for
+  // ordering the session map by recency. Updated at most once a second per
+  // pane so a chatty pane does not re-render the sidebar on every event.
+  // Seeded from the Claude transcripts' modified times (real recency, survives
+  // a Deck restart) and kept in the webview's storage between reloads.
+  const [activity, setActivity] = createSignal<Map<string, number>>(loadActivity());
+  // Minute tick for "still active" vs "idle" colouring in the session map.
+  const [mapNow, setMapNow] = createSignal(Date.now());
+  onMount(() => { const t = setInterval(() => setMapNow(Date.now()), 60_000); onCleanup(() => clearInterval(t)); });
+  const bumpActivity = (paneId: string, at: number) => {
+    const was = activity().get(paneId) ?? 0;
+    if (at - was < 1000) return;
+    setActivity((m) => { const n = new Map(m).set(paneId, at); saveActivity(n); return n; });
+  };
+  // Output events count as activity only for panes without a Claude session:
+  // the CLI redraws its status line while idle (timers, token counters), which
+  // would keep an idle session "recent". Claude panes take the transcript's
+  // mtime below — the time of the last real message, from either side.
+  const noteActivity = (paneId: string) => {
+    const x = tree()?.panes.find((p) => p.pane_id === paneId);
+    if (x?.agent_session?.kind === "id" && x.agent_session.value) return;
+    bumpActivity(paneId, Date.now());
+  };
+  // After each tree: transcript mtimes for the Claude panes, at most every 10 s.
+  let mtimesAt = 0;
+  createEffect(() => {
+    const t = tree();
+    if (!t || Date.now() - mtimesAt < 10_000) return;
+    mtimesAt = Date.now();
+    const bySession = new Map<string, string>();
+    for (const x of t.panes) { const sid = x.agent_session?.kind === "id" ? x.agent_session.value : null; if (sid) bySession.set(sid, x.pane_id); }
+    if (!bySession.size) return;
+    api.transcriptMtimes([...bySession.keys()]).then((m) => {
+      // authoritative for Claude panes: set, not max (an old inflated value must not win)
+      setActivity((prev) => {
+        const n = new Map(prev);
+        let changed = false;
+        for (const [sid, ms] of Object.entries(m)) { const pane = bySession.get(sid); if (pane && n.get(pane) !== ms) { n.set(pane, ms); changed = true; } }
+        if (changed) saveActivity(n);
+        return changed ? n : prev;
+      });
+    }).catch(() => {});
+  });
+
+  // Links in rendered markdown (chat, harness viewer) go to the system
+  // browser; the webview never navigates away from Deck.
+  const onLinkClick = (e: MouseEvent) => {
+    const a = (e.target as HTMLElement | null)?.closest("a[href]") as HTMLAnchorElement | null;
+    if (!a) return;
+    e.preventDefault();
+    const href = a.getAttribute("href") ?? "";
+    if (/^https?:\/\//i.test(href)) api.openExternal(href).catch((er) => showError(String(er)));
+  };
+  onMount(() => { document.addEventListener("click", onLinkClick, true); onCleanup(() => document.removeEventListener("click", onLinkClick, true)); });
 
   onMount(() => {
     let un1: (() => void) | undefined, un2: (() => void) | undefined;
     api.onEvent((ev) => {
       setOffline(null);
+      const outPane = outputPaneOf(ev);
+      if (outPane) noteActivity(outPane);
       const route = routeEvent(ev, currentPane());
       if (route === "tree") refetchTreeSoon();
       else if (route === "tick") setOutputTick((n) => n + 1);
@@ -298,10 +525,14 @@ export default function App() {
   };
 
   return (
-    <div class="frame" onContextMenu={noBrowserMenu}>
+    <div class="frame" style={{ "grid-template-columns": view() === "deck" ? `${sideWidth()}px 1fr ${hacksWidth()}px` : `${sideWidth()}px 1fr` }} onContextMenu={noBrowserMenu}>
+      <Show when={view() === "deck" && !hacksSaved()?.collapsed}><div class="side-grip right" style={{ right: `${hacksWidth() - 3}px` }} onPointerDown={startHacksDrag} onDblClick={() => { setHacksWidthRaw(SIDE_MIN); remember("deck.hacksWidth", null); }} title="drag to resize · double-click resets" /></Show>
+      <Show when={view() === "deck"}><div class="side-grip" style={{ left: `${sideWidth() - 3}px` }} onPointerDown={startSideDrag} onDblClick={() => { setSideWidth(SIDE_MIN); remember("deck.sideWidth", null); }} title="drag to resize · double-click resets" /></Show>
       <header class="titlebar" data-tauri-drag-region>
         <div class="vtabs">
           <button class={`vtab ${view() === "deck" ? "on" : ""}`} onClick={() => setView("deck")}>▞ NETRUNNER DECK</button>
+          <button class={`vtab ${view() === "harness" ? "on" : ""}`} onClick={() => setView("harness")} title="Claude Code configuration per repository">▞ HARNESS</button>
+          <button class={`vtab ${view() === "uplink" ? "on" : ""}`} onClick={() => setView("uplink")} title="what git pull brought in">▞ UPLINK{unseenUpdates() ? ` · ${unseenUpdates()}` : ""}</button>
           <button class={`vtab ${view() === "archive" ? "on" : ""}`} onClick={() => setView("archive")} title="closed spaces kept for restore">▞ ARCHIVE{(archive() ?? []).length ? ` · ${(archive() ?? []).filter((e) => e.status === "closed").length}` : ""}</button>
         </div>
         <span class="micro">herdr client · {offline() ? "OFFLINE" : "LINK OK"}</span>
@@ -312,18 +543,19 @@ export default function App() {
           </button>
         )}</Show>
         <span class="sp" />
-        <Show when={activeAccount()} fallback={<div class="zone danger"><i />ZONE : NO LINK</div>}>
+        <Pulse tree={tree()} />
+        <Show when={activeAccount()} fallback={<div class="zone danger"><i />NO LINK</div>}>
           {(a) => {
-            const z = zoneOf(a());
             const u = usageOf(a());
+            // The colour is the quota zone (safe < 50 % < public < 80 % < restricted < 100 % = danger); the text is the numbers.
             return (
-              <div class={`zone ${z}`}>
-                <i />ZONE : {z.toUpperCase()}
-                <span class="micro">{accountLabel(a())} · 5h {u.five ?? "--"}% · 7d {u.week ?? "--"}%</span>
+              <div class={`zone ${zoneOf(a())}`} title="active account · 5-hour and 7-day quota used">
+                <i />{accountLabel(a())}<span class="pct">5h {u.five ?? "--"}%</span><span class="pct">7d {u.week ?? "--"}%</span>
               </div>
             );
           }}
         </Show>
+        <Clock />
         <div class="win">
           <button onClick={() => win.minimize()}>—</button>
           <button onClick={() => win.toggleMaximize()}>▢</button>
@@ -331,6 +563,12 @@ export default function App() {
         </div>
       </header>
 
+      <Show when={view() === "harness"}>
+        <HarnessView repos={harness()} error={harnessError()} groups={groups()} onGroups={saveGroups} onRefresh={() => refetchHarness()} />
+      </Show>
+      <Show when={view() === "uplink"}>
+        <UplinkView updates={uplink()} error={uplinkError()} onRemove={(id) => api.uplinkRemove(id).then((r) => setUplink(r.updates)).catch((e) => setUplinkError(String(e)))} onRefresh={() => refetchUplink()} />
+      </Show>
       <Show when={view() === "archive"}>
         <ArchiveView entries={archive()} busy={archiveBusy()} error={archiveError()} onRestore={archiveRestore} onDeleteMany={archiveDeleteMany} onSummarize={archiveSummarize} onRefresh={() => refetchArchive()} groups={groups()} onGroups={saveGroups} />
       </Show>
@@ -342,6 +580,9 @@ export default function App() {
         switching={switching()}
         switchError={switchError()}
         selectedPane={currentPane()}
+        activity={activity()}
+        now={mapNow()}
+        gitSync={gitSync()}
         onSelectPane={selectPane}
         onSwitchAccount={switchAccount}
         onRefreshAccounts={() => refetchAccounts()}
@@ -349,23 +590,37 @@ export default function App() {
         onTabMenu={tabMenu}
         onPaneMenu={paneMenu}
         onAccountMenu={accountMenu}
-        onNewSpace={(source) => runAction("workspace.create", source ?? tree()?.panes.find((p) => p.pane_id === currentPane())?.workspace_id)}
-        onNewTab={(ws) => runAction("tab.create", ws)}
+        onNewRepo={() => setRepoBox(true)}
+        onNewWorktree={(repo, root) => setWtBox({ repo, root })}
+        onNewTab={newTab}
         onSplit={(paneId) => runAction("pane.split", paneId, { direction: "right" })}
       />
 
       <main class="main">
-        <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} onTabMenu={tabMenu} onNewTab={(ws) => runAction("tab.create", ws)} />
+        <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} onTabMenu={tabMenu} onNewTab={newTab} />
         <Show when={currentPane()} fallback={<div class="empty">NO PANE SELECTED · open a workspace in Herdr</div>}>
-          {(id) => <TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} onMenu={setMenu} />}
+          {(id) => (
+            <Show when={!termPanes().has(id()) && claudeSession(id())}
+              fallback={<TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} onMenu={setMenu} chat={claudeSession(id()) ? () => setPaneView(id(), "chat") : undefined} />}>
+              {(sid) => <ChatView paneId={id()} sessionId={sid()} tree={tree()} outputTick={outputTick()} harness={harness()} onTerminal={() => setPaneView(id(), "term")} />}
+            </Show>
+          )}
         </Show>
         <Show when={offline()}>{(m) => <div class="offline">◇ HERDR OFFLINE — {m()}</div>}</Show>
       </main>
+      <QuickHacks hacks={hacksSaved()?.hacks ?? []} collapsed={hacksSaved()?.collapsed ?? false} harness={harness()}
+        onSave={(hacks) => saveHacks({ hacks, collapsed: hacksSaved()?.collapsed ?? false })}
+        onCollapse={(collapsed) => saveHacks({ hacks: hacksSaved()?.hacks ?? [], collapsed })}
+        onOpenPane={(id) => { setSelectedPane(id); refetchTree(); }} onError={showError} />
       </Show>
 
       <KeyBar tree={tree()} selectedPane={currentPane()} account={activeAccount()} waiting={waiting()} />
 
       <Show when={menu()}>{(m) => <ContextMenu menu={m()} onClose={() => setMenu(null)} />}</Show>
+      <Show when={newTabFor()}>{(t) => { const target = t(); return <NewTabBox initial={remembered("deck.newTabKind") ?? "claude"} onPick={(k) => openTab(target, k)} onClose={() => setNewTabFor(null)} />; }}</Show>
+      <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} /></Show>
+      <Show when={wtBox()}>{(w) => { const t = w(); return <NewWorktreeBox repo={t.repo} onCreate={(b, base) => createWorktree(t.root, b, base)} onClose={() => setWtBox(null)} />; }}</Show>
+      <Show when={ask()}>{(q) => <PromptBox title={q().title} value={q().value} placeholder="name" ok={q().ok} onClose={() => setAsk(null)} />}</Show>
       <Show when={overlay() === "palette"}><Palette title="Palette" items={paletteItems()} onClose={() => setOverlay(null)} /></Show>
       <Show when={overlay() === "accounts"}><Palette title="Account" items={accountItems()} digits onClose={() => setOverlay(null)} /></Show>
     </div>

@@ -277,7 +277,7 @@ fn same_path(a: &str, b: &str) -> bool {
     n(a) == n(b)
 }
 
-fn str_at<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
+pub(crate) fn str_at<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
     let mut cur = v;
     for k in keys {
         cur = cur.get(k)?;
@@ -574,8 +574,33 @@ fn prompt_history() -> HashMap<String, PromptInfo> {
     out
 }
 
+/// Heads already parsed, by path: `(file length when read, info)`. A transcript's
+/// first lines never change once written, so a head read past `HEAD_BYTES` is
+/// final; a shorter (young) file is re-read only when it has grown.
+type HeadCache = Mutex<HashMap<PathBuf, (u64, PromptInfo)>>;
+fn head_cache() -> &'static HeadCache {
+    static CACHE: std::sync::OnceLock<HeadCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// Fallback for a transcript history.jsonl does not know: cwd and first prompt from its head.
 fn transcript_head(path: &Path) -> PromptInfo {
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if let Ok(cache) = head_cache().lock() {
+        if let Some((seen, info)) = cache.get(path) {
+            if *seen >= HEAD_BYTES || *seen == len {
+                return info.clone();
+            }
+        }
+    }
+    let info = transcript_head_uncached(path);
+    if let Ok(mut cache) = head_cache().lock() {
+        cache.insert(path.to_path_buf(), (len, info.clone()));
+    }
+    info
+}
+
+fn transcript_head_uncached(path: &Path) -> PromptInfo {
     let mut info = PromptInfo::default();
     let Ok(file) = std::fs::File::open(path) else {
         return info;
@@ -949,22 +974,17 @@ pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
     if !Path::new(&entry.cwd).is_dir() {
         return Err(format!("directory is gone: {}", entry.cwd));
     }
-    let opened = match entry.repo_root.as_deref().filter(|_| entry.linked_worktree) {
-        Some(root) if Path::new(root).is_dir() => herdr::call(
-            "worktree.open",
-            json!({ "cwd": root, "path": entry.cwd, "label": entry.label, "focus": true, "trust_repository": true }),
-        )
-        .or_else(|first| {
-            tracing::warn!(%first, "worktree.open failed; falling back to workspace.create");
-            herdr::call("workspace.create", json!({ "cwd": entry.cwd, "label": entry.label, "focus": true }))
-        }),
-        _ => herdr::call("workspace.create", json!({ "cwd": entry.cwd, "label": entry.label, "focus": true })),
-    }
-    .map_err(|e| e.to_string())?;
-    let workspace_id = str_at(&opened, &["workspace", "workspace_id"])
-        .ok_or("restore: no workspace in Herdr's reply")?
-        .to_string();
-    let mut root_free = str_at(&opened, &["root_pane", "pane_id"]).map(str::to_string);
+    // A root session goes back into the repository's ROOT space (a new tab
+    // when it is open, `worktree.open` on the main checkout otherwise), a
+    // worktree session into its worktree's space — never a detached folder.
+    let (workspace_id, root_pane) = crate::quickhacks::open_session_dir(
+        &entry.cwd,
+        entry.repo_root.as_deref(),
+        Some(entry.label.as_str()),
+        true,
+    )
+    .map_err(|e| format!("restore: {e}"))?;
+    let mut root_free = Some(root_pane);
 
     let mut targets: Vec<(String, String)> = Vec::new();
     for s in entry.sessions.iter().filter(|s| s.resumable) {
@@ -972,7 +992,27 @@ pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
             continue;
         };
         let pane = match root_free.take() {
-            Some(p) => p,
+            Some(p) => {
+                // The first session lands in the fresh tab: give it the saved tab name too.
+                if !s.tab_label.is_empty() {
+                    if let Some(tab_id) = herdr::call("pane.get", json!({ "pane_id": p }))
+                        .ok()
+                        .and_then(|v| {
+                            str_at(&v, &["pane", "tab_id"])
+                                .or_else(|| str_at(&v, &["tab_id"]))
+                                .map(str::to_string)
+                        })
+                    {
+                        if let Err(e) = herdr::call(
+                            "tab.rename",
+                            json!({ "tab_id": tab_id, "label": s.tab_label }),
+                        ) {
+                            tracing::warn!(%e, "restored tab not renamed");
+                        }
+                    }
+                }
+                p
+            }
             None => {
                 let cwd = if Path::new(&s.cwd).is_dir() {
                     s.cwd.as_str()
@@ -1068,8 +1108,22 @@ fn git_worktree_facts(cwd: &str) -> Option<(String, bool)> {
     Some((root, linked))
 }
 
-fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+/// A child process that never opens a console window (Deck is a GUI app;
+/// without this flag Windows pops a terminal for every `git`/`claude -p`).
+pub(crate) fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)] // mutated only on Windows
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+pub(crate) fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
+    let out = quiet_command("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -1243,18 +1297,30 @@ fn resolve_claude() -> Option<PathBuf> {
 }
 
 /// The shadow query runs here, so its own transcript is recognisable (and skipped) by cwd.
-fn shadow_workdir(app: &AppHandle) -> Option<PathBuf> {
+pub(crate) fn shadow_workdir(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("shadow"))
 }
 
 /// `claude -p` over the excerpt, with a hard deadline, outside any project.
 fn summarize_text(workdir: &Path, excerpt: &str) -> Result<String, String> {
+    shadow_prompt(workdir, SUMMARY_PROMPT, excerpt, 400)
+}
+
+/// One shadow `claude -p PROMPT` (haiku, text output) over `input` on stdin,
+/// run in `workdir` (outside any project) with a hard deadline; the reply is
+/// cut at `max_chars`. Shared by the archive descriptions and the harness tags.
+pub(crate) fn shadow_prompt(
+    workdir: &Path,
+    prompt: &str,
+    input: &str,
+    max_chars: usize,
+) -> Result<String, String> {
     let claude = resolve_claude().ok_or("claude CLI not found (PATH, ~/.local/bin)")?;
     std::fs::create_dir_all(workdir).map_err(|e| e.to_string())?;
-    let mut child = Command::new(&claude)
+    let mut child = quiet_command(&claude)
         .args([
             "-p",
-            SUMMARY_PROMPT,
+            prompt,
             "--model",
             SUMMARY_MODEL,
             "--output-format",
@@ -1271,7 +1337,7 @@ fn summarize_text(workdir: &Path, excerpt: &str) -> Result<String, String> {
     {
         use std::io::Write;
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
-        let _ = stdin.write_all(excerpt.as_bytes());
+        let _ = stdin.write_all(input.as_bytes());
     }
     let started = Instant::now();
     loop {
@@ -1295,7 +1361,7 @@ fn summarize_text(workdir: &Path, excerpt: &str) -> Result<String, String> {
             take_chars(&err, 300)
         });
     }
-    Ok(take_chars(&text, 400))
+    Ok(take_chars(&text, max_chars))
 }
 
 /// Queue the description for `id`; one worker thread writes them in order.

@@ -303,3 +303,132 @@ function lineWidthOf(raw: string, widthOf: WidthOf): number {
   for (let i = 0; i < chars.length; i++) w += widthOf(chars[i], chars[i + 1]);
   return w;
 }
+
+/**
+ * What the CLI's own input box shows right now, for Deck's chat input:
+ * `suggestion` — text in the prompt (Claude Code's ghost suggestion, taken
+ * with Tab; Deck never types there itself, so anything but `[Image #N]`
+ * placeholders is a suggestion) and `status` — the line under the box
+ * ("⏵⏵ bypass permissions on (shift+tab to cycle)", "? for shortcuts").
+ * Both empty when there is no live prompt.
+ */
+export interface InputHint {
+  suggestion: string;
+  status: string;
+  /** The rest of the CLI's bottom panel after the status line: background agents, monitors, shells. */
+  below: string[];
+  /** The CLI's own activity line above the box (`✻ Waiting for 2 background agents to finish`, `✻ Cooked for 42s`). */
+  activity: string;
+}
+const NONE: InputHint = { suggestion: "", status: "", below: [], activity: "" };
+export function inputHint(raw: string): InputHint {
+  const lines = raw.split("\n").map((l) => stripAnsi(l).replace(/\s+$/, ""));
+  const prompt = promptLine(lines);
+  if (prompt < 0) return NONE;
+  let text = lines[prompt].replace(/^[❯›>]\s?/, "");
+  // `❯ 1. Yes` is a menu cursor (permission prompt, AskUserQuestion), not the prompt.
+  if (/^\d+\.\s/.test(text)) return NONE;
+  let activity = "";
+  for (let j = inputBoxStart(lines) - 1; j >= 0 && j >= prompt - 12; j--) {
+    const t = lines[j].trim();
+    if (/^[✻✳✶✽✢·*]\s/.test(t)) { activity = t.replace(/^[✻✳✶✽✢·*]\s*/, ""); break; }
+    if (t) break;
+  }
+  // continuation lines of a multi-line prompt, up to the closing rule
+  for (let i = prompt + 1; i < lines.length && !RULE_ONLY.test(lines[i]) && lines[i].trim() !== ""; i++) text += " " + lines[i].trim();
+  text = text.replace(/\s+/g, " ").trim();
+  if (/^(\[Image #\d+\]\s*)*$/.test(text)) text = "";
+  let status = "";
+  const below: string[] = [];
+  let i = prompt + 1;
+  while (i < lines.length && !RULE_ONLY.test(lines[i])) i++;
+  for (i += 1; i < lines.length; i++) {
+    const l = lines[i].trim().replace(/\s{2,}/g, " · ");
+    if (!l) continue;
+    if (!status) status = l; else below.push(l);
+  }
+  return { suggestion: text, status, below, activity };
+}
+
+export interface CliMenu {
+  /** Text above the options (the question / what is being asked). */
+  title: string;
+  options: { n: number; label: string }[];
+  /** Index (0-based) of the option under the `❯` cursor. */
+  current: number;
+}
+
+const BOX = /[│┃╭╮╰╯┌┐└┘├┤]/g; // verticals and corners; rules stay (they separate options)
+const OPTION = /^\s*(❯\s*)?(\d+)\.\s+(.*)$/;
+/**
+ * The CLI's numbered menu on screen (a permission prompt, an AskUserQuestion,
+ * a model picker…): the last run of `N. label` lines, one of them under the
+ * `❯` cursor, with the text above it as the title. Null when there is none.
+ */
+export function menuOf(raw: string): CliMenu | null {
+  const lines = raw.split("\n").map((l) => stripAnsi(l).replace(BOX, " ").replace(/\s+$/, ""));
+  let last = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (OPTION.test(lines[i])) { last = i; break; }
+  if (last < 0) return null;
+  // A live menu sits at the bottom of the screen: after its last option only a
+  // footer line or two may follow. A numbered list higher up is history (a
+  // user prompt echoed with `❯`, an agent's list) — not something to click.
+  const tail = lines.slice(last + 1).filter((l) => l.trim() !== "");
+  if (tail.length > 3) return null;
+  // walk up through options and their wrapped continuation lines
+  const options: { n: number; label: string; line: number; cur: boolean }[] = [];
+  let i = last;
+  let first = last;
+  while (i >= 0) {
+    const m = OPTION.exec(lines[i]);
+    if (m) {
+      options.unshift({ n: Number(m[2]), label: m[3].trim(), line: i, cur: !!m[1] });
+      first = i;
+      i--;
+      continue;
+    }
+    // a continuation line belongs to the option above it (indented, no number);
+    // a rule between options (Claude Code separates "Chat about this") is skipped
+    if (options.length && lines[i].trim() !== "" && /^\s{3,}/.test(lines[i]) && i < last) { i--; continue; }
+    if (options.length && RULE_ONLY.test(lines[i])) { i--; continue; }
+    break;
+  }
+  if (!options.length) return null;
+  // continuation lines below each option (wrapped descriptions) join its label
+  for (let k = 0; k < options.length; k++) {
+    const end = k + 1 < options.length ? options[k + 1].line : last + 1;
+    for (let j = options[k].line + 1; j < end; j++) if (!RULE_ONLY.test(lines[j])) options[k].label += " " + lines[j].trim();
+    options[k].label = options[k].label.replace(/\s+/g, " ").trim();
+  }
+  const cur = options.findIndex((o) => o.cur);
+  if (cur < 0) return null; // numbered text, but no cursor: not a live menu
+  // numbering must be 1..N in order
+  if (options.some((o, k) => o.n !== k + 1)) return null;
+  const title: string[] = [];
+  for (let j = first - 1; j >= 0 && title.length < 8; j--) {
+    const t = lines[j].trim();
+    if (!t) { if (title.length) break; continue; }
+    if (RULE_ONLY.test(t)) break;
+    title.unshift(t);
+  }
+  return { title: title.join(" ").replace(/\s+/g, " ").trim(), options: options.map((o) => ({ n: o.n, label: o.label })), current: cur };
+}
+
+/** Claude Code's permission mode as its status line names it (Shift+Tab cycles). */
+export type CliMode = "default" | "accept-edits" | "plan" | "bypass";
+export const MODE_LABEL: Record<CliMode, string> = { default: "DEFAULT", "accept-edits": "ACCEPT EDITS", plan: "PLAN", bypass: "BYPASS" };
+
+/** `{ mode, rest }`: the mode read from the status line, and the line without the mode phrase and its hint. */
+export function cliMode(status: string): { mode: CliMode; rest: string } {
+  const m = /(bypass permissions on|accept edits on|plan mode on)/i.exec(status);
+  const mode: CliMode = !m ? "default" : /bypass/i.test(m[1]) ? "bypass" : /accept/i.test(m[1]) ? "accept-edits" : "plan";
+  const rest = status
+    .replace(/[⏵▸▶]+\s*/g, "")
+    .replace(/(bypass permissions on|accept edits on|plan mode on)/i, "")
+    .replace(/\(shift\+tab to cycle\)/i, "")
+    .replace(/shift\+tab to cycle/i, "")
+    .replace(/^[\s·]+|[\s·]+$/g, "")
+    .replace(/\s*·\s*·\s*/g, " · ")
+    .trim();
+  return { mode, rest };
+}

@@ -1,5 +1,9 @@
 mod archive;
+mod harness;
 mod herdr;
+mod quickhacks;
+mod transcript;
+mod uplink;
 
 use std::path::{Path, PathBuf};
 
@@ -190,6 +194,19 @@ fn action_request(
             let (k, v) = need_id("pane_id")?;
             params.insert(k, v);
             "pane.close"
+        }
+        // Rename: `label` from options (required; the server trims).
+        "workspace.rename" | "tab.rename" | "pane.rename" => {
+            let (field, method): (&str, &'static str) = match action {
+                "workspace.rename" => ("workspace_id", "workspace.rename"),
+                "tab.rename" => ("tab_id", "tab.rename"),
+                _ => ("pane_id", "pane.rename"),
+            };
+            let (k, v) = need_id(field)?;
+            params.insert(k, v);
+            let label = opt("label").ok_or_else(|| format!("{action} needs a label"))?;
+            params.insert("label".into(), label);
+            method
         }
         // Split next to a pane (M6 tree): `direction` is right|down, default right.
         "pane.split" => {
@@ -401,6 +418,201 @@ fn resolve_cswap() -> Option<PathBuf> {
         .filter(|dir| !dir.as_os_str().is_empty())
         .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|candidate| candidate.is_file())
+}
+
+// ---- transcript (chat view source) -----------------------------------------
+
+/// Lines of a session transcript from a byte offset (or its last `tail` bytes).
+#[tauri::command]
+async fn transcript_read(
+    session_id: String,
+    from: Option<u64>,
+    tail: Option<u64>,
+) -> Result<transcript::Chunk, String> {
+    blocking(move || transcript::read(&session_id, from, tail)).await
+}
+
+/// Last-modified time (ms since epoch) of each session's transcript; sessions
+/// without one are left out. Orders the session map by real recency.
+#[tauri::command]
+async fn transcript_mtimes(
+    session_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, u64>, String> {
+    blocking(move || Ok(transcript::mtimes(&session_ids))).await
+}
+
+/// Watch one transcript for growth (`deck://transcript`); null stops.
+#[tauri::command]
+async fn transcript_watch(app: AppHandle, session_id: Option<String>) -> Result<(), String> {
+    transcript::watch(&app, session_id)
+}
+
+// ---- external links ---------------------------------------------------------
+
+/// Open an http(s) link in the system browser. Chat markdown may carry any
+/// URL; the webview itself never navigates there (see `ChatView`'s click guard).
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let ok = (url.starts_with("https://") || url.starts_with("http://"))
+        && url.len() < 4096
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace());
+    if !ok {
+        return Err("only http(s) links are opened".into());
+    }
+    #[cfg(windows)]
+    let status = archive::quiet_command("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .status();
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(&url).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = std::process::Command::new("xdg-open").arg(&url).status();
+    status.map(|_| ()).map_err(|e| e.to_string())
+}
+
+// ---- quickhacks (pinned harness launchers) ---------------------------------
+
+#[tauri::command]
+fn quickhacks_get(app: AppHandle) -> quickhacks::Saved {
+    app.state::<quickhacks::Store>().get()
+}
+
+#[tauri::command]
+fn quickhacks_set(app: AppHandle, saved: quickhacks::Saved) -> Result<quickhacks::Saved, String> {
+    app.state::<quickhacks::Store>().set(saved)
+}
+
+/// `worktree.list` for the repository containing `cwd`.
+#[tauri::command]
+async fn quickhack_worktrees(cwd: String) -> Result<Value, String> {
+    blocking(move || quickhacks::worktrees(&cwd)).await
+}
+
+/// Open a session in `launch.cwd`, start the agent, send the first prompt. Progress: `deck://quickhack`.
+#[tauri::command]
+async fn quickhack_launch(
+    app: AppHandle,
+    run: String,
+    launch: quickhacks::Launch,
+) -> Result<Value, String> {
+    blocking(move || quickhacks::launch(app, run, launch)).await
+}
+
+/// Open a repository folder as a workspace (sidebar "+" next to SESSIONS).
+#[tauri::command]
+async fn repo_open(path: String, label: Option<String>) -> Result<Value, String> {
+    blocking(move || quickhacks::repo_open(&path, label.as_deref())).await
+}
+
+/// New linked worktree inside a repository (sidebar "+" on a repo row).
+#[tauri::command]
+async fn worktree_create(
+    cwd: String,
+    branch: String,
+    base: Option<String>,
+) -> Result<Value, String> {
+    blocking(move || quickhacks::worktree_create(&cwd, &branch, base.as_deref())).await
+}
+
+// ---- uplink (git behind/ahead, pull, what came in) ---------------------------
+
+/// Behind/ahead/dirty for the given checkouts (local, no network).
+#[tauri::command]
+async fn uplink_sync(
+    paths: Vec<String>,
+) -> Result<std::collections::HashMap<String, uplink::Sync>, String> {
+    blocking(move || Ok::<_, String>(uplink::sync_many(&paths))).await
+}
+
+/// `git fetch` for the given repository roots (network; errors per root are returned, not raised).
+#[tauri::command]
+async fn uplink_fetch(
+    roots: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    blocking(move || {
+        let mut errs = std::collections::HashMap::new();
+        for r in &roots {
+            if let Err(e) = uplink::fetch(r) {
+                errs.insert(r.clone(), e);
+            }
+        }
+        Ok::<_, String>(errs)
+    })
+    .await
+}
+
+/// `git pull --ff-only` in a checkout; the update (commits, PR links) is logged and returned.
+#[tauri::command]
+async fn uplink_pull(app: AppHandle, repo: String, path: String) -> Result<uplink::Update, String> {
+    let u = blocking(move || uplink::pull(&repo, &path)).await?;
+    app.state::<uplink::Store>().push(u.clone())?;
+    let _ = app.emit("deck://uplink", "changed");
+    Ok(u)
+}
+
+#[tauri::command]
+fn uplink_list(app: AppHandle) -> uplink::Saved {
+    app.state::<uplink::Store>().get()
+}
+
+#[tauri::command]
+fn uplink_seen(app: AppHandle) -> Result<uplink::Saved, String> {
+    app.state::<uplink::Store>().mark_seen()
+}
+
+#[tauri::command]
+fn uplink_remove(app: AppHandle, id: String) -> Result<uplink::Saved, String> {
+    app.state::<uplink::Store>().remove(&id)
+}
+
+// ---- harness (Claude Code configuration per repository) --------------------
+
+/// Personal (`~/.claude`) first, then the given repositories' Claude Code files.
+#[tauri::command]
+async fn harness_scan(
+    app: AppHandle,
+    repos: Vec<harness::RepoRef>,
+) -> Result<Vec<harness::HarnessRepo>, String> {
+    let (list, roots) = blocking(move || Ok::<_, String>(harness::scan(&repos))).await?;
+    *app.state::<harness::Roots>()
+        .0
+        .lock()
+        .map_err(|_| "roots poisoned".to_string())? = roots;
+    Ok(list)
+}
+
+/// Tag the untagged skills/agents/commands/rules of one repo (shadow claude -p),
+/// writing `tags:` into their frontmatter; `deck://harness` when done.
+#[tauri::command]
+async fn harness_classify(
+    app: AppHandle,
+    key: String,
+    items: Vec<harness::Item>,
+) -> Result<bool, String> {
+    // Only files under a scanned root are ever written, whatever the caller lists.
+    let roots = app
+        .state::<harness::Roots>()
+        .0
+        .lock()
+        .map_err(|_| "roots poisoned".to_string())?
+        .clone();
+    let items: Vec<harness::Item> = items
+        .into_iter()
+        .filter(|i| harness::is_under_roots(&i.path, &roots))
+        .collect();
+    Ok(harness::classify(app, key, items))
+}
+
+/// Text of one file listed by `harness_scan`.
+#[tauri::command]
+async fn harness_read(app: AppHandle, path: String) -> Result<String, String> {
+    let roots = app
+        .state::<harness::Roots>()
+        .0
+        .lock()
+        .map_err(|_| "roots poisoned".to_string())?
+        .clone();
+    blocking(move || harness::read(&path, &roots)).await
 }
 
 // ---- session archive (cold storage) ---------------------------------------
@@ -668,6 +880,12 @@ pub fn run() {
                 .app_data_dir()
                 .unwrap_or_else(|_| std::env::temp_dir());
             app.manage(archive::Store::open(&data_dir));
+            app.manage(transcript::Watch::default());
+            app.manage(harness::Roots::default());
+            app.manage(harness::Classifying::default());
+            app.manage(quickhacks::Store::open(&data_dir));
+            app.manage(uplink::Store::open(&data_dir));
+            transcript::start_poller(app.handle().clone());
             match &app.state::<CswapPath>().0 {
                 Some(path) => tracing::info!(path = %path.display(), "cswap resolved"),
                 None => {
@@ -703,6 +921,25 @@ pub fn run() {
             archive_summarize,
             archive_groups_get,
             archive_groups_set,
+            harness_scan,
+            harness_read,
+            harness_classify,
+            open_external,
+            quickhacks_get,
+            quickhacks_set,
+            quickhack_worktrees,
+            quickhack_launch,
+            repo_open,
+            worktree_create,
+            uplink_sync,
+            uplink_fetch,
+            uplink_pull,
+            uplink_list,
+            uplink_seen,
+            uplink_remove,
+            transcript_read,
+            transcript_mtimes,
+            transcript_watch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Netrunner Deck");
@@ -807,6 +1044,15 @@ mod tests {
                 json!({ "workspace_id": "ws_1", "focus": true })
             )
         );
+        let (m, p) = action_request(
+            "tab.rename",
+            Some("t_1"),
+            Some(&serde_json::json!({ "label": "dev" })),
+        )
+        .unwrap();
+        assert_eq!(m, "tab.rename");
+        assert_eq!(p, serde_json::json!({ "tab_id": "t_1", "label": "dev" }));
+        assert!(action_request("tab.rename", Some("t_1"), None).is_err());
         let (m, p) = action_request("tab.close", Some("t_1"), None).unwrap();
         assert_eq!((m, p), ("tab.close", json!({ "tab_id": "t_1" })));
         let (m, p) = action_request("pane.close", Some("p_1"), None).unwrap();

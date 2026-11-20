@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { blockWidth, classify, defaultWidthOf, fitRules, hasBackground, inputBoxStart, promptLine, snapshotCols, stripAnsi, stripBackground, wrapAnsi, type LineKind } from "./dialogue";
+import { blockWidth, classify, defaultWidthOf, fitRules, hasBackground, cliMode, inputBoxStart, inputHint, menuOf, promptLine, snapshotCols, stripAnsi, stripBackground, wrapAnsi, type LineKind } from "./dialogue";
 
 const FIXTURES = new URL("./__fixtures__/pane-read/", import.meta.url);
 function loadFixture(name: string) {
@@ -289,5 +289,63 @@ describe("wrapAnsi", () => {
   it("short lines and wide cells are left alone or counted at 2", () => {
     expect(wrapAnsi("short", 20)).toEqual(["short"]);
     expect(wrapAnsi("日本語 日本語 日本語", 8).length).toBe(3);
+  });
+});
+
+describe("inputHint", () => {
+  it("reads the ghost suggestion and the status line under the box", () => {
+    const raw = ["● done", "", "────────", "❯ \x1b[2mпочини FunctionalTestPassed\x1b[0m", "────────", "  ⏵⏵ bypass permissions on (shift+tab to cycle)", ""].join("\n");
+    expect(inputHint(raw)).toEqual({ suggestion: "почини FunctionalTestPassed", status: "⏵⏵ bypass permissions on (shift+tab to cycle)", below: [], activity: "" });
+  });
+  it("carries the CLI's activity line and the background-agent panel", () => {
+    const raw = ["● done", "", "✻ Waiting for 2 background agents to finish", "", "────────", "❯ ", "────────",
+      "  ⏵⏵ bypass permissions on · 1 shell, 2 monitors · ↓ to manage", "", "  ● main", "  ○ general-purpose  waiting on 2 monitors · Investigate batch   28m 33s · ↓ 323.4k tokens"].join("\n");
+    const h = inputHint(raw);
+    expect(h.activity).toBe("Waiting for 2 background agents to finish");
+    expect(h.status).toBe("⏵⏵ bypass permissions on · 1 shell, 2 monitors · ↓ to manage");
+    expect(h.below).toEqual(["● main", "○ general-purpose · waiting on 2 monitors · Investigate batch · 28m 33s · ↓ 323.4k tokens"]);
+  });
+  it("image placeholders are not a suggestion; no prompt → nothing", () => {
+    expect(inputHint("────\n❯ [Image #1] [Image #2]\n────\n? for shortcuts").suggestion).toBe("");
+    expect(inputHint("────\n❯ \n────\n? for shortcuts")).toMatchObject({ suggestion: "", status: "? for shortcuts" });
+    expect(inputHint("just output\nno prompt")).toMatchObject({ suggestion: "", status: "" });
+  });
+});
+
+describe("menuOf", () => {
+  it("reads a permission prompt: title, options, cursor", () => {
+    const raw = ["● Bash(git push)", "", "╭──────────────╮", "│ Bash command │", "│ git push      │", "│ Do you want to proceed? │",
+      "│ ❯ 1. Yes │", "│   2. Yes, and don't ask again for git push │", "│   3. No, and tell Claude what to do differently (esc) │", "╰──────────────╯"].join("\n");
+    const m = menuOf(raw);
+    expect(m?.options.map((o) => o.label)).toEqual(["Yes", "Yes, and don't ask again for git push", "No, and tell Claude what to do differently (esc)"]);
+    expect(m?.current).toBe(0);
+    expect(m?.title).toBe("Bash command git push Do you want to proceed?");
+  });
+  it("reads an AskUserQuestion with wrapped options and a moved cursor; a plain prompt is no menu", () => {
+    const raw = ["Подход", "Какой режим выбрать?", "", "  1. Холостой режим (Рекомендую) Добавляю ручку /api/ops: агент работает на", "     стенде без PR", "❯ 2. Боевой режим", "  3. Chat about this", ""].join("\n");
+    const m = menuOf(raw);
+    expect(m?.options.map((o) => o.label)).toEqual(["Холостой режим (Рекомендую) Добавляю ручку /api/ops: агент работает на стенде без PR", "Боевой режим", "Chat about this"]);
+    expect(m?.current).toBe(1);
+    expect(m?.title).toBe("Подход Какой режим выбрать?");
+    const real = ["  Ran 2 shell commands", "──────────", " ☐ 1Password", "", "│ Для аудита IR нужно одно разрешение", "│ «authorization timeout» — окно не было подтверждено", "",
+      "❯ 1. Повторить, я подтвержу", "     Ещё одна попытка выгрузки", "  2. Без паролей к хостам", "     Аудит идёт только через стенд", "  3. Type something.", "──────────", "  4. Chat about this", "", "Enter to select · ↑/↓ to navigate · Esc to cancel"].join("\n");
+    const r = menuOf(real);
+    expect(r?.options.map((o) => o.label)).toEqual(["Повторить, я подтвержу Ещё одна попытка выгрузки", "Без паролей к хостам Аудит идёт только через стенд", "Type something.", "Chat about this"]);
+    expect(r?.current).toBe(0);
+    expect(r?.title).toBe("Для аудита IR нужно одно разрешение «authorization timeout» — окно не было подтверждено");
+    expect(menuOf("────\n❯ \n────\n? for shortcuts")).toBeNull();
+    // a user's own numbered message echoed in the history, with the agent still talking below it
+    expect(menuOf(["❯ 1. да", "  2. да", "", "● Now the scanner", "", "● Bash(ls)", "  ⎿ ok", "", "✻ Routing… (6m)", "", "────", "❯ ", "────"].join("\n"))).toBeNull();
+    expect(menuOf("1. first\n2. second\n")).toBeNull();
+    expect(inputHint(raw).suggestion).toBe("");
+  });
+});
+
+describe("cliMode", () => {
+  it("reads the permission mode and strips it from the status line", () => {
+    expect(cliMode("⏵⏵ bypass permissions on (shift+tab to cycle) · 1 shell, 2 monitors · ↓ to manage")).toEqual({ mode: "bypass", rest: "1 shell, 2 monitors · ↓ to manage" });
+    expect(cliMode("⏵⏵ accept edits on (shift+tab to cycle)")).toEqual({ mode: "accept-edits", rest: "" });
+    expect(cliMode("⏸ plan mode on (shift+tab to cycle)")).toMatchObject({ mode: "plan" });
+    expect(cliMode("? for shortcuts")).toEqual({ mode: "default", rest: "? for shortcuts" });
   });
 });

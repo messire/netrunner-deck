@@ -22,14 +22,6 @@ export default function TabBar(p: {
         return { tab, pane: agent ?? panes[0], label, on: panes.some((x) => x.pane_id === p.selectedPane) };
       });
   });
-  const pulse = createMemo(() => {
-    const agents = p.tree?.agents ?? [];
-    const order: Record<string, number> = { working: 0, blocked: 1 };
-    const glyph: Record<string, string> = { working: "◆", blocked: "◈" };
-    const states = agents.map((a) => a.agent_status).sort((a, b) => (order[a] ?? 2) - (order[b] ?? 2));
-    const busy = states.filter((s) => s === "working").length;
-    return `${states.slice(0, 8).map((s) => glyph[s] ?? "◇").join("")} ${busy}/${states.length}`;
-  });
   return (
     <div class="tabs">
       <For each={tabs()}>
@@ -41,19 +33,32 @@ export default function TabBar(p: {
         )}
       </For>
       {workspaceId() ? <div class="tab add" title="new tab in this space (tab.create)" onClick={() => p.onNewTab(workspaceId()!)}>+</div> : null}
-      <div class="right">
-        <span class="r">{pulse()}</span><span class="m">▕</span>
-        <span class="glitch" data-text="▞ AFTER LIFE ▚">▞ AFTER LIFE ▚</span><span class="m">▕</span>
-        <Clock />
-      </div>
     </div>
   );
 }
 
-function Clock() {
+/** Agent pulse · AFTER LIFE · clock — the titlebar's right-hand strip, next to the zone. */
+export function Pulse(p: { tree?: Tree }) {
+  const pulse = createMemo(() => {
+    const agents = p.tree?.agents ?? [];
+    const order: Record<string, number> = { working: 0, blocked: 1 };
+    const glyph: Record<string, string> = { working: "◆", blocked: "◈" };
+    const states = agents.map((a) => a.agent_status).sort((a, b) => (order[a] ?? 2) - (order[b] ?? 2));
+    const busy = states.filter((s) => s === "working").length;
+    return `${states.slice(0, 8).map((s) => glyph[s] ?? "◇").join("")} ${busy}/${states.length}`;
+  });
+  return (
+    <div class="pulse-strip">
+      <span class="r" title="agents: working / total">{pulse()}</span><span class="m">▕</span>
+      <span class="glitch" data-text="▞ AFTER LIFE ▚">▞ AFTER LIFE ▚</span>
+    </div>
+  );
+}
+
+export function Clock() {
   const fmt = () => new Date().toTimeString().slice(0, 5);
   const [now, setNow] = createSignal(fmt());
   const timer = setInterval(() => setNow(fmt()), 10000);
   onCleanup(() => clearInterval(timer));
-  return <span class="d">{now()}</span>;
+  return <span class="clock">{now()}</span>;
 }

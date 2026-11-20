@@ -74,11 +74,15 @@ export default function ArchiveView(p: {
   const SessionRow = (q: { e: ArchiveEntry }) => {
     const d = describe(q.e);
     const own = () => p.busy === q.e.id;
+    const tabNames = (e: ArchiveEntry) => [...new Set(e.sessions.map((x) => x.tab_label).filter(Boolean))].join(" · ");
     return (
       <div class={`arow sess ${q.e.status === "restored" ? "dim" : ""}`}>
         <span class="tw" />
         <span class="mono id" title={q.e.id}>{shortId(q.e)}</span>
-        <span class={`desc ${d.state}`} title={q.e.cwd}>{d.text}</span>
+        <span class={`desc ${d.state}`} title={q.e.cwd}>
+          <Show when={tabNames(q.e)}>{(n) => <span class="tabname" title="tab name(s), restored with the session">{n()}</span>}</Show>
+          {d.text}
+        </span>
         <span class="mono cnt" title="resumable / panes">{resumable(q.e)}<span class="m">/{q.e.sessions.length}</span></span>
         <span class="mono when">{when(q.e.last_active_ms)}</span>
         <span class="mono stat">{q.e.status === "restored" ? `RESTORED${q.e.restored_workspace_id ? ` · ${q.e.restored_workspace_id}` : ""}` : "CLOSED"}</span>

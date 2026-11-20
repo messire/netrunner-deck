@@ -24,6 +24,16 @@ const TREE_EVENTS = new Set([
   "layout_updated",
 ]);
 
+/** Pure. The pane an output event is about, or null for anything else. */
+export function outputPaneOf(ev: unknown): string | null {
+  if (typeof ev !== "object" || ev === null || Array.isArray(ev)) return null;
+  const raw = (ev as { event?: unknown }).event;
+  if (typeof raw !== "string" || raw.replace(/\./g, "_") !== "pane_output_changed") return null;
+  const data = (ev as { data?: unknown }).data;
+  const pane = typeof data === "object" && data !== null ? (data as { pane_id?: unknown }).pane_id : undefined;
+  return typeof pane === "string" && pane !== "" ? pane : null;
+}
+
 /** Pure. `currentPane` gates the output tick to the pane on screen. */
 export function routeEvent(ev: unknown, currentPane: string | null): EventRoute {
   if (typeof ev !== "object" || ev === null || Array.isArray(ev)) return "ignore";
