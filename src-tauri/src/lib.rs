@@ -856,11 +856,32 @@ fn init_tracing(app: &AppHandle) {
     }
 }
 
+/// Deck's own data (archive, quickhacks, uplink, shadow workdir).
+/// `DECK_DATA_DIR` moves it, so a Deck run against a test server
+/// (`scripts/try-deck-server.ps1`) never writes the normal Deck's files.
+pub(crate) fn data_dir(app: &AppHandle) -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("DECK_DATA_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    app.path().app_data_dir().ok()
+}
+
+/// Window size/position survive restarts. A Deck with its own `DECK_DATA_DIR`
+/// keeps its own window-state file, so it does not move the normal Deck's window.
+fn window_state_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    let builder = tauri_plugin_window_state::Builder::new();
+    if std::env::var_os("DECK_DATA_DIR").is_some_and(|d| !d.is_empty()) {
+        builder.with_filename(".window-state.try.json").build()
+    } else {
+        builder.build()
+    }
+}
+
 pub fn run() {
     let cswap = resolve_cswap();
     tauri::Builder::default()
         // Window size/position survive restarts (UI-only state, roadmap M4).
-        .plugin(tauri_plugin_window_state::Builder::new().build())
+        .plugin(window_state_plugin())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -869,10 +890,7 @@ pub fn run() {
         .manage(PendingUpdate(std::sync::Mutex::new(None)))
         .setup(|app| {
             init_tracing(app.handle());
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir());
+            let data_dir = data_dir(app.handle()).unwrap_or_else(std::env::temp_dir);
             app.manage(archive::Store::open(&data_dir));
             app.manage(transcript::Watch::default());
             app.manage(harness::Roots::default());
