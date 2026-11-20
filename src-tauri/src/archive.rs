@@ -295,7 +295,12 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Herdr's config dir (its `session.json` and snapshots). `HERDR_CONFIG_DIR`
+/// overrides it, as in `herdr.rs`, for a Deck pointed at another server.
 fn herdr_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("HERDR_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
     #[cfg(windows)]
     {
         std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("herdr"))
@@ -1288,7 +1293,7 @@ fn resolve_claude() -> Option<PathBuf> {
 
 /// The shadow query runs here, so its own transcript is recognisable (and skipped) by cwd.
 pub(crate) fn shadow_workdir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("shadow"))
+    crate::data_dir(app).map(|d| d.join("shadow"))
 }
 
 /// `claude -p` over the excerpt, with a hard deadline, outside any project.
