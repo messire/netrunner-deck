@@ -865,6 +865,39 @@ mod tests {
         }));
     }
 
+    /// Live check against the servers running on this machine:
+    /// `cargo test live_discovery -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_discovery_and_two_runtimes() {
+        use crate::runtime::Runtime;
+        let root = herdr::config_root();
+        let mut answered = 0;
+        for socket in candidates(&root) {
+            let place = place_of(&root, &socket);
+            let r = herdr::call_within(&socket, "ping", json!({}), PING_TIMEOUT);
+            if matches!(&r, Err(e) if is_absent(e)) {
+                continue;
+            }
+            let st = Status::from_ping(&r);
+            let ws = HerdrRuntime::new(&socket)
+                .workspace_list()
+                .map(|v| v["workspaces"].as_array().map_or(0, Vec::len));
+            println!(
+                "{:<24} {:<12} {:?} {:?} workspaces={:?}",
+                place.id,
+                kind_of(&place),
+                st.state,
+                st.version,
+                ws
+            );
+            if st.state == "online" {
+                answered += 1;
+            }
+        }
+        assert!(answered >= 1, "no server answered");
+    }
+
     #[test]
     fn status_from_ping() {
         let ok = Status::from_ping(&Ok(json!({"version":"0.9.5","protocol":22})));

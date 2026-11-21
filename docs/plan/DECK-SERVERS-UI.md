@@ -1,6 +1,6 @@
 # Deck servers and preferences: UI spec
 
-Status: design agreed, not implemented. Mockups: https://claude.ai/artifact/WwhMhdz2w3mke8Qd5DKoAJ
+Status: implemented on `feat/deck-servers-ui` (see "Implementation notes"). Mockups: https://claude.ai/artifact/WwhMhdz2w3mke8Qd5DKoAJ
 
 Deck connects to several compatible servers at once (today local `herdr` and
 `deck-server`, later servers on other machines) and shows their sessions in one
@@ -98,3 +98,23 @@ The bottom "HERDR OFFLINE" bar remains only for "no connected server online".
   are independent.
 - Archive, quickhacks and restore gain a `server` field; restore opens on the
   original server or asks if it is gone.
+
+## Implementation notes
+
+- Rust: `src-tauri/src/servers.rs` (registry, discovery, `preferences.json`,
+  commands `servers_*` / `server_*`). Server ids are `herdr`,
+  `herdr-dev/decktest`, `deck-server/try`; an address outside the known app
+  dirs is its own id. Every `herdr_*` command takes an optional `server`
+  (none = the primary server: the first connected one that is online).
+- Events: `herdr://event` carries `server`; `herdr://offline` is
+  `{server, error}`; `deck://servers` fires on any registry change.
+- Webview: `src/servers.ts` tags ids as `<server>|<id>` at the API boundary
+  (`api.ts`), so the rest of the UI works on plain strings.
+- No `preferences.json` yet (an existing single-server Deck) = the default
+  Herdr (or `HERDR_SOCKET_PATH`) is connected, as before. Everything found
+  later is only offered.
+- A webview newer than its Rust side (`tauri dev` with an old binary) falls
+  back to one unnamed server: the single-server Deck.
+- Not done yet: the protocol check ("incompatible" state) — no minimum
+  protocol is defined; the archive still reads the primary server only and
+  restores onto the shown server (or the primary).
