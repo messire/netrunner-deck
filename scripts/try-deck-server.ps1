@@ -157,7 +157,11 @@ if ($Installed) {
     # `npm run tauri dev` you already run is not disturbed.
     $env:CARGO_TARGET_DIR = Join-Path $DeckRepo 'src-tauri\target\try'
     $deckExe = Join-Path $env:CARGO_TARGET_DIR 'debug\netrunner-deck.exe'
-    $newestDeck = Get-ChildItem (Join-Path $DeckRepo 'src'), (Join-Path $DeckRepo 'src-tauri\src') -Recurse -File |
+    # Its own app identifier: its own WebView2 profile, log dir and window state.
+    # Sharing the normal Deck's WebView2 profile makes both windows share one
+    # browser process (and its keyboard focus and localStorage).
+    $tryConf = Join-Path $PSScriptRoot 'tauri.try.conf.json'
+    $newestDeck = Get-ChildItem (Join-Path $DeckRepo 'src'), (Join-Path $DeckRepo 'src-tauri\src'), $tryConf -Recurse -File |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($Rebuild -or -not (Test-Path $deckExe) -or ((Get-Item $deckExe).LastWriteTime -lt $newestDeck.LastWriteTime)) {
         if (Get-Process netrunner-deck -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq $deckExe }) {
@@ -165,7 +169,7 @@ if ($Installed) {
         }
         Say 'Building Deck from this repo (debug, no installer). The first build takes a few minutes...'
         Push-Location $DeckRepo
-        try { npx tauri build --debug --no-bundle } finally { Pop-Location }
+        try { npx tauri build --debug --no-bundle --config $tryConf } finally { Pop-Location }
         if ($LASTEXITCODE) { throw 'Deck build failed' }
     }
     Say "Starting Deck ($deckExe)..."
