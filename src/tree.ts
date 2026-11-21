@@ -1,4 +1,5 @@
 import type { Agent, AgentStatus, Pane, Tab, Tree, Workspace } from "./api";
+import { SEP, serverOf } from "./servers";
 
 /**
  * Sidebar tree model: repo › space (workspace) › tab › session (pane).
@@ -90,7 +91,9 @@ export function buildTree(t: Tree | undefined): RootNode[] {
   for (const w of t.workspaces) {
     const node = spaceNode(w);
     if (!w.worktree) { roots.push(node); continue; }
-    const key = w.worktree.repo_key;
+    // Repos of different servers stay apart (ids are `<server>|<id>`, see servers.ts).
+    const server = serverOf(w.workspace_id);
+    const key = server ? `${server}${SEP}${w.worktree.repo_key}` : w.worktree.repo_key;
     let repo = repos.get(key);
     if (!repo) {
       repo = { kind: "repo", id: `repo:${key}`, label: w.worktree.repo_name, status: "unknown", spaces: [], agents: 0 };
