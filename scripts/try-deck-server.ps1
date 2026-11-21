@@ -126,8 +126,11 @@ $env:DECK_DATA_DIR = $DeckData        # own archive/quickhacks/uplink and window
 Write-Host @"
 
 What you should see
-  * Deck opens ONLINE with an empty tree: deck-server keeps its own sessions,
-    your Herdr workspaces are not there (and your Herdr keeps running).
+  * Deck opens ONLINE with deck-server connected and an empty tree:
+    deck-server keeps its own sessions (and your Herdr keeps running).
+  * Your Herdr is found but not connected: click the NETRUNNER DECK tab
+    (or the gear next to the clock) and + CONNECT it to see both servers,
+    one sidebar section each. Alt+0 shows all, Alt+1/2 one server.
   * Create a workspace or tab with + and type in it like in Herdr.
   * The terminal view refreshes by polling (this build has no pane.output_changed
     yet), so output may lag a fraction of a second.
