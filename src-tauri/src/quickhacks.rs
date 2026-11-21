@@ -169,11 +169,16 @@ fn agent_ready(screen: &str) -> bool {
 /// Open (or reuse) the workspace for `cwd`, create a tab, start the agent and
 /// hand it the prompt. Returns at once with the pane; progress goes out as
 /// `deck://quickhack` events (`workspace`, `shell`, `agent`, `prompt`, `done`, `error`).
-pub fn launch(app: AppHandle, run: String, l: Launch) -> Result<Value, String> {
+pub fn launch(
+    app: AppHandle,
+    server: Option<String>,
+    run: String,
+    l: Launch,
+) -> Result<Value, String> {
     if !Path::new(&l.cwd).is_dir() {
         return Err(format!("directory is gone: {}", l.cwd));
     }
-    let rt = runtime::of(&app);
+    let rt = crate::servers::runtime_for(&app, server.as_deref())?;
     let (workspace_id, pane_id) =
         open_session_dir(&*rt, &l.cwd, Some(&l.repo_root), l.label.as_deref(), true)?;
     emit(

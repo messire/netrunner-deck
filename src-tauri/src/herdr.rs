@@ -13,8 +13,9 @@
 //! Windows named-pipe listener is not hit with `ERROR_PIPE_BUSY`. The
 //! long-lived [`subscribe`] connection is outside both limits.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -57,7 +58,8 @@ impl serde::Serialize for HerdrError {
 
 pub type Result<T> = std::result::Result<T, HerdrError>;
 
-/// Where the active Herdr server's API endpoint lives.
+/// Where the default Herdr server's API endpoint lives (`HERDR_SOCKET_PATH`,
+/// else `<config dir>/herdr.sock`).
 pub fn socket_path() -> PathBuf {
     if let Ok(explicit) = std::env::var("HERDR_SOCKET_PATH") {
         return PathBuf::from(explicit);
@@ -69,22 +71,39 @@ fn config_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("HERDR_CONFIG_DIR") {
         return PathBuf::from(dir);
     }
+    config_root().join("herdr")
+}
+
+/// The OS config root the server app dirs live in: `%APPDATA%` on Windows,
+/// `$XDG_CONFIG_HOME` or `~/.config` elsewhere.
+pub fn config_root() -> PathBuf {
     #[cfg(windows)]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {
-            return PathBuf::from(appdata).join("herdr");
+            return PathBuf::from(appdata);
         }
     }
     #[cfg(not(windows))]
     {
         if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            return PathBuf::from(xdg).join("herdr");
+            return PathBuf::from(xdg);
         }
         if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(".config").join("herdr");
+            return PathBuf::from(home).join(".config");
         }
     }
-    PathBuf::from("herdr")
+    PathBuf::from(".")
+}
+
+/// The address shown to the user and used to connect: on Windows the pipe
+/// name `\\.\pipe\<socket path>`, elsewhere the socket path.
+pub fn address_of(socket: &Path) -> String {
+    let display = socket.to_string_lossy();
+    if cfg!(windows) {
+        format!(r"\\.\pipe\{display}")
+    } else {
+        display.into_owned()
+    }
 }
 
 #[cfg(windows)]
@@ -98,21 +117,21 @@ type Stream = std::os::unix::net::UnixStream;
 const CALL_READ_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Connection for one request/reply exchange (see [`call`]).
-fn connect() -> Result<Stream> {
-    connect_with(Some(CALL_READ_TIMEOUT))
+fn connect(socket: &Path) -> Result<Stream> {
+    connect_with(socket, Some(CALL_READ_TIMEOUT))
 }
 
 /// Connect to Herdr. `read_timeout` is applied only where the platform
 /// stream supports it (unix); `None` leaves reads unbounded, which the
 /// long-lived event stream needs — an idle subscription must not be torn
 /// down just because nothing happened for a while.
-fn connect_with(read_timeout: Option<Duration>) -> Result<Stream> {
-    let path = socket_path();
+fn connect_with(path: &Path, read_timeout: Option<Duration>) -> Result<Stream> {
     let display = path.to_string_lossy().into_owned();
     #[cfg(windows)]
     {
         let _ = read_timeout;
-        let name = format!(r"\\.\pipe\{display}");
+        let name = address_of(path);
+        let _ = display;
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -125,7 +144,7 @@ fn connect_with(read_timeout: Option<Duration>) -> Result<Stream> {
     }
     #[cfg(not(windows))]
     {
-        let stream = std::os::unix::net::UnixStream::connect(&path).map_err(|source| {
+        let stream = std::os::unix::net::UnixStream::connect(path).map_err(|source| {
             HerdrError::Connect {
                 path: display,
                 hint: connect_hint(source.kind()),
@@ -211,8 +230,16 @@ impl Drop for SlotGuard {
     }
 }
 
-/// Slots for request/reply connections. `subscribe` does not use them.
-static CALL_SLOTS: Semaphore = Semaphore::new(MAX_CONCURRENT_CALLS);
+/// Slots for request/reply connections, one set per server socket (a busy or
+/// hung server must not starve the others). `subscribe` does not use them.
+/// Leaked on purpose: one small struct per server address ever used.
+fn call_slots(socket: &Path) -> &'static Semaphore {
+    static SLOTS: Mutex<Option<HashMap<PathBuf, &'static Semaphore>>> = Mutex::new(None);
+    let mut map = SLOTS.lock().unwrap_or_else(PoisonError::into_inner);
+    map.get_or_insert_with(HashMap::new)
+        .entry(socket.to_path_buf())
+        .or_insert_with(|| Box::leak(Box::new(Semaphore::new(MAX_CONCURRENT_CALLS))))
+}
 
 /// Run `work` on a helper thread under a connection slot from `slots` and
 /// wait for its result at most `timeout` (measured from entry, so slot
@@ -265,16 +292,22 @@ where
 ///
 /// Blocking: safe to call from a Tauri thread-pool command but never from the
 /// main thread. Bounded by [`CALL_TIMEOUT`] and [`MAX_CONCURRENT_CALLS`].
-pub fn call(method: &str, params: Value) -> Result<Value> {
+pub fn call(socket: &Path, method: &str, params: Value) -> Result<Value> {
+    call_within(socket, method, params, CALL_TIMEOUT)
+}
+
+/// [`call`] with its own deadline (discovery pings use a short one).
+pub fn call_within(socket: &Path, method: &str, params: Value, timeout: Duration) -> Result<Value> {
     let owned_method = method.to_owned();
-    run_with_deadline(&CALL_SLOTS, method, CALL_TIMEOUT, move || {
-        call_blocking(&owned_method, params)
+    let owned_socket = socket.to_path_buf();
+    run_with_deadline(call_slots(socket), method, timeout, move || {
+        call_blocking(&owned_socket, &owned_method, params)
     })
 }
 
 /// The raw exchange: connect, write one request line, read one reply line.
-fn call_blocking(method: &str, params: Value) -> Result<Value> {
-    let mut stream = connect()?;
+fn call_blocking(socket: &Path, method: &str, params: Value) -> Result<Value> {
+    let mut stream = connect(socket)?;
     let request = json!({ "id": next_id(), "method": method, "params": params });
     stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
     stream.write_all(b"\n")?;
@@ -376,9 +409,13 @@ fn classify_line(line: &str) -> LineClass {
 /// Long-lived by design: it takes no slot from `CALL_SLOTS`, has no deadline
 /// and no socket read timeout (an idle stream is normal); the caller already
 /// runs it on a dedicated thread.
-pub fn subscribe(types: &[&str], mut on_event: impl FnMut(Value) -> bool) -> Result<()> {
+pub fn subscribe(
+    socket: &Path,
+    types: &[&str],
+    mut on_event: impl FnMut(Value) -> bool,
+) -> Result<()> {
     const METHOD: &str = "events.subscribe";
-    let mut stream = connect_with(None)?;
+    let mut stream = connect_with(socket, None)?;
     let subscriptions: Vec<Value> = types.iter().map(|t| json!({ "type": t })).collect();
     let request = json!({
         "id": next_id(),

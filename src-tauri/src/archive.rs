@@ -433,10 +433,10 @@ fn snapshot_time_ms(name: &str) -> Option<u64> {
 }
 
 /// Every workspace Herdr has described, newest description per key, plus the live ids.
-fn herdr_workspaces() -> (HashMap<String, WorkspaceRecord>, HashSet<String>) {
+fn herdr_workspaces(dir: Option<PathBuf>) -> (HashMap<String, WorkspaceRecord>, HashSet<String>) {
     let mut by_key: HashMap<String, WorkspaceRecord> = HashMap::new();
     let mut live = HashSet::new();
-    let Some(dir) = herdr_dir() else {
+    let Some(dir) = dir.or_else(herdr_dir) else {
         return (by_key, live);
     };
     let mut files: Vec<(u64, PathBuf)> = Vec::new();
@@ -653,7 +653,9 @@ pub fn scan(app: &AppHandle) -> Vec<Entry> {
     let saved = store.snapshot();
     let shadow_dir = shadow_workdir(app).map(|p| p.to_string_lossy().to_string());
 
-    let (mut groups, live_fallback) = herdr_workspaces();
+    // The primary server's own session.json (deck-server keeps it in its session dir).
+    let dir = app.state::<crate::servers::Registry>().config_dir(None);
+    let (mut groups, live_fallback) = herdr_workspaces(dir);
     for w in &saved.closed {
         let newer = groups
             .get(&w.key)
@@ -889,10 +891,11 @@ pub fn set_groups(app: &AppHandle, groups: Vec<RepoGroup>) -> Result<Vec<RepoGro
 /// Close a live workspace and remember it even if no Herdr snapshot ever caught it.
 pub fn archive_and_close(
     app: &AppHandle,
+    server: Option<&str>,
     workspace_id: &str,
     close_group: bool,
 ) -> Result<Value, String> {
-    let rt = runtime::of(app);
+    let rt = crate::servers::runtime_for(app, server)?;
     let ws = rt.workspace_get(workspace_id).map_err(|e| e.to_string())?;
     let ws = ws.get("workspace").cloned().unwrap_or(ws);
     let tabs = rt.tab_list(workspace_id).map_err(|e| e.to_string())?;
@@ -970,7 +973,8 @@ fn find_entry(app: &AppHandle, id: &str) -> Result<Entry, String> {
         .ok_or_else(|| format!("session {id} is not in the archive any more"))
 }
 
-pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
+/// Reopen `id` on `server` (`None` = the primary server).
+pub fn restore(app: &AppHandle, server: Option<&str>, id: &str) -> Result<Value, String> {
     let entry = find_entry(app, id)?;
     if !Path::new(&entry.cwd).is_dir() {
         return Err(format!("directory is gone: {}", entry.cwd));
@@ -978,7 +982,7 @@ pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
     // A root session goes back into the repository's ROOT space (a new tab
     // when it is open, `worktree.open` on the main checkout otherwise), a
     // worktree session into its worktree's space — never a detached folder.
-    let rt = runtime::of(app);
+    let rt = crate::servers::runtime_for(app, server)?;
     let (workspace_id, root_pane) = crate::quickhacks::open_session_dir(
         &*rt,
         &entry.cwd,
