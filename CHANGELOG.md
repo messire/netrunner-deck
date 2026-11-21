@@ -1,0 +1,22 @@
+# Changelog
+
+## [0.3.0] — 2026-11-20
+- Chat mode built from the Claude Code transcript: dialogue as chat bubbles, browser-style text selection.
+- Session archive: close a space to cold storage, restore with `claude --resume`, delete with its worktree; tree by repo › worktree › session.
+- Harness, Quickhacks and Uplink panels.
+- Sessions and Archive trees restyled; no blinking while the agent works.
+
+## [0.2.0] — 2026-11-04
+- Incremental pane rendering without full repaint; cursor from the fork's `pane.read`.
+- Tree actions and hotkeys: context menus, `+` buttons, F1 account picker, F2 next waiting agent, Ctrl+K palette.
+- One sidebar tree: repo › space › tab › session, pane split, WAITING strip.
+- OS notification when an agent starts waiting; window state and selected pane remembered.
+- Release by tag with signed installer and in-app updater; bundled Rajdhani font.
+- Input box pinned below the chat; Shift+Enter, clipboard paste.
+
+## [0.1.0] — 2026-10-24
+- Tauri 2 + Solid + xterm.js client for the Herdr JSON API.
+- Async commands with deadlines, OFFLINE banner, visible errors.
+- Event routing with debounced tree refresh; output events from the fork.
+- Terminal input mapped to Herdr key names; dialogue frames for Claude Code.
+- CI: typecheck, vitest, cargo test, clippy, Windows build; CSP.
