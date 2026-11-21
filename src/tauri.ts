@@ -87,7 +87,7 @@ const fake = (() => {
     return { text: lines.join("\n"), revision, cursor: { line: promptIdx, col: 2 + ("typed".slice(0, grown % 6)).length, visible: true, shape: 0 } };
   };
   setInterval(() => {
-    if (grown < extra.length) { grown++; revision += 2; emit("herdr://event", { server: "herdr", event: "pane_output_changed", data: { type: "pane_output_changed", pane_id: "w1:p1", workspace_id: "w1", revision } }); }
+    if (grown < extra.length) { grown++; revision += 2; emit("herdr://event", { ...(legacy ? {} : { server: "herdr" }), event: "pane_output_changed", data: { type: "pane_output_changed", pane_id: "w1:p1", workspace_id: "w1", revision } }); }
   }, 3000);
 
   (window as any).__deckEmit = emit;
@@ -98,6 +98,8 @@ const fake = (() => {
   // local ids (`w1:p1`), as real servers do. `?servers=0` starts with none
   // connected (the first-run list), `?servers=down` takes deck-server offline.
   const q = new URLSearchParams(location.search);
+  // `?servers=legacy`: a Rust side from before SERVERS (no servers_* commands, no `server` on events).
+  const legacy = q.get("servers") === "legacy";
   type FakeServer = { id: string; name: string; kind: "herdr" | "deck-server"; address: string; connected: boolean; manual: boolean; found: boolean; new: boolean; status: { state: string; version?: string; protocol?: number; error?: string } };
   const online = { state: "online", version: "0.9.5", protocol: 22 };
   const servers: FakeServer[] = [
@@ -128,8 +130,9 @@ const fake = (() => {
     await new Promise((r) => setTimeout(r, 30));
     switch (cmd) {
       case "herdr_ping": return { version: "browser-fake", protocol: 0 };
-      case "herdr_tree": return treeOf(args.server);
+      case "herdr_tree": return treeOf(legacy ? null : args.server);
       case "servers_list": case "servers_seen":
+        if (legacy) throw new Error(`Command ${cmd} not found`);
         if (cmd === "servers_seen") servers.forEach((s) => (s.new = false));
         return view();
       case "servers_scan": await new Promise((r) => setTimeout(r, 400)); return view();
