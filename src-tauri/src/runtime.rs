@@ -3,13 +3,14 @@
 //! current implementation, a thin adapter over `herdr.rs`; the own server gets
 //! its own adapter later (S5) on the same contract.
 //!
-//! One `Runtime` instance stands for one server. Deck manages a single
-//! [`SharedRuntime`] in Tauri state; every module reaches the server through it
-//! and nothing outside this file calls `herdr::call`/`herdr::subscribe`.
+//! One `Runtime` instance stands for one server; `servers::Registry` holds one
+//! per connected server. Nothing outside this file calls
+//! `herdr::call`/`herdr::subscribe` (discovery pings go through `herdr::call_within`).
 //!
 //! Results stay `serde_json::Value` in Herdr's reply shape for now; the params
 //! are typed so the wire mapping lives in one place ([`Request::herdr`]).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
@@ -22,9 +23,10 @@ pub use crate::herdr::Result;
 /// The runtime as Deck holds it (Tauri state, worker threads).
 pub type SharedRuntime = Arc<dyn Runtime>;
 
-/// The runtime managed in `app`'s state.
+/// The primary server's runtime (the first connected one; see
+/// `servers::Registry::primary`). Used where an action has no server of its own.
 pub fn of(app: &AppHandle) -> SharedRuntime {
-    app.state::<SharedRuntime>().inner().clone()
+    app.state::<crate::servers::Registry>().primary()
 }
 
 /// What Deck asks of a server. Blocking: call from a worker thread, never
@@ -260,15 +262,23 @@ pub fn dispatch(rt: &dyn Runtime, req: Request) -> Result<Value> {
 
 // ---- Herdr ----------------------------------------------------------------------
 
-/// The Herdr server at `herdr::socket_path()`. Stateless: the connection
-/// slots, deadline and reply parsing stay in `herdr.rs`.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct HerdrRuntime;
+/// The Herdr-protocol server (Herdr or deck-server) at `socket`. Holds only
+/// the address: connection slots, deadline and reply parsing stay in `herdr.rs`.
+#[derive(Debug, Clone)]
+pub struct HerdrRuntime {
+    socket: PathBuf,
+}
 
 impl HerdrRuntime {
+    pub fn new(socket: impl Into<PathBuf>) -> Self {
+        Self {
+            socket: socket.into(),
+        }
+    }
+
     fn send(&self, req: Request) -> Result<Value> {
         let (method, params) = req.herdr();
-        herdr::call(method, params)
+        herdr::call(&self.socket, method, params)
     }
 }
 
@@ -536,7 +546,7 @@ impl Runtime for HerdrRuntime {
     }
 
     fn subscribe(&self, events: &[&str], on_event: &mut dyn FnMut(Value) -> bool) -> Result<()> {
-        herdr::subscribe(events, on_event)
+        herdr::subscribe(&self.socket, events, on_event)
     }
 }
 

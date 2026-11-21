@@ -3,6 +3,7 @@ mod harness;
 mod herdr;
 mod quickhacks;
 mod runtime;
+mod servers;
 mod transcript;
 mod uplink;
 
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use runtime::{Request, SharedRuntime};
+use runtime::Request;
 
 // Every command below blocks on pipe I/O or a child process. An async command
 // keeps that off the main (UI) thread, but tokio workers are few, so the blocking
@@ -19,7 +20,9 @@ use runtime::{Request, SharedRuntime};
 // connection slots live in `herdr::call` (R3), reached through `runtime`.
 
 /// Run a blocking Herdr/cswap call on tokio's blocking pool.
-async fn blocking<T, E>(work: impl FnOnce() -> Result<T, E> + Send + 'static) -> Result<T, E>
+pub(crate) async fn blocking<T, E>(
+    work: impl FnOnce() -> Result<T, E> + Send + 'static,
+) -> Result<T, E>
 where
     T: Send + 'static,
     E: Send + 'static + From<String>,
@@ -32,16 +35,22 @@ where
 
 /// `ping` → `{version, protocol}`; also the "is Herdr running" probe.
 #[tauri::command]
-async fn herdr_ping(rt: State<'_, SharedRuntime>) -> herdr::Result<Value> {
-    let rt = rt.inner().clone();
+async fn herdr_ping(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+) -> herdr::Result<Value> {
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || rt.ping()).await
 }
 
 /// Everything the sidebar needs in one round trip set: workspaces, tabs,
 /// panes and agents straight from the server.
 #[tauri::command]
-async fn herdr_tree(rt: State<'_, SharedRuntime>) -> herdr::Result<Value> {
-    let rt = rt.inner().clone();
+async fn herdr_tree(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+) -> herdr::Result<Value> {
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || {
         let workspaces = rt.workspace_list()?;
         let panes = rt.pane_list()?;
@@ -72,11 +81,12 @@ async fn herdr_tree(rt: State<'_, SharedRuntime>) -> herdr::Result<Value> {
 /// this into xterm; milestone 2 replaces it with a streaming attach.
 #[tauri::command]
 async fn herdr_pane_read(
-    rt: State<'_, SharedRuntime>,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     pane_id: String,
     lines: Option<u32>,
 ) -> herdr::Result<Value> {
-    let rt = rt.inner().clone();
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || {
         let read = rt.pane_read(runtime::PaneRead {
             pane_id: pane_id.clone(),
@@ -98,33 +108,36 @@ async fn herdr_pane_read(
 
 #[tauri::command]
 async fn herdr_pane_send_text(
-    rt: State<'_, SharedRuntime>,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     pane_id: String,
     text: String,
 ) -> herdr::Result<Value> {
-    let rt = rt.inner().clone();
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || rt.pane_send_text(&pane_id, &text)).await
 }
 
 #[tauri::command]
 async fn herdr_pane_send_keys(
-    rt: State<'_, SharedRuntime>,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     pane_id: String,
     keys: Vec<String>,
 ) -> herdr::Result<Value> {
-    let rt = rt.inner().clone();
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || runtime::dispatch(&*rt, Request::PaneSendKeys { pane_id, keys })).await
 }
 
 #[tauri::command]
 async fn herdr_focus(
-    rt: State<'_, SharedRuntime>,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     target: String,
     id: String,
 ) -> herdr::Result<Value> {
     // An unknown target is a caller bug, not a pane (audit: optional `herdr_focus` note).
     let req = focus_request(&target, id).map_err(herdr::HerdrError::Shape)?;
-    let rt = rt.inner().clone();
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || runtime::dispatch(&*rt, req)).await
 }
 
@@ -134,14 +147,15 @@ async fn herdr_focus(
 /// are fixed here.
 #[tauri::command]
 async fn herdr_action(
-    rt: State<'_, SharedRuntime>,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     action: String,
     id: Option<String>,
     options: Option<Value>,
 ) -> herdr::Result<Value> {
     let req = action_request(&action, id.as_deref(), options.as_ref())
         .map_err(herdr::HerdrError::Shape)?;
-    let rt = rt.inner().clone();
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || runtime::dispatch(&*rt, req)).await
 }
 
@@ -467,8 +481,12 @@ fn quickhacks_set(app: AppHandle, saved: quickhacks::Saved) -> Result<quickhacks
 
 /// `worktree.list` for the repository containing `cwd`.
 #[tauri::command]
-async fn quickhack_worktrees(rt: State<'_, SharedRuntime>, cwd: String) -> Result<Value, String> {
-    let rt = rt.inner().clone();
+async fn quickhack_worktrees(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    cwd: String,
+) -> Result<Value, String> {
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || quickhacks::worktrees(&*rt, &cwd)).await
 }
 
@@ -478,30 +496,33 @@ async fn quickhack_launch(
     app: AppHandle,
     run: String,
     launch: quickhacks::Launch,
+    server: Option<String>,
 ) -> Result<Value, String> {
-    blocking(move || quickhacks::launch(app, run, launch)).await
+    blocking(move || quickhacks::launch(app, server, run, launch)).await
 }
 
 /// Open a repository folder as a workspace (sidebar "+" next to SESSIONS).
 #[tauri::command]
 async fn repo_open(
-    rt: State<'_, SharedRuntime>,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     path: String,
     label: Option<String>,
 ) -> Result<Value, String> {
-    let rt = rt.inner().clone();
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || quickhacks::repo_open(&*rt, &path, label.as_deref())).await
 }
 
 /// New linked worktree inside a repository (sidebar "+" on a repo row).
 #[tauri::command]
 async fn worktree_create(
-    rt: State<'_, SharedRuntime>,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     cwd: String,
     branch: String,
     base: Option<String>,
 ) -> Result<Value, String> {
-    let rt = rt.inner().clone();
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || quickhacks::worktree_create(&*rt, &cwd, &branch, base.as_deref())).await
 }
 
@@ -620,15 +641,27 @@ async fn archive_close(
     app: AppHandle,
     workspace_id: String,
     close_group: Option<bool>,
+    server: Option<String>,
 ) -> Result<Value, String> {
-    blocking(move || archive::archive_and_close(&app, &workspace_id, close_group.unwrap_or(false)))
-        .await
+    blocking(move || {
+        archive::archive_and_close(
+            &app,
+            server.as_deref(),
+            &workspace_id,
+            close_group.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 /// Reopen the archived space in Herdr and `claude --resume` each session in its own tab.
 #[tauri::command]
-async fn archive_restore(app: AppHandle, id: String) -> Result<Value, String> {
-    blocking(move || archive::restore(&app, &id)).await
+async fn archive_restore(
+    app: AppHandle,
+    id: String,
+    server: Option<String>,
+) -> Result<Value, String> {
+    blocking(move || archive::restore(&app, server.as_deref(), &id)).await
 }
 
 /// Forget the entry; with `remove_worktree`, also `git worktree remove` its linked checkout.
@@ -792,35 +825,82 @@ fn is_subscription_rejection(err: &herdr::HerdrError) -> bool {
     matches!(err, herdr::HerdrError::Api { .. })
 }
 
-fn start_event_pump(app: AppHandle) {
-    let rt = runtime::of(&app);
-    std::thread::spawn(move || {
+/// Forward one server's events to the webview as `herdr://event`, each
+/// tagged with `server: <id>`, until `stop` is set (the server was
+/// disconnected). Each round pings first so the server's status (version,
+/// online/offline) is current; a failed round reports `herdr://offline`
+/// (`{server, error}`) and retries after a short pause.
+pub(crate) fn start_event_pump(
+    app: AppHandle,
+    server: String,
+    rt: runtime::SharedRuntime,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+    let name = format!("herdr-events:{server}");
+    let spawned = std::thread::Builder::new().name(name).spawn(move || {
         let mut with_output = true;
-        loop {
-            let handle = app.clone();
-            let names = subscription_set(with_output);
-            let result = rt.subscribe(&names, &mut |event| {
-                handle.emit("herdr://event", event).is_ok()
-            });
+        while !stop.load(Ordering::SeqCst) {
+            let ping = rt.ping();
+            app.state::<servers::Registry>()
+                .set_status(&app, &server, servers::Status::from_ping(&ping));
+            let result = match ping {
+                Err(err) => Err(err),
+                Ok(_) => {
+                    let handle = app.clone();
+                    let names = subscription_set(with_output);
+                    let stop_flag = stop.clone();
+                    let id = server.clone();
+                    rt.subscribe(&names, &mut |mut event| {
+                        if stop_flag.load(Ordering::SeqCst) {
+                            return false;
+                        }
+                        if let Some(obj) = event.as_object_mut() {
+                            obj.insert("server".into(), Value::String(id.clone()));
+                        }
+                        handle.emit("herdr://event", event).is_ok()
+                    })
+                }
+            };
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
             match result {
                 Ok(()) => {
-                    tracing::info!("herdr event consumer stopped accepting events; retrying");
+                    tracing::info!(%server, "herdr event consumer stopped accepting events; retrying");
                 }
                 Err(err) if with_output && is_subscription_rejection(&err) => {
                     // Older server without the fork's output event: drop it and
                     // reconnect at once; the pane view keeps polling.
-                    tracing::warn!(%err, "server rejected {OUTPUT_SUBSCRIPTION}; subscribing without it");
+                    tracing::warn!(%server, %err, "server rejected {OUTPUT_SUBSCRIPTION}; subscribing without it");
                     with_output = false;
                     continue;
                 }
                 Err(err) => {
-                    tracing::warn!(%err, "herdr event stream ended; reconnecting");
-                    let _ = app.emit("herdr://offline", err.to_string());
+                    tracing::warn!(%server, %err, "herdr event stream ended; reconnecting");
+                    app.state::<servers::Registry>().set_status(
+                        &app,
+                        &server,
+                        servers::Status::offline(err.to_string()),
+                    );
+                    let _ = app.emit(
+                        "herdr://offline",
+                        json!({ "server": server, "error": err.to_string() }),
+                    );
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            for _ in 0..20 {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
+        tracing::info!(%server, "event pump stopped (server disconnected)");
     });
+    if let Err(err) = spawned {
+        tracing::warn!(%err, "could not start the event pump");
+    }
 }
 
 /// Tracing → `<app log dir>/deck.log` (the window has no console; truncated
@@ -886,11 +966,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(CswapPath(cswap))
-        .manage::<SharedRuntime>(std::sync::Arc::new(runtime::HerdrRuntime))
         .manage(PendingUpdate(std::sync::Mutex::new(None)))
         .setup(|app| {
             init_tracing(app.handle());
             let data_dir = data_dir(app.handle()).unwrap_or_else(std::env::temp_dir);
+            app.manage(servers::Registry::open(&data_dir));
             app.manage(archive::Store::open(&data_dir));
             app.manage(transcript::Watch::default());
             app.manage(harness::Roots::default());
@@ -904,7 +984,7 @@ pub fn run() {
                     tracing::info!("cswap not found in PATH or ~/.local/bin; accounts disabled")
                 }
             }
-            start_event_pump(app.handle().clone());
+            servers::Registry::start(app.handle());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Netrunner Deck");
             }
@@ -952,6 +1032,14 @@ pub fn run() {
             transcript_read,
             transcript_mtimes,
             transcript_watch,
+            servers::servers_list,
+            servers::servers_scan,
+            servers::servers_seen,
+            servers::server_connect,
+            servers::server_disconnect,
+            servers::server_rename,
+            servers::server_add,
+            servers::server_forget,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Netrunner Deck");
