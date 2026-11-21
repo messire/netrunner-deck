@@ -1,7 +1,10 @@
-import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
 import { api, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
-import Sidebar, { type SwitchError } from "./components/Sidebar";
+import Sidebar, { type SidebarSection, type SwitchError } from "./components/Sidebar";
+import ServerMenu, { dotOf, type Scope } from "./components/ServerMenu";
+import Prefs from "./components/Prefs";
+import { connectedServers, filterTree, keepDown, LEGACY_SERVERS, migrateKey, offeredServers, serverOf, type ServersView } from "./servers";
 import TabBar, { Clock, Pulse } from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
 import ChatView from "./components/ChatView";
@@ -75,6 +78,38 @@ export default function App() {
     return x && (x.agent ?? "").toLowerCase().includes("claude") && s?.kind === "id" && s.value ? s.value : null;
   };
   const [offline, setOffline] = createSignal<string | null>(null);
+
+  // ---- servers (docs/plan/DECK-SERVERS-UI.md) --------------------------------
+  // Connection lives in PREFERENCES; the deck tab's menu only filters what is shown.
+  const [servers, { refetch: refetchServers, mutate: setServers }] = createResource<ServersView | undefined>(async (_, { value }) => {
+    try { return await api.servers(); } catch (e) {
+      // A backend without SERVERS (an older Rust side under `tauri dev` with a
+      // newer webview): one unnamed server, i.e. the single-server Deck.
+      return value ?? (/servers_list/.test(String(e)) ? LEGACY_SERVERS : undefined);
+    }
+  });
+  const connected = () => connectedServers(servers());
+  const offered = () => offeredServers(servers());
+  /** Why each connected server's last tree fetch or event stream failed. */
+  const [down, setDown] = createSignal<Record<string, string>>({});
+  const [scope, setScopeRaw] = createSignal<Scope>(remembered("deck.scope") ?? "all");
+  const setScope = (s: Scope) => { setScopeRaw(s); remember("deck.scope", s === "all" ? null : s); };
+  /** The chosen scope while that server is connected, else ALL (the choice itself is kept). */
+  const shown = (): Scope => { const s = scope(); return s !== "all" && connected().some((x) => x.id === s) ? s : "all"; };
+  const isDown = (id: string) => !!down()[id] || connected().find((s) => s.id === id)?.status.state === "offline";
+  /** Where a new space goes when nothing else says: the shown server, else the first online one. */
+  const targetServer = () => { const s = shown(); if (s !== "all") return s; return (connected().find((x) => !isDown(x.id)) ?? connected()[0])?.id ?? null; };
+  const [srvMenu, setSrvMenu] = createSignal(false);
+  const [prefsOpen, setPrefsOpen] = createSignal(false);
+  const [scanning, setScanning] = createSignal(false);
+  const [prefsError, setPrefsError] = createSignal<string | null>(null);
+  const serverCall = (work: Promise<ServersView>) =>
+    work.then((v) => { setServers(v); setPrefsError(null); }).catch((e) => setPrefsError(String(e)));
+  const scanServers = () => { setScanning(true); serverCall(api.serversScan()).finally(() => setScanning(false)); };
+  const openPrefs = () => { setSrvMenu(false); setMenu(null); setOverlay(null); setPrefsOpen(true); scanServers(); };
+  // Found servers stop being "new" (the gear's cyan dot) once the list was seen.
+  const closePrefs = () => { setPrefsOpen(false); serverCall(api.serversSeen()); };
+  const connectServer = (id: string) => serverCall(api.serverConnect(id));
   const [accountsError, setAccountsError] = createSignal<string | null>(null);
   // Account number of the `cswap switch` in flight (null = idle) and the last switch failure.
   const [switching, setSwitching] = createSignal<number | null>(null);
@@ -86,18 +121,43 @@ export default function App() {
   // Only the latest fetch of each resource may touch the status signals: a
   // slow, stale `herdr_tree` finishing after a fresh one must not flip OFFLINE.
   const gate = createLatestGate();
-  const [tree, { refetch: refetchTree }] = createResource<Tree | undefined>(async (_, { value }) => {
+  // Every connected server's tree, merged (ids `<server>|<id>`). A server that
+  // fails keeps its last known part, shown dimmed in its section.
+  // JSON, not a join: the single-server fallback's one id is "".
+  const connectedKey = () => (servers() ? JSON.stringify(connected().map((s) => s.id)) : false);
+  const [fullTree, { refetch: refetchTree }] = createResource<Tree | undefined, string | false>(connectedKey, async (key, { value }) => {
     const seq = gate.begin("tree");
+    const ids = JSON.parse(String(key)) as string[];
     try {
-      const t = await api.tree();
+      const r = await api.tree(ids);
       if (!gate.isCurrent("tree", seq)) return value;
+      setDown(r.down);
       setOffline(null);
-      return t;
+      return keepDown(r.tree, value, Object.keys(r.down));
     } catch (e) {
       if (!gate.isCurrent("tree", seq)) return value;
+      setDown(Object.fromEntries(ids.map((id) => [id, String(e)])));
       setOffline(String(e));
       return value;
     }
+  });
+  /** What the deck shows: ALL servers or the one picked on the tab. */
+  const tree = createMemo(() => filterTree(fullTree(), shown() === "all" ? null : shown()));
+  const panesOf = (id: string) => fullTree()?.panes.filter((x) => serverOf(x.pane_id) === id).length ?? 0;
+  const sections = createMemo((): SidebarSection[] =>
+    shown() === "all" && connected().length > 1
+      ? connected().map((s) => ({
+          id: s.id, name: s.name,
+          error: down()[s.id] ?? (s.status.state === "offline" ? s.status.error ?? "offline" : null),
+          connecting: s.status.state === "connecting",
+          tree: filterTree(fullTree(), s.id),
+        }))
+      : []);
+  // A pane remembered by a single-server Deck (no server in its id) is the primary server's.
+  createEffect(() => {
+    const first = connected()[0]?.id;
+    const sel = selectedPane();
+    if (first && sel && !sel.includes("|")) setSelectedPane(migrateKey(sel, first));
   });
   const [accounts, { refetch: refetchAccounts }] = createResource<CswapList | undefined>(async (_, { value }) => {
     const seq = gate.begin("accounts");
@@ -196,7 +256,7 @@ export default function App() {
         showError(`archive: ${m}`);
       });
   const archiveRestore = (id: string) =>
-    archiveRun(id, api.archiveRestore(id).then((r) => { setView("deck"); refetchTree(); return r; }));
+    archiveRun(id, api.archiveRestore(id, targetServer()).then((r) => { setView("deck"); refetchTree(); return r; }));
   // Several sessions (a worktree or a whole repo) go one after another; the
   // table refreshes once at the end. The first failure stops the rest.
   const archiveDeleteMany = (plan: { id: string; removeWorktree: boolean }[]) => {
@@ -302,22 +362,29 @@ export default function App() {
   };
   // "+" next to SESSIONS: open a repository as a space, then ask what to run in it.
   const [repoBox, setRepoBox] = createSignal(false);
+  /** The server the "+" was pressed for (a section header), else `targetServer()`. */
+  const [repoServer, setRepoServer] = createSignal<string | null>(null);
+  const newRepo = (server?: string) => { setRepoServer(server ?? null); setRepoBox(true); };
   const knownRepos = (): KnownRepo[] => {
     const open = new Set((tree()?.workspaces ?? []).map((w) => (w.worktree?.checkout_path ?? "").replace(/^\\\\\?\\/, "").replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase()).filter(Boolean));
     return (harness() ?? []).filter((r) => !r.personal && r.exists).map((r) => ({ name: r.name, root: r.root, open: open.has(r.root.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase()) }));
   };
   const openRepo = async (root: string) => {
     try {
-      const r = await api.repoOpen(root);
+      const server = repoServer() ?? targetServer();
+      if (server === null) { showError("no server connected — ⚙ PREFERENCES"); return; }
+      const r = await api.repoOpen(root, undefined, server);
       refetchTree();
       newTab(r.workspace_id, r.pane_id);
     } catch (e) { showError(`open repository: ${String(e)}`); }
   };
   // "+" on a repository row: a new linked worktree, then ask what to run in it.
-  const [wtBox, setWtBox] = createSignal<{ repo: string; root: string } | null>(null);
-  const createWorktree = async (root: string, branch: string, base: string) => {
+  const [wtBox, setWtBox] = createSignal<{ repo: string; root: string; server: string | null } | null>(null);
+  const createWorktree = async (root: string, branch: string, base: string, server: string | null) => {
     try {
-      const r = await api.worktreeCreate(root, branch, base || undefined);
+      const target = server ?? targetServer();
+      if (target === null) { showError("no server connected — ⚙ PREFERENCES"); return; }
+      const r = await api.worktreeCreate(root, branch, base || undefined, target);
       refetchTree();
       newTab(r.workspace_id, r.pane_id);
     } catch (e) { showError(`worktree.create: ${String(e)}`); }
@@ -387,7 +454,7 @@ export default function App() {
     else if (d.kind === "switch") switchAccount(d.account);
     else if (d.kind === "refresh") refetchAccounts();
     else if (d.action === "tab.create" && d.id) newTab(d.id);
-    else if (d.action === "workspace.create") setRepoBox(true);
+    else if (d.action === "workspace.create") newRepo();
     else runAction(d.action, d.id);
   };
   const paletteItems = createMemo((): PaletteItem[] =>
@@ -403,6 +470,19 @@ export default function App() {
     if (next) selectPane(next); else showError("no agent is waiting");
   };
   const onKey = (e: KeyboardEvent) => {
+    if (e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && e.key === ",") {
+      e.preventDefault(); e.stopPropagation();
+      if (prefsOpen()) closePrefs(); else openPrefs();
+      return;
+    }
+    // Alt+0 = ALL, Alt+1…9 = the n-th connected server; only with more than one.
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && /^Digit[0-9]$/.test(e.code) && connected().length > 1 && view() === "deck") {
+      const n = Number(e.code.slice(5));
+      const s = n === 0 ? "all" : connected()[n - 1]?.id;
+      if (s) { e.preventDefault(); e.stopPropagation(); setScope(s); }
+      return;
+    }
+    if (prefsOpen()) return;
     const hk = hotkeyOf(e, overlayOpen());
     if (!hk) return;
     e.preventDefault();
@@ -475,15 +555,24 @@ export default function App() {
 
   onMount(() => {
     let un1: (() => void) | undefined, un2: (() => void) | undefined;
-    api.onEvent((ev) => {
+    api.onEvent((ev, server) => {
       setOffline(null);
+      if (server && down()[server]) { setDown((d) => { const n = { ...d }; delete n[server]; return n; }); refetchTree(); }
       const outPane = outputPaneOf(ev);
       if (outPane) noteActivity(outPane);
       const route = routeEvent(ev, currentPane());
       if (route === "tree") refetchTreeSoon();
       else if (route === "tick") setOutputTick((n) => n + 1);
     }).then((u) => (un1 = u));
-    api.onOffline((m) => setOffline(m)).then((u) => (un2 = u));
+    api.onOffline((server, m) => {
+      if (server) setDown((d) => ({ ...d, [server]: m }));
+      // The bottom bar is for "nothing is reachable"; one server down shows in its section.
+      if (!server || connected().every((s) => s.id === server || isDown(s.id))) setOffline(m);
+    }).then((u) => (un2 = u));
+    let unS: (() => void) | undefined;
+    const refetchServersSoon = debounceTrailing(() => { refetchServers(); }, 150);
+    api.onServers(refetchServersSoon).then((u) => (unS = u));
+    onCleanup(() => { unS?.(); refetchServersSoon.cancel(); });
     let un3: (() => void) | undefined;
     api.onArchive(() => refetchArchive()).then((u) => (un3 = u));
     const timer = setInterval(() => { refetchTree(); refetchAccounts(); }, 15000);
@@ -498,7 +587,7 @@ export default function App() {
   // screen (or the window is in the background) raises an OS notification.
   let lastStatus = new Map<string, string>();
   createEffect(() => {
-    const t = tree();
+    const t = fullTree();
     if (!t) return;
     const now = new Map(t.agents.map((a) => [a.pane_id, a.agent_status] as const));
     const onScreen = currentPane();
@@ -513,6 +602,24 @@ export default function App() {
   });
 
   const activeAccount = () => accounts()?.accounts.find((a) => a.active);
+  let deckTab: HTMLButtonElement | undefined;
+  const anyDown = () => connected().some((s) => isDown(s.id));
+  const scopeBad = () => (shown() === "all" ? anyDown() : isDown(shown()));
+  const scopeLabel = () => {
+    const s = shown();
+    if (s === "all") return `ALL ${connected().filter((x) => !isDown(x.id)).length}/${connected().length}`;
+    const name = connected().find((x) => x.id === s)?.name ?? s;
+    return isDown(s) ? `${name} · OFFLINE` : name;
+  };
+  const linkBad = () => !connected().length || connected().every((s) => isDown(s.id));
+  const linkLabel = () => {
+    const c = connected();
+    if (!servers()) return "connecting…";
+    if (!c.length) return "NO SERVER";
+    if (c.length === 1) return `${c[0].kind} · ${isDown(c[0].id) ? "OFFLINE" : "LINK OK"}`;
+    const up = c.filter((s) => !isDown(s.id)).length;
+    return `${up}/${c.length} servers · ${up === c.length ? "LINK OK" : up ? "PARTIAL" : "OFFLINE"}`;
+  };
   const win = getCurrentWindow();
 
   // WebView2's own context menu (back, reload, print, inspect…) has nothing
@@ -530,12 +637,21 @@ export default function App() {
       <Show when={view() === "deck"}><div class="side-grip" style={{ left: `${sideWidth() - 3}px` }} onPointerDown={startSideDrag} onDblClick={() => { setSideWidth(SIDE_MIN); remember("deck.sideWidth", null); }} title="drag to resize · double-click resets" /></Show>
       <header class="titlebar" data-tauri-drag-region>
         <div class="vtabs">
-          <button class={`vtab ${view() === "deck" ? "on" : ""}`} onClick={() => setView("deck")}>▞ NETRUNNER DECK</button>
+          <button ref={deckTab} class={`vtab deck ${view() === "deck" ? "on" : ""}`}
+                  aria-haspopup={view() === "deck" ? "menu" : undefined} aria-expanded={view() === "deck" ? srvMenu() : undefined} aria-controls={srvMenu() ? "srv-menu" : undefined}
+                  title={view() === "deck" ? "servers shown here (click)" : undefined}
+                  onClick={() => (view() === "deck" ? setSrvMenu(!srvMenu()) : setView("deck"))}
+                  onKeyDown={(e) => { if (view() === "deck" && (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSrvMenu(true); } }}>
+            ▞ NETRUNNER DECK
+            <Show when={!connected().length && servers()}><span class="scope bad">NO SERVER</span></Show>
+            <Show when={connected().length > 1 || shown() !== "all"}><span class={`scope ${scopeBad() ? "bad" : ""}`}>{scopeLabel()}</span></Show>
+            <Show when={view() === "deck"}><span class="car">▾</span></Show>
+          </button>
           <button class={`vtab ${view() === "harness" ? "on" : ""}`} onClick={() => setView("harness")} title="Claude Code configuration per repository">▞ HARNESS</button>
           <button class={`vtab ${view() === "uplink" ? "on" : ""}`} onClick={() => setView("uplink")} title="what git pull brought in">▞ UPLINK{unseenUpdates() ? ` · ${unseenUpdates()}` : ""}</button>
           <button class={`vtab ${view() === "archive" ? "on" : ""}`} onClick={() => setView("archive")} title="closed spaces kept for restore">▞ ARCHIVE{(archive() ?? []).length ? ` · ${(archive() ?? []).filter((e) => e.status === "closed").length}` : ""}</button>
         </div>
-        <span class="micro">herdr client · {offline() ? "OFFLINE" : "LINK OK"}</span>
+        <span class={`micro link ${linkBad() ? "bad" : ""}`} title={connected().map((s) => `${s.name}: ${isDown(s.id) ? down()[s.id] ?? s.status.error ?? "offline" : s.status.state}`).join("\n")}>{linkLabel()}</span>
         <Show when={actionError()}>{(m) => <span class="micro toast" title={m()}>✕ {m()}</span>}</Show>
         <Show when={update()}>{(u) => (
           <button class="micro upd" disabled={installing()} title={u().notes ?? ""} onClick={installUpdate}>
@@ -555,6 +671,11 @@ export default function App() {
             );
           }}
         </Show>
+        <button class="gear" title="Preferences (Ctrl+,)" aria-label={`Preferences${anyDown() ? " — a server is unreachable" : ""}${offered().some((s) => s.new) ? " — new server found" : ""}`} onClick={() => (prefsOpen() ? closePrefs() : openPrefs())}>
+          <span aria-hidden="true">⚙</span>
+          <Show when={anyDown()}><i class="pip bad" /></Show>
+          <Show when={!anyDown() && offered().some((s) => s.new)}><i class="pip new" /></Show>
+        </button>
         <Clock />
         <div class="win">
           <button onClick={() => win.minimize()}>—</button>
@@ -590,8 +711,23 @@ export default function App() {
         onTabMenu={tabMenu}
         onPaneMenu={paneMenu}
         onAccountMenu={accountMenu}
-        onNewRepo={() => setRepoBox(true)}
-        onNewWorktree={(repo, root) => setWtBox({ repo, root })}
+        onNewRepo={newRepo}
+        onNewWorktree={(repo, root, server) => setWtBox({ repo, root, server: server ?? null })}
+        sections={sections()}
+        empty={servers() && !connected().length ? () => (
+          <div class="first-run">
+            <div class="plate">Connect a server</div>
+            <For each={offered()} fallback={<div class="row micro">{servers()?.scanned ? "No servers found. Start Herdr or deck-server." : "looking for servers…"}</div>}>{(s) => (
+              <div class="row" title={s.status.error ?? s.address} onClick={() => connectServer(s.id)}>
+                <span class={`dot ${dotOf(s)}`} />
+                <span class="nm">{s.name}</span>
+                <span class="kind">{s.kind.toUpperCase()}</span>
+                <button class="btn pri" onClick={(e) => { e.stopPropagation(); connectServer(s.id); }}>CONNECT</button>
+              </div>
+            )}</For>
+            <button class="btn" onClick={openPrefs}>⚙ PREFERENCES</button>
+          </div>
+        ) : undefined}
         onNewTab={newTab}
         onSplit={(paneId) => runAction("pane.split", paneId, { direction: "right" })}
       />
@@ -606,20 +742,32 @@ export default function App() {
             </Show>
           )}
         </Show>
-        <Show when={offline()}>{(m) => <div class="offline">◇ HERDR OFFLINE — {m()}</div>}</Show>
+        <Show when={offline() && connected().length ? offline() : null}>{(m) => <div class="offline">◇ {connected().length > 1 ? "NO SERVER REACHABLE" : "HERDR OFFLINE"} — {m()}</div>}</Show>
       </main>
       <QuickHacks hacks={hacksSaved()?.hacks ?? []} collapsed={hacksSaved()?.collapsed ?? false} harness={harness()}
         onSave={(hacks) => saveHacks({ hacks, collapsed: hacksSaved()?.collapsed ?? false })}
         onCollapse={(collapsed) => saveHacks({ hacks: hacksSaved()?.hacks ?? [], collapsed })}
-        onOpenPane={(id) => { setSelectedPane(id); refetchTree(); }} onError={showError} />
+        onOpenPane={(id) => { setSelectedPane(id); refetchTree(); }} onError={showError} server={targetServer()} />
       </Show>
 
       <KeyBar tree={tree()} selectedPane={currentPane()} account={activeAccount()} waiting={waiting()} />
 
       <Show when={menu()}>{(m) => <ContextMenu menu={m()} onClose={() => setMenu(null)} />}</Show>
+      <Show when={srvMenu() && view() === "deck"}>
+        <div class="srv-anchor" style={{ left: `${deckTab?.getBoundingClientRect().left ?? 0}px`, top: `${deckTab?.getBoundingClientRect().bottom ?? 40}px` }}>
+          <ServerMenu connected={connected()} offered={offered()} scope={shown()} panes={panesOf}
+            onScope={setScope} onConnect={connectServer} onManage={openPrefs} onClose={() => { setSrvMenu(false); deckTab?.focus(); }} />
+        </div>
+      </Show>
+      <Show when={prefsOpen()}>
+        <Prefs view={servers()} panes={panesOf} scanning={scanning()} error={prefsError()} onScan={scanServers}
+          onConnect={connectServer} onDisconnect={(id) => serverCall(api.serverDisconnect(id))}
+          onRename={(id, name) => serverCall(api.serverRename(id, name))} onAdd={(a) => serverCall(api.serverAdd(a))}
+          onForget={(id) => serverCall(api.serverForget(id))} onClose={closePrefs} />
+      </Show>
       <Show when={newTabFor()}>{(t) => { const target = t(); return <NewTabBox initial={remembered("deck.newTabKind") ?? "claude"} onPick={(k) => openTab(target, k)} onClose={() => setNewTabFor(null)} />; }}</Show>
       <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} /></Show>
-      <Show when={wtBox()}>{(w) => { const t = w(); return <NewWorktreeBox repo={t.repo} onCreate={(b, base) => createWorktree(t.root, b, base)} onClose={() => setWtBox(null)} />; }}</Show>
+      <Show when={wtBox()}>{(w) => { const t = w(); return <NewWorktreeBox repo={t.repo} onCreate={(b, base) => createWorktree(t.root, b, base, t.server)} onClose={() => setWtBox(null)} />; }}</Show>
       <Show when={ask()}>{(q) => <PromptBox title={q().title} value={q().value} placeholder="name" ok={q().ok} onClose={() => setAsk(null)} />}</Show>
       <Show when={overlay() === "palette"}><Palette title="Palette" items={paletteItems()} onClose={() => setOverlay(null)} /></Show>
       <Show when={overlay() === "accounts"}><Palette title="Account" items={accountItems()} digits onClose={() => setOverlay(null)} /></Show>
