@@ -1,5 +1,7 @@
 # Changelog
 
+Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
+
 ## [0.3.0] — 2026-11-20
 - Chat mode built from the Claude Code transcript: dialogue as chat bubbles, browser-style text selection.
 - Session archive: close a space to cold storage, restore with `claude --resume`, delete with its worktree; tree by repo › worktree › session.
