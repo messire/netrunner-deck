@@ -24,6 +24,13 @@ const TAIL_BYTES = 2 * 1024 * 1024;
 marked.setOptions({ gfm: true, breaks: true });
 const md = (text: string): string => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, { USE_PROFILES: { html: true } });
 
+/**
+ * Unsent input per pane. One ChatView is reused across tabs (only its props
+ * change) and is unmounted when a terminal pane is shown, so each pane's draft
+ * and pasted-image thumbnails live here and come back when its tab is selected.
+ */
+const drafts = new Map<string, { text: string; pasted: string[] }>();
+
 /** The image shown full-size over the chat (one per window). */
 const [zoom, setZoom] = createSignal<string | null>(null);
 
@@ -65,7 +72,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   };
   const [error, setError] = createSignal<string | null>(null);
   const [truncated, setTruncated] = createSignal(false);
-  const [draft, setDraft] = createSignal("");
+  const [draft, setDraft] = createSignal(drafts.get(p.paneId)?.text ?? "");
   const [atBottom, setAtBottom] = createSignal(true);
   let offset = 0;            // bytes of the transcript consumed so far
   let loading: Promise<void> | null = null;
@@ -200,7 +207,21 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   // image-paste key (Alt+V on Windows, Ctrl+V elsewhere) to the pane and
   // Claude Code reads the clipboard itself (shows `[Image #N]`).
   // Thumbnails of the images pasted for the next message (the agent holds the bytes).
-  const [pasted, setPasted] = createSignal<string[]>([]);
+  const [pasted, setPasted] = createSignal<string[]>(drafts.get(p.paneId)?.pasted ?? []);
+  // The pane this draft belongs to: props may already name the next pane by the time cleanup runs.
+  let draftPane = p.paneId;
+  const keep = (id: string) => {
+    const text = draft(), imgs = pasted();
+    if (text || imgs.length) drafts.set(id, { text, pasted: imgs }); else drafts.delete(id);
+  };
+  createEffect(on(() => p.paneId, (id, prev) => {
+    if (prev === undefined || prev === id) return;
+    keep(prev); draftPane = id;
+    const d = drafts.get(id);
+    setDraft(d?.text ?? ""); setPasted(d?.pasted ?? []); histAt = -1; histDraft = "";
+    queueMicrotask(grow);
+  }));
+  onCleanup(() => keep(draftPane));
   const onPaste = (e: ClipboardEvent) => {
     const files = [...(e.clipboardData?.items ?? [])].filter((i) => i.kind === "file" && i.type.startsWith("image/")).map((i) => i.getAsFile()).filter((f): f is File => !!f);
     if (!files.length) return;
@@ -213,7 +234,8 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
       reader.readAsDataURL(file);
     }, (err) => setError(String(err)));
   };
-  createEffect(on(() => p.sessionId, () => setPasted([]), { defer: true }));
+  // A new session in the same pane starts with an empty agent input; a tab switch keeps the pane's own (see `keep`).
+  createEffect(on(() => [p.paneId, p.sessionId] as const, ([pane], prev) => { if (prev?.[0] === pane) setPasted([]); }, { defer: true }));
   const grow = () => { input.style.height = ""; input.style.height = `${Math.min(input.scrollHeight, 180)}px`; };
 
   // Activity line under the log while the agent works (Herdr's status, the
