@@ -1,0 +1,14 @@
+[Unit]
+Description=deck-server (Herdr-protocol server for Netrunner Deck)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/deck-server --foreground
+Restart=always
+RestartSec=2
+WorkingDirectory=%h
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=default.target

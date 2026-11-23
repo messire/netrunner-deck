@@ -1,0 +1,12 @@
+Herdr
+Copyright the Herdr authors. Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+deck-server (this directory) is derived from Herdr (https://github.com/herdrdev/herdr),
+Apache-2.0. It was taken from the Netrunner Deck fork of Herdr at commit
+98bc5cd447501bb8f49e18eb463a67f08239427d (messire/herdr-punk, feat/server-only),
+which is based on Herdr 0.9.5 (916fcf8de029c6cac965b50f3cdb9687cd7d1537).
+
+It compiles Herdr's headless server and JSON API without the TUI client, the
+command-line client, remote attach and the self-updater; src/deck_server.rs and
+src/deck_server/ are new. Its config, state, sessions and sockets live in their
+own app dir (`deck-server`, `deck-server-dev` for debug builds).

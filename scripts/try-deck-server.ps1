@@ -3,11 +3,9 @@
   Try Deck on deck-server (the server-only Herdr build) without touching your Herdr.
 
 .DESCRIPTION
-  1. Builds deck-server (release) from herdr-punk's feat/server-only branch, in a
-     separate git worktree next to your herdr-punk clone, so your checkout and
-     the Herdr you run stay as they are. Rebuilds when the sources are newer
-     than the exe, or with -Rebuild.
-  2. Starts `deck-server --session try` in its own window unless it already runs,
+  1. Builds deck-server (release) from this repo's server/ crate. Rebuilds
+     when the sources are newer than the exe, or with -Rebuild.
+  2. Starts `deck-server --session try` in the background (no window) unless it runs,
      and waits until its pipe answers `ping`.
   3. Starts a standalone debug build of this repo's Deck (or the installed Deck
      with -Installed)
@@ -24,16 +22,13 @@ param(
     [switch]$Installed,
     [switch]$Stop,
     [switch]$NoDeck,   # build and start the server only
-    [string]$HerdrRepo = '',   # default: herdr-punk next to this repo
-    [string]$Branch = 'feat/server-only',
     [string]$Session = 'try'
 )
 
 $ErrorActionPreference = 'Stop'
 $DeckRepo = Split-Path $PSScriptRoot -Parent
-if (-not $HerdrRepo) { $HerdrRepo = Join-Path (Split-Path $DeckRepo -Parent) 'herdr-punk' }
-$Worktree = "$HerdrRepo-deck-server"
-$Exe = Join-Path $Worktree 'target\release\deck-server.exe'
+$ServerDir = Join-Path $DeckRepo 'server'
+$Exe = Join-Path $ServerDir 'target\release\deck-server.exe'
 $SessionDir = Join-Path $env:APPDATA "deck-server\sessions\$Session"
 $Socket = Join-Path $SessionDir 'herdr.sock'
 $DeckData = Join-Path $env:LOCALAPPDATA 'netrunner-deck-try'
@@ -70,21 +65,7 @@ if ($Stop) {
 }
 
 # ---- 1. build ---------------------------------------------------------------------
-if (-not (Test-Path (Join-Path $HerdrRepo '.git'))) {
-    throw "herdr-punk clone not found at $HerdrRepo (pass -HerdrRepo <path>)."
-}
-git -C $HerdrRepo fetch --quiet origin $Branch
-if (-not (Test-Path $Worktree)) {
-    Say "Creating a worktree for $Branch at $Worktree (your herdr-punk checkout is not touched)..."
-    git -C $HerdrRepo worktree add --quiet $Worktree "origin/$Branch"
-    if ($LASTEXITCODE) { throw 'git worktree add failed' }
-} else {
-    # Follow the branch; the worktree is ours (detached), so a hard move is safe.
-    git -C $Worktree checkout --quiet --detach "origin/$Branch"
-    if ($LASTEXITCODE) { throw "could not update $Worktree to origin/$Branch" }
-}
-
-$newestSource = Get-ChildItem (Join-Path $Worktree 'src'), (Join-Path $Worktree 'crates') -Recurse -File -Include *.rs, *.zig, *.toml |
+$newestSource = Get-ChildItem (Join-Path $ServerDir 'src'), (Join-Path $ServerDir 'crates') -Recurse -File -Include *.rs, *.zig, *.toml |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $stale = -not (Test-Path $Exe) -or ((Get-Item $Exe).LastWriteTime -lt $newestSource.LastWriteTime)
 if ($Rebuild -or $stale) {
@@ -95,7 +76,7 @@ if ($Rebuild -or $stale) {
         $env:ZIG = $zig
     }
     Say 'Building deck-server (release). The first build takes a few minutes...'
-    Push-Location $Worktree
+    Push-Location $ServerDir
     try { cargo build --release --locked --bin deck-server } finally { Pop-Location }
     if ($LASTEXITCODE) { throw 'cargo build failed' }
 }
