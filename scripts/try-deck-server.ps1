@@ -63,10 +63,9 @@ function Invoke-Ping {
 }
 
 if ($Stop) {
-    $running = @(Get-TrialServer)
-    if ($running.Count -eq 0) { Say 'deck-server is not running.'; exit 0 }
-    $running | Stop-Process -Force -Confirm:$false
-    Say "Stopped deck-server (pid $($running.Id -join ', ')). Its workspaces stay saved in $SessionDir."
+    if (-not (Test-Path $Exe)) { Say 'deck-server is not built.'; exit 0 }
+    & $Exe stop --session $Session
+    Say "Its workspaces stay saved in $SessionDir."
     exit 0
 }
 
@@ -105,8 +104,11 @@ if ($Rebuild -or $stale) {
 if (Get-TrialServer) {
     Say 'deck-server is already running.'
 } else {
-    Say "Starting deck-server --session $Session in the background (no window, like Herdr's own server)..."
-    Start-Process -FilePath $Exe -ArgumentList '--session', $Session -WindowStyle Hidden | Out-Null
+    # deck-server starts itself detached with no window (as herdr does) and
+    # returns once its API answers.
+    Say "Starting deck-server --session $Session in the background..."
+    & $Exe --session $Session
+    if ($LASTEXITCODE) { throw 'deck-server did not start' }
 }
 $pong = $null
 foreach ($i in 1..40) {
