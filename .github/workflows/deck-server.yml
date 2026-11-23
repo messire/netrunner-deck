@@ -65,7 +65,7 @@ jobs:
           name=deck-server-linux-${{ matrix.arch }}
           cp target/${{ matrix.target }}/release/deck-server "$GITHUB_WORKSPACE/$name"
           cd "$GITHUB_WORKSPACE"
-          file "$name" | grep -q "statically linked"
+          file "$name" | grep -Eq "static(ally|-pie) linked"
           sha256sum "$name" | cut -d' ' -f1 > "$name.sha256"
       - uses: actions/upload-artifact@v4
         with:
