@@ -1,0 +1,7 @@
+[Unit]
+Description=Update deck-server from its git branch
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/deck-server-update
+Nice=10

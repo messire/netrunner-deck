@@ -1,6 +1,10 @@
 node_modules/
 dist/
 src-tauri/target/
+server/target/
+server/vendor/libghostty-vt/.zig-cache/
+server/vendor/libghostty-vt/zig-out/
+server/vendor/libghostty-vt/zig-pkg/
 src-tauri/gen/
 *.log
 .DS_Store

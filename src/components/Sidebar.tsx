@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
+import { serverOf } from "../servers";
 import { accountLabel, usageOf, type AgentStatus, type CswapAccount, type CswapList, type GitSync, type Pane, type Tab, type Tree, type Workspace } from "../api";
 import {
   buildTree, ctxPct, defaultOpen, firstPane, loadOpen, saveOpen, waiting,
@@ -6,6 +7,16 @@ import {
 } from "../tree";
 
 export interface SwitchError { number: number; message: string }
+
+/** A server's part of the tree; the tree is split into these when more than one server is shown. */
+export interface SidebarSection {
+  id: string;
+  name: string;
+  /** Online, or why not (the section turns red, its tree dims). */
+  error?: string | null;
+  connecting?: boolean;
+  tree?: Tree;
+}
 
 interface Props {
   tree?: Tree;
@@ -31,10 +42,14 @@ interface Props {
   onPaneMenu: (e: MouseEvent, pane: Pane) => void;
   onAccountMenu: (e: MouseEvent, a: CswapAccount) => void;
   /** Create at any level, like Herdr: space (optionally cloned from one), tab, split. */
-  /** "+" next to SESSIONS: open a repository as a new space. */
-  onNewRepo: () => void;
+  /** "+" next to SESSIONS (or on a server section): open a repository as a new space. */
+  onNewRepo: (server?: string) => void;
+  /** More than one server shown: one section each. Empty or one = the plain tree. */
+  sections?: SidebarSection[];
+  /** No server connected at all: the first-run / empty state instead of the tree. */
+  empty?: () => unknown;
   /** "+" on a repository row: a new linked worktree inside it (`root` = its main checkout). */
-  onNewWorktree: (repoLabel: string, root: string) => void;
+  onNewWorktree: (repoLabel: string, root: string, server?: string) => void;
   /** "+" on a space (worktree) row: a new tab/session in it. */
   onNewTab: (workspaceId: string) => void;
   onSplit: (paneId: string) => void;
@@ -168,7 +183,7 @@ export default function Sidebar(p: Props) {
         <Caret node={q.r} color="yel" />
         <span class="nm">{q.r.label}</span>
         <button class="add" title="new worktree in this repo (worktree.create)"
-                onClick={(e) => stop(e, () => { const root = (q.r.spaces.find((s) => s.root) ?? q.r.spaces[0])?.workspace.worktree?.checkout_path; if (root) p.onNewWorktree(q.r.label, root); })}>+</button>
+                onClick={(e) => stop(e, () => { const ws = (q.r.spaces.find((s) => s.root) ?? q.r.spaces[0])?.workspace; const root = ws?.worktree?.checkout_path; if (root) p.onNewWorktree(q.r.label, root, serverOf(ws.workspace_id) || undefined); })}>+</button>
         <span class="cnt">{q.r.spaces.length} · {q.r.agents}</span>
       </div>
       <Show when={isOpen(q.r)}>
@@ -210,11 +225,36 @@ export default function Sidebar(p: Props) {
         </div>
       </Show>
 
+      <Show when={!p.empty} fallback={p.empty?.() as never}>
       <Show when={p.tree} fallback={<div class="row micro">connecting…</div>}>
-        <div class="tree">
-          <For each={roots()}>{(r) => (r.kind === "repo" ? <RepoRow r={r} /> : <SpaceRow s={r} />)}</For>
-        </div>
+        <Show when={(p.sections?.length ?? 0) > 1} fallback={
+          <div class="tree">
+            <For each={roots()}>{(r) => (r.kind === "repo" ? <RepoRow r={r} /> : <SpaceRow s={r} />)}</For>
+          </div>}>
+          <div class="tree">
+            <For each={p.sections}>{(sec) => {
+              const secRoots = createMemo(() => buildTree(sec.tree));
+              const panes = () => sec.tree?.panes.length ?? 0;
+              return (
+                <div class={`srv-sec ${sec.error ? "down" : ""}`}>
+                  <div class="row srv" title={sec.error ?? sec.name}>
+                    <span class={`dot ${sec.error ? "bad" : sec.connecting ? "wait" : "ok"}`} aria-hidden="true" />
+                    <span class="nm">{sec.name.toUpperCase()}</span>
+                    <Show when={sec.error}><span class="tag b">OFFLINE</span></Show>
+                    <button class="add" title={`open a repository on ${sec.name}`} onClick={(e) => stop(e, () => p.onNewRepo(sec.id))}>+</button>
+                    <span class="cnt">{panes()}</span>
+                  </div>
+                  <div class="srv-body" inert={!!sec.error} aria-disabled={!!sec.error}>
+                    <For each={secRoots()}>{(r) => (r.kind === "repo" ? <RepoRow r={r} /> : <SpaceRow s={r} />)}</For>
+                    <Show when={!secRoots().length && !sec.error}><div class="row micro">no spaces · + opens a repository</div></Show>
+                  </div>
+                </div>
+              );
+            }}</For>
+          </div>
+        </Show>
         <div class="lg tree-lg"><span class="y">■ REPO</span><span class="g">■ WORKTREE</span><span class="d">■ SESSION</span><span>□ SHELL</span></div>
+      </Show>
       </Show>
       </Show>
 

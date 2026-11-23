@@ -10,6 +10,8 @@ import Think from "./Think";
  * `/name args` (the Rust side drives Herdr and the agent's prompt).
  */
 interface Props {
+  /** The server new sessions start on (`null` = the primary one). */
+  server?: string | null;
   hacks: Hack[];
   collapsed: boolean;
   harness: HarnessRepo[] | undefined;
@@ -63,7 +65,7 @@ export default function QuickHacks(p: Props) {
   const runWorktree = async (hack: Hack, repo: HarnessRepo) => {
     setStep({ title: `RUN /${hack.name}`, crumb: [repo.name, "worktree"], items: [], render: () => ({ label: "…" }), pick: () => {}, search: false } as Step<unknown>);
     try {
-      const r = await api.quickhackWorktrees(repo.root);
+      const r = await api.quickhackWorktrees(repo.root, p.server);
       const wts = worktreeChoices(r.worktrees ?? []);
       const root = r.source?.repo_root ?? repo.root;
       setStep({
@@ -86,7 +88,7 @@ export default function QuickHacks(p: Props) {
     const run = `r${Date.now().toString(36)}`;
     setRunning((m) => new Map(m).set(run, `/${a.hack.name} · opening ${a.wt.branch ?? a.wt.label}`));
     try {
-      const res = await api.quickhackLaunch(run, { cwd: a.wt.path, repo_root: a.repoRoot, label: launchLabel(a.hack, a.wt), agent: a.agent, prompt: hackPrompt(a.hack, text) });
+      const res = await api.quickhackLaunch(run, { cwd: a.wt.path, repo_root: a.repoRoot, label: launchLabel(a.hack, a.wt), agent: a.agent, prompt: hackPrompt(a.hack, text) }, p.server);
       p.onOpenPane(res.pane_id);
     } catch (e) {
       setRunning((m) => { const n = new Map(m); n.delete(run); return n; });

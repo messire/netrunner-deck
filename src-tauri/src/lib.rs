@@ -2,21 +2,27 @@ mod archive;
 mod harness;
 mod herdr;
 mod quickhacks;
+mod runtime;
+mod servers;
 mod transcript;
 mod uplink;
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use runtime::Request;
 
 // Every command below blocks on pipe I/O or a child process. An async command
 // keeps that off the main (UI) thread, but tokio workers are few, so the blocking
 // body is handed to `spawn_blocking` via `blocking()`. Per-call deadline and
-// connection slots live in `herdr::call` (R3).
+// connection slots live in `herdr::call` (R3), reached through `runtime`.
 
 /// Run a blocking Herdr/cswap call on tokio's blocking pool.
-async fn blocking<T, E>(work: impl FnOnce() -> Result<T, E> + Send + 'static) -> Result<T, E>
+pub(crate) async fn blocking<T, E>(
+    work: impl FnOnce() -> Result<T, E> + Send + 'static,
+) -> Result<T, E>
 where
     T: Send + 'static,
     E: Send + 'static + From<String>,
@@ -29,24 +35,32 @@ where
 
 /// `ping` → `{version, protocol}`; also the "is Herdr running" probe.
 #[tauri::command]
-async fn herdr_ping() -> herdr::Result<Value> {
-    blocking(move || herdr::call("ping", json!({}))).await
+async fn herdr_ping(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+) -> herdr::Result<Value> {
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || rt.ping()).await
 }
 
 /// Everything the sidebar needs in one round trip set: workspaces, tabs,
 /// panes and agents straight from the server.
 #[tauri::command]
-async fn herdr_tree() -> herdr::Result<Value> {
+async fn herdr_tree(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+) -> herdr::Result<Value> {
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || {
-        let workspaces = herdr::call("workspace.list", json!({}))?;
-        let panes = herdr::call("pane.list", json!({}))?;
-        let agents = herdr::call("agent.list", json!({}))?;
+        let workspaces = rt.workspace_list()?;
+        let panes = rt.pane_list()?;
+        let agents = rt.agent_list()?;
         let mut tabs = Vec::new();
         if let Some(list) = workspaces.get("workspaces").and_then(Value::as_array) {
             for ws in list {
                 if let Some(id) = ws.get("workspace_id").and_then(Value::as_str) {
                     // A failing tab.list is an error, not an empty tab bar (audit #15).
-                    let t = herdr::call("tab.list", json!({ "workspace_id": id }))?;
+                    let t = rt.tab_list(id)?;
                     if let Some(items) = t.get("tabs").and_then(Value::as_array) {
                         tabs.extend(items.iter().cloned());
                     }
@@ -66,18 +80,21 @@ async fn herdr_tree() -> herdr::Result<Value> {
 /// ANSI snapshot of a pane (recent scrollback + screen). Milestone 1 renders
 /// this into xterm; milestone 2 replaces it with a streaming attach.
 #[tauri::command]
-async fn herdr_pane_read(pane_id: String, lines: Option<u32>) -> herdr::Result<Value> {
+async fn herdr_pane_read(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    pane_id: String,
+    lines: Option<u32>,
+) -> herdr::Result<Value> {
+    let rt = reg.runtime(server.as_deref())?;
     blocking(move || {
-        let read = herdr::call(
-            "pane.read",
-            json!({
-                "pane_id": pane_id,
-                "source": "recent",
-                "lines": lines.unwrap_or(400),
-                "format": "ansi",
-                "strip_ansi": false
-            }),
-        )?;
+        let read = rt.pane_read(runtime::PaneRead {
+            pane_id: pane_id.clone(),
+            source: "recent".into(),
+            lines: lines.unwrap_or(400),
+            format: "ansi".into(),
+            strip_ansi: Some(false),
+        })?;
         // Debug trace of the read cadence (Herdr only logs failed reads).
         tracing::debug!(
             pane = %pane_id,
@@ -90,37 +107,38 @@ async fn herdr_pane_read(pane_id: String, lines: Option<u32>) -> herdr::Result<V
 }
 
 #[tauri::command]
-async fn herdr_pane_send_text(pane_id: String, text: String) -> herdr::Result<Value> {
-    blocking(move || {
-        herdr::call(
-            "pane.send_text",
-            json!({ "pane_id": pane_id, "text": text }),
-        )
-    })
-    .await
+async fn herdr_pane_send_text(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    pane_id: String,
+    text: String,
+) -> herdr::Result<Value> {
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || rt.pane_send_text(&pane_id, &text)).await
 }
 
 #[tauri::command]
-async fn herdr_pane_send_keys(pane_id: String, keys: Vec<String>) -> herdr::Result<Value> {
-    blocking(move || {
-        herdr::call(
-            "pane.send_keys",
-            json!({ "pane_id": pane_id, "keys": keys }),
-        )
-    })
-    .await
+async fn herdr_pane_send_keys(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    pane_id: String,
+    keys: Vec<String>,
+) -> herdr::Result<Value> {
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || runtime::dispatch(&*rt, Request::PaneSendKeys { pane_id, keys })).await
 }
 
 #[tauri::command]
-async fn herdr_focus(target: String, id: String) -> herdr::Result<Value> {
+async fn herdr_focus(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    target: String,
+    id: String,
+) -> herdr::Result<Value> {
     // An unknown target is a caller bug, not a pane (audit: optional `herdr_focus` note).
-    let (method, id_field) = focus_method(&target).map_err(herdr::HerdrError::Shape)?;
-    blocking(move || {
-        let mut params = serde_json::Map::new();
-        params.insert(id_field.to_string(), Value::String(id));
-        herdr::call(method, Value::Object(params))
-    })
-    .await
+    let req = focus_request(&target, id).map_err(herdr::HerdrError::Shape)?;
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || runtime::dispatch(&*rt, req)).await
 }
 
 /// Tree actions (M3): create/close workspaces, tabs and panes. The webview
@@ -129,106 +147,85 @@ async fn herdr_focus(target: String, id: String) -> herdr::Result<Value> {
 /// are fixed here.
 #[tauri::command]
 async fn herdr_action(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     action: String,
     id: Option<String>,
     options: Option<Value>,
 ) -> herdr::Result<Value> {
-    let (method, params) = action_request(&action, id.as_deref(), options.as_ref())
+    let req = action_request(&action, id.as_deref(), options.as_ref())
         .map_err(herdr::HerdrError::Shape)?;
-    blocking(move || herdr::call(method, params)).await
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || runtime::dispatch(&*rt, req)).await
 }
 
-/// Map an action name to its Herdr method and params. `id` is the workspace,
-/// tab or pane the action applies to (required where the method needs one);
+/// Map an action name to its runtime request. `id` is the workspace, tab or
+/// pane the action applies to (required where the method needs one);
 /// `options` may carry `cwd`/`label` for create actions.
 fn action_request(
     action: &str,
     id: Option<&str>,
     options: Option<&Value>,
-) -> Result<(&'static str, Value), String> {
+) -> Result<Request, String> {
     let opt = |key: &str| {
         options
             .and_then(|o| o.get(key))
-            .filter(|v| v.is_string())
-            .cloned()
+            .and_then(Value::as_str)
+            .map(str::to_string)
     };
-    let need_id = |field: &str| -> Result<(String, Value), String> {
-        let id = id
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| format!("{action} needs an id"))?;
-        Ok((field.to_string(), Value::String(id.to_string())))
+    let need_id = || -> Result<String, String> {
+        id.filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("{action} needs an id"))
     };
-    let mut params = serde_json::Map::new();
-    let method = match action {
-        "workspace.create" => {
-            if let Some(id) = id.filter(|s| !s.is_empty()) {
-                params.insert("source_workspace_id".into(), Value::String(id.to_string()));
-            }
-            params.insert("focus".into(), Value::Bool(true));
-            "workspace.create"
-        }
-        "workspace.close" => {
-            let (k, v) = need_id("workspace_id")?;
-            params.insert(k, v);
-            if options
+    let need_label = || opt("label").ok_or_else(|| format!("{action} needs a label"));
+    Ok(match action {
+        "workspace.create" => Request::WorkspaceCreate(runtime::WorkspaceCreate {
+            cwd: opt("cwd"),
+            label: opt("label"),
+            source_workspace_id: id.filter(|s| !s.is_empty()).map(str::to_string),
+            focus: true,
+        }),
+        "workspace.close" => Request::WorkspaceClose {
+            workspace_id: need_id()?,
+            close_group: options
                 .and_then(|o| o.get("close_group"))
                 .and_then(Value::as_bool)
-                == Some(true)
-            {
-                params.insert("close_group".into(), Value::Bool(true));
-            }
-            "workspace.close"
-        }
-        "tab.create" => {
-            let (k, v) = need_id("workspace_id")?;
-            params.insert(k, v);
-            params.insert("focus".into(), Value::Bool(true));
-            "tab.create"
-        }
-        "tab.close" => {
-            let (k, v) = need_id("tab_id")?;
-            params.insert(k, v);
-            "tab.close"
-        }
-        "pane.close" => {
-            let (k, v) = need_id("pane_id")?;
-            params.insert(k, v);
-            "pane.close"
-        }
+                == Some(true),
+        },
+        "tab.create" => Request::TabCreate(runtime::TabCreate {
+            workspace_id: need_id()?,
+            cwd: opt("cwd"),
+            label: opt("label"),
+            focus: true,
+        }),
+        "tab.close" => Request::TabClose { tab_id: need_id()? },
+        "pane.close" => Request::PaneClose {
+            pane_id: need_id()?,
+        },
         // Rename: `label` from options (required; the server trims).
-        "workspace.rename" | "tab.rename" | "pane.rename" => {
-            let (field, method): (&str, &'static str) = match action {
-                "workspace.rename" => ("workspace_id", "workspace.rename"),
-                "tab.rename" => ("tab_id", "tab.rename"),
-                _ => ("pane_id", "pane.rename"),
-            };
-            let (k, v) = need_id(field)?;
-            params.insert(k, v);
-            let label = opt("label").ok_or_else(|| format!("{action} needs a label"))?;
-            params.insert("label".into(), label);
-            method
-        }
+        "workspace.rename" => Request::WorkspaceRename {
+            workspace_id: need_id()?,
+            label: need_label()?,
+        },
+        "tab.rename" => Request::TabRename {
+            tab_id: need_id()?,
+            label: need_label()?,
+        },
+        "pane.rename" => Request::PaneRename {
+            pane_id: need_id()?,
+            label: need_label()?,
+        },
         // Split next to a pane (M6 tree): `direction` is right|down, default right.
-        "pane.split" => {
-            let (k, v) = need_id("target_pane_id")?;
-            params.insert(k, v);
-            let direction = opt("direction")
-                .filter(|d| matches!(d.as_str(), Some("right") | Some("down")))
-                .unwrap_or_else(|| Value::String("right".into()));
-            params.insert("direction".into(), direction);
-            params.insert("focus".into(), Value::Bool(true));
-            "pane.split"
-        }
+        "pane.split" => Request::PaneSplit(runtime::PaneSplit {
+            target_pane_id: need_id()?,
+            direction: opt("direction")
+                .and_then(|d| runtime::SplitDirection::parse(&d))
+                .unwrap_or_default(),
+            focus: true,
+        }),
         other => return Err(format!("unknown action: {other}")),
-    };
-    if matches!(action, "workspace.create" | "tab.create") {
-        for key in ["cwd", "label"] {
-            if let Some(v) = opt(key) {
-                params.insert(key.into(), v);
-            }
-        }
-    }
-    Ok((method, Value::Object(params)))
+    })
 }
 
 /// Desktop notification (M4): the webview decides when (an agent turned
@@ -346,12 +343,12 @@ async fn update_install(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Pick the Herdr method and id field for a `herdr_focus` target.
-fn focus_method(target: &str) -> Result<(&'static str, &'static str), String> {
+/// The focus request for a `herdr_focus` target.
+fn focus_request(target: &str, id: String) -> Result<Request, String> {
     match target {
-        "workspace" => Ok(("workspace.focus", "workspace_id")),
-        "tab" => Ok(("tab.focus", "tab_id")),
-        "pane" => Ok(("pane.focus", "pane_id")),
+        "workspace" => Ok(Request::WorkspaceFocus { workspace_id: id }),
+        "tab" => Ok(Request::TabFocus { tab_id: id }),
+        "pane" => Ok(Request::PaneFocus { pane_id: id }),
         _ => Err(format!("unknown focus target: {target}")),
     }
 }
@@ -484,8 +481,13 @@ fn quickhacks_set(app: AppHandle, saved: quickhacks::Saved) -> Result<quickhacks
 
 /// `worktree.list` for the repository containing `cwd`.
 #[tauri::command]
-async fn quickhack_worktrees(cwd: String) -> Result<Value, String> {
-    blocking(move || quickhacks::worktrees(&cwd)).await
+async fn quickhack_worktrees(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    cwd: String,
+) -> Result<Value, String> {
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || quickhacks::worktrees(&*rt, &cwd)).await
 }
 
 /// Open a session in `launch.cwd`, start the agent, send the first prompt. Progress: `deck://quickhack`.
@@ -494,24 +496,34 @@ async fn quickhack_launch(
     app: AppHandle,
     run: String,
     launch: quickhacks::Launch,
+    server: Option<String>,
 ) -> Result<Value, String> {
-    blocking(move || quickhacks::launch(app, run, launch)).await
+    blocking(move || quickhacks::launch(app, server, run, launch)).await
 }
 
 /// Open a repository folder as a workspace (sidebar "+" next to SESSIONS).
 #[tauri::command]
-async fn repo_open(path: String, label: Option<String>) -> Result<Value, String> {
-    blocking(move || quickhacks::repo_open(&path, label.as_deref())).await
+async fn repo_open(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    path: String,
+    label: Option<String>,
+) -> Result<Value, String> {
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || quickhacks::repo_open(&*rt, &path, label.as_deref())).await
 }
 
 /// New linked worktree inside a repository (sidebar "+" on a repo row).
 #[tauri::command]
 async fn worktree_create(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     cwd: String,
     branch: String,
     base: Option<String>,
 ) -> Result<Value, String> {
-    blocking(move || quickhacks::worktree_create(&cwd, &branch, base.as_deref())).await
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || quickhacks::worktree_create(&*rt, &cwd, &branch, base.as_deref())).await
 }
 
 // ---- uplink (git behind/ahead, pull, what came in) ---------------------------
@@ -629,15 +641,27 @@ async fn archive_close(
     app: AppHandle,
     workspace_id: String,
     close_group: Option<bool>,
+    server: Option<String>,
 ) -> Result<Value, String> {
-    blocking(move || archive::archive_and_close(&app, &workspace_id, close_group.unwrap_or(false)))
-        .await
+    blocking(move || {
+        archive::archive_and_close(
+            &app,
+            server.as_deref(),
+            &workspace_id,
+            close_group.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 /// Reopen the archived space in Herdr and `claude --resume` each session in its own tab.
 #[tauri::command]
-async fn archive_restore(app: AppHandle, id: String) -> Result<Value, String> {
-    blocking(move || archive::restore(&app, &id)).await
+async fn archive_restore(
+    app: AppHandle,
+    id: String,
+    server: Option<String>,
+) -> Result<Value, String> {
+    blocking(move || archive::restore(&app, server.as_deref(), &id)).await
 }
 
 /// Forget the entry; with `remove_worktree`, also `git worktree remove` its linked checkout.
@@ -756,7 +780,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
 
 /// Forward Herdr events to the webview as `herdr://event` until the window dies.
 ///
-/// `herdr::subscribe` only returns `Ok` when the webview stopped accepting
+/// `Runtime::subscribe` only returns `Ok` when the webview stopped accepting
 /// events; every other exit (refused subscription, closed stream, transport
 /// error) is an `Err` and is surfaced as `herdr://offline` with the error
 /// text, then retried after a short pause.
@@ -801,33 +825,82 @@ fn is_subscription_rejection(err: &herdr::HerdrError) -> bool {
     matches!(err, herdr::HerdrError::Api { .. })
 }
 
-fn start_event_pump(app: AppHandle) {
-    std::thread::spawn(move || {
+/// Forward one server's events to the webview as `herdr://event`, each
+/// tagged with `server: <id>`, until `stop` is set (the server was
+/// disconnected). Each round pings first so the server's status (version,
+/// online/offline) is current; a failed round reports `herdr://offline`
+/// (`{server, error}`) and retries after a short pause.
+pub(crate) fn start_event_pump(
+    app: AppHandle,
+    server: String,
+    rt: runtime::SharedRuntime,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+    let name = format!("herdr-events:{server}");
+    let spawned = std::thread::Builder::new().name(name).spawn(move || {
         let mut with_output = true;
-        loop {
-            let handle = app.clone();
-            let names = subscription_set(with_output);
-            let result =
-                herdr::subscribe(&names, |event| handle.emit("herdr://event", event).is_ok());
+        while !stop.load(Ordering::SeqCst) {
+            let ping = rt.ping();
+            app.state::<servers::Registry>()
+                .set_status(&app, &server, servers::Status::from_ping(&ping));
+            let result = match ping {
+                Err(err) => Err(err),
+                Ok(_) => {
+                    let handle = app.clone();
+                    let names = subscription_set(with_output);
+                    let stop_flag = stop.clone();
+                    let id = server.clone();
+                    rt.subscribe(&names, &mut |mut event| {
+                        if stop_flag.load(Ordering::SeqCst) {
+                            return false;
+                        }
+                        if let Some(obj) = event.as_object_mut() {
+                            obj.insert("server".into(), Value::String(id.clone()));
+                        }
+                        handle.emit("herdr://event", event).is_ok()
+                    })
+                }
+            };
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
             match result {
                 Ok(()) => {
-                    tracing::info!("herdr event consumer stopped accepting events; retrying");
+                    tracing::info!(%server, "herdr event consumer stopped accepting events; retrying");
                 }
                 Err(err) if with_output && is_subscription_rejection(&err) => {
                     // Older server without the fork's output event: drop it and
                     // reconnect at once; the pane view keeps polling.
-                    tracing::warn!(%err, "server rejected {OUTPUT_SUBSCRIPTION}; subscribing without it");
+                    tracing::warn!(%server, %err, "server rejected {OUTPUT_SUBSCRIPTION}; subscribing without it");
                     with_output = false;
                     continue;
                 }
                 Err(err) => {
-                    tracing::warn!(%err, "herdr event stream ended; reconnecting");
-                    let _ = app.emit("herdr://offline", err.to_string());
+                    tracing::warn!(%server, %err, "herdr event stream ended; reconnecting");
+                    app.state::<servers::Registry>().set_status(
+                        &app,
+                        &server,
+                        servers::Status::offline(err.to_string()),
+                    );
+                    let _ = app.emit(
+                        "herdr://offline",
+                        json!({ "server": server, "error": err.to_string() }),
+                    );
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            for _ in 0..20 {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
+        tracing::info!(%server, "event pump stopped (server disconnected)");
     });
+    if let Err(err) = spawned {
+        tracing::warn!(%err, "could not start the event pump");
+    }
 }
 
 /// Tracing → `<app log dir>/deck.log` (the window has no console; truncated
@@ -863,11 +936,32 @@ fn init_tracing(app: &AppHandle) {
     }
 }
 
+/// Deck's own data (archive, quickhacks, uplink, shadow workdir).
+/// `DECK_DATA_DIR` moves it, so a Deck run against a test server
+/// (`scripts/try-deck-server.ps1`) never writes the normal Deck's files.
+pub(crate) fn data_dir(app: &AppHandle) -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("DECK_DATA_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    app.path().app_data_dir().ok()
+}
+
+/// Window size/position survive restarts. A Deck with its own `DECK_DATA_DIR`
+/// keeps its own window-state file, so it does not move the normal Deck's window.
+fn window_state_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    let builder = tauri_plugin_window_state::Builder::new();
+    if std::env::var_os("DECK_DATA_DIR").is_some_and(|d| !d.is_empty()) {
+        builder.with_filename(".window-state.try.json").build()
+    } else {
+        builder.build()
+    }
+}
+
 pub fn run() {
     let cswap = resolve_cswap();
     tauri::Builder::default()
         // Window size/position survive restarts (UI-only state, roadmap M4).
-        .plugin(tauri_plugin_window_state::Builder::new().build())
+        .plugin(window_state_plugin())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -875,10 +969,8 @@ pub fn run() {
         .manage(PendingUpdate(std::sync::Mutex::new(None)))
         .setup(|app| {
             init_tracing(app.handle());
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir());
+            let data_dir = data_dir(app.handle()).unwrap_or_else(std::env::temp_dir);
+            app.manage(servers::Registry::open(&data_dir));
             app.manage(archive::Store::open(&data_dir));
             app.manage(transcript::Watch::default());
             app.manage(harness::Roots::default());
@@ -892,7 +984,7 @@ pub fn run() {
                     tracing::info!("cswap not found in PATH or ~/.local/bin; accounts disabled")
                 }
             }
-            start_event_pump(app.handle().clone());
+            servers::Registry::start(app.handle());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Netrunner Deck");
             }
@@ -940,6 +1032,14 @@ pub fn run() {
             transcript_read,
             transcript_mtimes,
             transcript_watch,
+            servers::servers_list,
+            servers::servers_scan,
+            servers::servers_seen,
+            servers::server_connect,
+            servers::server_disconnect,
+            servers::server_rename,
+            servers::server_add,
+            servers::server_forget,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Netrunner Deck");
@@ -948,6 +1048,15 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `action_request` as the Herdr method and params it sends.
+    fn req_of(
+        action: &str,
+        id: Option<&str>,
+        options: Option<&Value>,
+    ) -> Result<(&'static str, Value), String> {
+        action_request(action, id, options).map(|r| r.herdr())
+    }
 
     #[test]
     fn parse_json_stdout_accepts_plain_object() {
@@ -1000,7 +1109,7 @@ mod tests {
 
     #[test]
     fn action_request_builds_pane_split_params() {
-        let (m, p) = action_request(
+        let (m, p) = req_of(
             "pane.split",
             Some("p_1"),
             Some(&json!({ "direction": "down" })),
@@ -1011,19 +1120,19 @@ mod tests {
             p,
             json!({ "target_pane_id": "p_1", "direction": "down", "focus": true })
         );
-        let (_, p) = action_request(
+        let (_, p) = req_of(
             "pane.split",
             Some("p_1"),
             Some(&json!({ "direction": "sideways" })),
         )
         .unwrap();
         assert_eq!(p["direction"], "right");
-        assert!(action_request("pane.split", None, None).is_err());
+        assert!(req_of("pane.split", None, None).is_err());
     }
 
     #[test]
     fn action_request_builds_create_and_close_params() {
-        let (m, p) = action_request(
+        let (m, p) = req_of(
             "workspace.create",
             Some("ws_1"),
             Some(&json!({ "cwd": "C:\\x", "label": "L", "env": { "A": "1" } })),
@@ -1034,9 +1143,9 @@ mod tests {
             p,
             json!({ "source_workspace_id": "ws_1", "focus": true, "cwd": "C:\\x", "label": "L" })
         );
-        let (m, p) = action_request("workspace.create", None, None).unwrap();
+        let (m, p) = req_of("workspace.create", None, None).unwrap();
         assert_eq!((m, p), ("workspace.create", json!({ "focus": true })));
-        let (m, p) = action_request("tab.create", Some("ws_1"), None).unwrap();
+        let (m, p) = req_of("tab.create", Some("ws_1"), None).unwrap();
         assert_eq!(
             (m, p),
             (
@@ -1044,7 +1153,7 @@ mod tests {
                 json!({ "workspace_id": "ws_1", "focus": true })
             )
         );
-        let (m, p) = action_request(
+        let (m, p) = req_of(
             "tab.rename",
             Some("t_1"),
             Some(&serde_json::json!({ "label": "dev" })),
@@ -1052,12 +1161,12 @@ mod tests {
         .unwrap();
         assert_eq!(m, "tab.rename");
         assert_eq!(p, serde_json::json!({ "tab_id": "t_1", "label": "dev" }));
-        assert!(action_request("tab.rename", Some("t_1"), None).is_err());
-        let (m, p) = action_request("tab.close", Some("t_1"), None).unwrap();
+        assert!(req_of("tab.rename", Some("t_1"), None).is_err());
+        let (m, p) = req_of("tab.close", Some("t_1"), None).unwrap();
         assert_eq!((m, p), ("tab.close", json!({ "tab_id": "t_1" })));
-        let (m, p) = action_request("pane.close", Some("p_1"), None).unwrap();
+        let (m, p) = req_of("pane.close", Some("p_1"), None).unwrap();
         assert_eq!((m, p), ("pane.close", json!({ "pane_id": "p_1" })));
-        let (m, p) = action_request(
+        let (m, p) = req_of(
             "workspace.close",
             Some("ws_1"),
             Some(&json!({ "close_group": true })),
@@ -1074,15 +1183,15 @@ mod tests {
 
     #[test]
     fn action_request_rejects_unknown_actions_and_missing_ids() {
-        assert!(action_request("server.stop", None, None)
+        assert!(req_of("server.stop", None, None)
             .unwrap_err()
             .contains("unknown action"));
-        assert!(action_request("tab.close", None, None)
+        assert!(req_of("tab.close", None, None)
             .unwrap_err()
             .contains("needs an id"));
-        assert!(action_request("pane.close", Some(""), None).is_err());
+        assert!(req_of("pane.close", Some(""), None).is_err());
         // Options cannot smuggle arbitrary params.
-        let (_, p) = action_request(
+        let (_, p) = req_of(
             "tab.create",
             Some("ws"),
             Some(&json!({ "workspace_id": "other", "focus": false })),
@@ -1093,12 +1202,13 @@ mod tests {
 
     #[test]
     fn focus_method_dispatches_known_targets() {
+        let focus = |target| focus_request(target, "x".into()).unwrap().herdr();
         assert_eq!(
-            focus_method("workspace").unwrap(),
-            ("workspace.focus", "workspace_id")
+            focus("workspace"),
+            ("workspace.focus", json!({ "workspace_id": "x" }))
         );
-        assert_eq!(focus_method("tab").unwrap(), ("tab.focus", "tab_id"));
-        assert_eq!(focus_method("pane").unwrap(), ("pane.focus", "pane_id"));
+        assert_eq!(focus("tab"), ("tab.focus", json!({ "tab_id": "x" })));
+        assert_eq!(focus("pane"), ("pane.focus", json!({ "pane_id": "x" })));
     }
 
     #[test]
@@ -1131,10 +1241,10 @@ mod tests {
 
     #[test]
     fn focus_method_rejects_unknown_target() {
-        let err = focus_method("window").unwrap_err();
+        let err = focus_request("window", "x".into()).unwrap_err();
         assert_eq!(err, "unknown focus target: window");
-        assert!(focus_method("").is_err());
-        assert!(focus_method("Pane").is_err());
+        assert!(focus_request("", "x".into()).is_err());
+        assert!(focus_request("Pane", "x".into()).is_err());
     }
 
     #[test]

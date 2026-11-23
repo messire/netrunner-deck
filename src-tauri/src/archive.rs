@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::herdr;
+use crate::runtime::{self, Runtime};
 
 pub const EVENT: &str = "deck://archive";
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(150);
@@ -295,7 +295,12 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Herdr's config dir (its `session.json` and snapshots). `HERDR_CONFIG_DIR`
+/// overrides it, as in `herdr.rs`, for a Deck pointed at another server.
 fn herdr_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("HERDR_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
     #[cfg(windows)]
     {
         std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("herdr"))
@@ -428,10 +433,10 @@ fn snapshot_time_ms(name: &str) -> Option<u64> {
 }
 
 /// Every workspace Herdr has described, newest description per key, plus the live ids.
-fn herdr_workspaces() -> (HashMap<String, WorkspaceRecord>, HashSet<String>) {
+fn herdr_workspaces(dir: Option<PathBuf>) -> (HashMap<String, WorkspaceRecord>, HashSet<String>) {
     let mut by_key: HashMap<String, WorkspaceRecord> = HashMap::new();
     let mut live = HashSet::new();
-    let Some(dir) = herdr_dir() else {
+    let Some(dir) = dir.or_else(herdr_dir) else {
         return (by_key, live);
     };
     let mut files: Vec<(u64, PathBuf)> = Vec::new();
@@ -465,8 +470,8 @@ fn herdr_workspaces() -> (HashMap<String, WorkspaceRecord>, HashSet<String>) {
 }
 
 /// Ids open in Herdr right now, from the API when it answers (else `session.json`).
-fn live_ids(fallback: HashSet<String>) -> HashSet<String> {
-    match herdr::call("pane.list", json!({})) {
+fn live_ids(rt: &dyn Runtime, fallback: HashSet<String>) -> HashSet<String> {
+    match rt.pane_list() {
         Ok(v) => v
             .get("panes")
             .and_then(Value::as_array)
@@ -648,7 +653,9 @@ pub fn scan(app: &AppHandle) -> Vec<Entry> {
     let saved = store.snapshot();
     let shadow_dir = shadow_workdir(app).map(|p| p.to_string_lossy().to_string());
 
-    let (mut groups, live_fallback) = herdr_workspaces();
+    // The primary server's own session.json (deck-server keeps it in its session dir).
+    let dir = app.state::<crate::servers::Registry>().config_dir(None);
+    let (mut groups, live_fallback) = herdr_workspaces(dir);
     for w in &saved.closed {
         let newer = groups
             .get(&w.key)
@@ -658,7 +665,7 @@ pub fn scan(app: &AppHandle) -> Vec<Entry> {
             groups.insert(w.key.clone(), w.clone());
         }
     }
-    let live = live_ids(live_fallback);
+    let live = live_ids(&*runtime::of(app), live_fallback);
     let files = transcripts();
     let history = prompt_history();
 
@@ -884,15 +891,15 @@ pub fn set_groups(app: &AppHandle, groups: Vec<RepoGroup>) -> Result<Vec<RepoGro
 /// Close a live workspace and remember it even if no Herdr snapshot ever caught it.
 pub fn archive_and_close(
     app: &AppHandle,
+    server: Option<&str>,
     workspace_id: &str,
     close_group: bool,
 ) -> Result<Value, String> {
-    let ws = herdr::call("workspace.get", json!({ "workspace_id": workspace_id }))
-        .map_err(|e| e.to_string())?;
+    let rt = crate::servers::runtime_for(app, server)?;
+    let ws = rt.workspace_get(workspace_id).map_err(|e| e.to_string())?;
     let ws = ws.get("workspace").cloned().unwrap_or(ws);
-    let tabs = herdr::call("tab.list", json!({ "workspace_id": workspace_id }))
-        .map_err(|e| e.to_string())?;
-    let panes = herdr::call("pane.list", json!({})).map_err(|e| e.to_string())?;
+    let tabs = rt.tab_list(workspace_id).map_err(|e| e.to_string())?;
+    let panes = rt.pane_list().map_err(|e| e.to_string())?;
     // Reuse the session.json shape so one parser serves both.
     let mut tab_objs: BTreeMap<String, Value> = BTreeMap::new();
     for tab in tabs
@@ -930,11 +937,8 @@ pub fn archive_and_close(
     let fake = json!({ "workspaces": [{ "custom_name": str_at(&ws, &["label"]), "identity_cwd": Value::Null, "worktree_space": wt, "tabs": tab_objs.values().collect::<Vec<_>>() }] });
     let record = workspaces_in(&fake, now_ms()).into_iter().next();
 
-    let mut params = json!({ "workspace_id": workspace_id });
-    if close_group {
-        params["close_group"] = Value::Bool(true);
-    }
-    herdr::call("workspace.close", params).map_err(|e| e.to_string())?;
+    rt.workspace_close(workspace_id, close_group)
+        .map_err(|e| e.to_string())?;
 
     let store = app.state::<Store>();
     let key = record.as_ref().map(|r| r.key.clone());
@@ -969,7 +973,8 @@ fn find_entry(app: &AppHandle, id: &str) -> Result<Entry, String> {
         .ok_or_else(|| format!("session {id} is not in the archive any more"))
 }
 
-pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
+/// Reopen `id` on `server` (`None` = the primary server).
+pub fn restore(app: &AppHandle, server: Option<&str>, id: &str) -> Result<Value, String> {
     let entry = find_entry(app, id)?;
     if !Path::new(&entry.cwd).is_dir() {
         return Err(format!("directory is gone: {}", entry.cwd));
@@ -977,7 +982,9 @@ pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
     // A root session goes back into the repository's ROOT space (a new tab
     // when it is open, `worktree.open` on the main checkout otherwise), a
     // worktree session into its worktree's space — never a detached folder.
+    let rt = crate::servers::runtime_for(app, server)?;
     let (workspace_id, root_pane) = crate::quickhacks::open_session_dir(
+        &*rt,
         &entry.cwd,
         entry.repo_root.as_deref(),
         Some(entry.label.as_str()),
@@ -995,18 +1002,12 @@ pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
             Some(p) => {
                 // The first session lands in the fresh tab: give it the saved tab name too.
                 if !s.tab_label.is_empty() {
-                    if let Some(tab_id) = herdr::call("pane.get", json!({ "pane_id": p }))
-                        .ok()
-                        .and_then(|v| {
-                            str_at(&v, &["pane", "tab_id"])
-                                .or_else(|| str_at(&v, &["tab_id"]))
-                                .map(str::to_string)
-                        })
-                    {
-                        if let Err(e) = herdr::call(
-                            "tab.rename",
-                            json!({ "tab_id": tab_id, "label": s.tab_label }),
-                        ) {
+                    if let Some(tab_id) = rt.pane_get(&p).ok().and_then(|v| {
+                        str_at(&v, &["pane", "tab_id"])
+                            .or_else(|| str_at(&v, &["tab_id"]))
+                            .map(str::to_string)
+                    }) {
+                        if let Err(e) = rt.tab_rename(&tab_id, &s.tab_label) {
                             tracing::warn!(%e, "restored tab not renamed");
                         }
                     }
@@ -1019,12 +1020,14 @@ pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
                 } else {
                     entry.cwd.as_str()
                 };
-                let mut params =
-                    json!({ "workspace_id": workspace_id, "cwd": cwd, "focus": false });
-                if !s.tab_label.is_empty() {
-                    params["label"] = Value::String(s.tab_label.clone());
-                }
-                let tab = herdr::call("tab.create", params).map_err(|e| e.to_string())?;
+                let tab = rt
+                    .tab_create(runtime::TabCreate {
+                        workspace_id: workspace_id.clone(),
+                        cwd: Some(cwd.to_string()),
+                        label: (!s.tab_label.is_empty()).then(|| s.tab_label.clone()),
+                        focus: false,
+                    })
+                    .map_err(|e| e.to_string())?;
                 match str_at(&tab, &["root_pane", "pane_id"]) {
                     Some(p) => p.to_string(),
                     None => continue,
@@ -1038,13 +1041,9 @@ pub fn restore(app: &AppHandle, id: &str) -> Result<Value, String> {
         std::thread::sleep(RESUME_SETTLE);
         for (pane, sid) in targets {
             let cmd = format!("claude --resume {sid}");
-            if let Err(e) = herdr::call("pane.send_text", json!({ "pane_id": pane, "text": cmd }))
-                .and_then(|_| {
-                    herdr::call(
-                        "pane.send_keys",
-                        json!({ "pane_id": pane, "keys": ["enter"] }),
-                    )
-                })
+            if let Err(e) = rt
+                .pane_send_text(&pane, &cmd)
+                .and_then(|_| rt.pane_send_keys(&pane, &["enter"]))
             {
                 tracing::warn!(%e, pane, "resume command not delivered");
             }
@@ -1298,7 +1297,7 @@ fn resolve_claude() -> Option<PathBuf> {
 
 /// The shadow query runs here, so its own transcript is recognisable (and skipped) by cwd.
 pub(crate) fn shadow_workdir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("shadow"))
+    crate::data_dir(app).map(|d| d.join("shadow"))
 }
 
 /// `claude -p` over the excerpt, with a hard deadline, outside any project.

@@ -87,22 +87,71 @@ const fake = (() => {
     return { text: lines.join("\n"), revision, cursor: { line: promptIdx, col: 2 + ("typed".slice(0, grown % 6)).length, visible: true, shape: 0 } };
   };
   setInterval(() => {
-    if (grown < extra.length) { grown++; revision += 2; emit("herdr://event", { event: "pane_output_changed", data: { type: "pane_output_changed", pane_id: "w1:p1", workspace_id: "w1", revision } }); }
+    if (grown < extra.length) { grown++; revision += 2; emit("herdr://event", { ...(legacy ? {} : { server: "herdr" }), event: "pane_output_changed", data: { type: "pane_output_changed", pane_id: "w1:p1", workspace_id: "w1", revision } }); }
   }, 3000);
 
   (window as any).__deckEmit = emit;
   const tree = () => ({ workspaces, tabs, panes, agents: agents() });
+
+  // Servers: the user's Herdr and a trial deck-server are connected, a dev
+  // session is found but not connected. The second server reuses the same
+  // local ids (`w1:p1`), as real servers do. `?servers=0` starts with none
+  // connected (the first-run list), `?servers=down` takes deck-server offline.
+  const q = new URLSearchParams(location.search);
+  // `?servers=legacy`: a Rust side from before SERVERS (no servers_* commands, no `server` on events).
+  const legacy = q.get("servers") === "legacy";
+  type FakeServer = { id: string; name: string; kind: "herdr" | "deck-server"; address: string; connected: boolean; manual: boolean; found: boolean; new: boolean; status: { state: string; version?: string; protocol?: number; error?: string } };
+  const online = { state: "online", version: "0.9.5", protocol: 22 };
+  const servers: FakeServer[] = [
+    { id: "herdr", name: "herdr", kind: "herdr", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock", connected: q.get("servers") !== "0", manual: false, found: true, new: false, status: { ...online } },
+    { id: "deck-server/try", name: "deck-server · try", kind: "deck-server", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\deck-server\\sessions\\try\\herdr.sock", connected: q.get("servers") !== "0", manual: false, found: true, new: false,
+      status: q.get("servers") === "down" ? { state: "offline", error: "herdr server is not reachable at \\\\.\\pipe\\…\\try\\herdr.sock: Access is denied. (os error 5) — Herdr runs elevated" } : { ...online } },
+    { id: "herdr-dev/decktest", name: "herdr-dev · decktest", kind: "herdr", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\herdr-dev\\sessions\\decktest\\herdr.sock", connected: false, manual: false, found: true, new: true, status: { ...online } },
+  ];
+  const view = () => ({ servers: servers.filter((s) => s.connected || s.found || s.manual).map((s) => ({ ...s })), scanned: true });
+  const changed = () => { setTimeout(() => emit("deck://servers", "changed"), 5); return view(); };
+  const srv = (id: unknown) => { const s = servers.find((x) => x.id === id); if (!s) throw new Error(`unknown server ${String(id)}`); return s; };
+  const trial = {
+    workspaces: [{ workspace_id: "w1", number: 1, label: "scratch", focused: true, pane_count: 2, tab_count: 1, active_tab_id: "w1:t1", agent_status: "idle" }],
+    tabs: [{ tab_id: "w1:t1", workspace_id: "w1", number: 1, label: "scratch", focused: true, pane_count: 2, agent_status: "idle" }],
+    panes: [
+      { pane_id: "w1:p1", terminal_id: "t1", workspace_id: "w1", tab_id: "w1:t1", focused: true, cwd: "C:\\Temp\\scratch", agent: null, title: "pwsh", agent_status: "unknown" },
+      { pane_id: "w1:p2", terminal_id: "t2", workspace_id: "w1", tab_id: "w1:t1", focused: false, cwd: "C:\\Temp\\scratch", agent: "claude", agent_status: "idle" },
+    ],
+    agents: [{ terminal_id: "t2", agent: "claude", agent_status: "idle", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p2", focused: false }],
+  };
+  const treeOf = (server: unknown) => {
+    const s = srv(server ?? "herdr");
+    if (!s.connected) throw new Error(`server ${s.id} is not connected`);
+    if (s.status.state === "offline") throw new Error(s.status.error ?? "offline");
+    return s.id === "herdr" ? tree() : s.id === "deck-server/try" ? trial : { workspaces: [], tabs: [], panes: [], agents: [] };
+  };
   const invoke = async (cmd: string, args: Record<string, unknown>): Promise<unknown> => {
     await new Promise((r) => setTimeout(r, 30));
     switch (cmd) {
       case "herdr_ping": return { version: "browser-fake", protocol: 0 };
-      case "herdr_tree": return tree();
+      case "herdr_tree": return treeOf(legacy ? null : args.server);
+      case "servers_list": case "servers_seen":
+        if (legacy) throw new Error(`Command ${cmd} not found`);
+        if (cmd === "servers_seen") servers.forEach((s) => (s.new = false));
+        return view();
+      case "servers_scan": await new Promise((r) => setTimeout(r, 400)); return view();
+      case "server_connect": { const s = srv(args.id); s.connected = true; return changed(); }
+      case "server_disconnect": { const s = srv(args.id); s.connected = false; s.new = false; return changed(); }
+      case "server_rename": { const s = srv(args.id); s.name = String(args.name).trim() || s.id; return changed(); }
+      case "server_forget": { const i = servers.findIndex((x) => x.id === args.id); if (i >= 0) servers.splice(i, 1); return changed(); }
+      case "server_add": {
+        const path = String(args.address).trim().replace(/^\\\\\.\\pipe\\/, "");
+        if (!servers.some((x) => x.id === path)) servers.push({ id: path, name: path, kind: "herdr", address: `\\\\.\\pipe\\${path}`, connected: true, manual: true, found: false, new: false, status: { state: "offline", error: `herdr server is not reachable at \\\\.\\pipe\\${path}: The system cannot find the file specified. (os error 2) — is herdr server running?` } });
+        return changed();
+      }
       case "herdr_pane_read": {
         const paneId = String(args.paneId);
         // Test hook: a page script may script the snapshots (`window.__deckPaneRead`)
         // and raise events (`window.__deckEmit`) to drive the pane view.
         const hook = (window as any).__deckPaneRead as ((paneId: string, lines: number) => unknown) | undefined;
         if (hook) return { read: hook(paneId, Number(args.lines)) };
+        if (args.server === "deck-server/try") return { read: { text: `PS C:\\Temp\\scratch> # deck-server · ${paneId}\nPS C:\\Temp\\scratch> `, revision: 0 } };
         if (paneId === "w1:p1") return { read: transcript() };
         return { read: { text: `PS ${panes.find((p) => p.pane_id === paneId)?.cwd ?? "C:\\"}> echo ${paneId}\n${paneId}\nPS> `, revision: 0 } };
       }
@@ -138,7 +187,7 @@ const fake = (() => {
           for (let i = tabs.length - 1; i >= 0; i--) if (tabs[i].workspace_id === target) tabs.splice(i, 1);
           const i = workspaces.findIndex((x) => x.workspace_id === target); if (i >= 0) workspaces.splice(i, 1);
         }
-        setTimeout(() => emit("herdr://event", { event: "layout_updated" }), 10);
+        setTimeout(() => emit("herdr://event", { server: String(args.server ?? "herdr"), event: "layout_updated" }), 10);
         return null;
       }
       case "notify": console.info("[notify]", args.title, "—", args.body); return null;
