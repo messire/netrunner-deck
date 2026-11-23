@@ -450,7 +450,7 @@ function ToolRun(p: { calls: ToolCall[] }) {
     <div class="msg tools">
       <Show when={p.calls.length > FOLD_AT}>
         <div class={`fold ${running().length ? "run" : errors() ? "err" : "ok"}`} onClick={() => setOpen(!open())}>
-          <span class="dot">{open() ? "▾" : "▸"}</span> <b>{p.calls.length} STEPS</b> <span class="sum">{counts()}{errors() ? ` · ${errors()} failed` : ""}</span><span class="when">{clock(p.calls[0].ts)}</span>
+          <span class={`mk chev ${open() ? "open" : ""}`} /> <b>{p.calls.length} STEPS</b> <span class="sum">{counts()}{errors() ? ` · ${errors()} failed` : ""}</span><span class="when">{clock(p.calls[0].ts)}</span>
         </div>
       </Show>
       <Show when={folded()} fallback={<For each={p.calls}>{(c) => <Tool c={c} />}</For>}>
@@ -464,12 +464,11 @@ function Tool(p: { c: ToolCall }) {
   const [open, setOpen] = createSignal(false);
   const c = p.c;
   const state = () => (c.result === undefined ? "run" : c.isError ? "err" : "ok");
-  const dot = () => (state() === "run" ? "◌" : state() === "err" ? "✖" : "●");
   const result = () => (c.result ?? "").slice(0, 20_000);
   return (
     <div class={`tool ${state()}`}>
       <div class="tool-head" onClick={() => setOpen(!open())}>
-        <span class="dot">{dot()}</span> <b>{c.name}</b> <span class="sum">{c.summary}</span>
+        <span class="mk state" /> <b>{c.name}</b> <span class="sum">{c.summary}</span>
         <span class="when">{clock(c.ts)}</span><span class="micro right">{open() ? "▴" : "▾"}</span>
       </div>
       <Show when={open()}>
