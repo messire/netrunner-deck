@@ -164,6 +164,16 @@ Not there yet:
 - `scripts/fake-herdr.mjs` — fake Herdr server for manual bridge tests.
 - `docs/architecture.md` — data flow, verified Herdr API facts (F1–F10), module map.
 
+## Versioning
+
+Versions are `X.Y.Z` ([SemVer](https://semver.org)). A release bumps the most significant part that applies to the changes since the previous release:
+
+- **Z (patch)**: fixes only. No new features, and no change to saved state (session archive, window and layout state) or to the required Herdr version.
+- **Y (minor)**: a new feature, mode or panel. While the version is 0.x, also any breaking change: saved state format, required Herdr version or API, hotkeys, default behaviour.
+- **X (major)**: 1.0.0 is set when the owner declares the product stable. After that, X goes up only for breaking changes, and new features go to Y.
+
+Changes collect under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md); a release renames that heading to the new version. Pre-release suffixes (`-rc.1`) are for test builds of the next version.
+
 ## Release
 
 `package.json` holds the version; `tauri.conf.json` reads it (`"version": "../package.json"`) and
