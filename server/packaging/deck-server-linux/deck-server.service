@@ -1,14 +1,17 @@
 [Unit]
-Description=deck-server (Herdr-protocol server for Netrunner Deck)
+Description=deck-server (Netrunner Deck)
 After=network-online.target
 
 [Service]
-Type=simple
-ExecStart=%h/.local/bin/deck-server --foreground
-Restart=always
-RestartSec=2
+# deck-server runs itself in the background and replaces itself on update
+# (live handoff to a new process), so systemd only starts and stops it.
+Type=oneshot
+RemainAfterExit=yes
+KillMode=process
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h
-Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=%h/.local/bin/deck-server start
+ExecStop=%h/.local/bin/deck-server stop
 
 [Install]
 WantedBy=default.target

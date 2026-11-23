@@ -62,6 +62,9 @@ mod release_notes;
 mod render_prof;
 mod render_signal;
 mod selection;
+#[cfg(unix)]
+#[path = "deck_server/self_update.rs"]
+mod self_update;
 mod server;
 mod session;
 mod sound;
@@ -92,7 +95,7 @@ const INHERITED_HERDR_VARS: &[&str] = &[
     HERDR_ENV_VAR,
 ];
 
-const USAGE: &str = "usage: deck-server [start|stop|status] [--session NAME] [--foreground]";
+const USAGE: &str = "usage: deck-server [start|stop|status|update] [--session NAME] [--foreground]";
 
 /// What the command line asks for, after `--session` was taken out.
 #[derive(Debug, PartialEq, Eq)]
@@ -101,6 +104,7 @@ enum Action {
     Foreground,
     Stop,
     Status,
+    Update,
 }
 
 fn action_of(rest: &[String]) -> Result<Action, String> {
@@ -115,6 +119,7 @@ fn action_of(rest: &[String]) -> Result<Action, String> {
         ([] | ["start"], true) => Ok(Action::Foreground),
         (["stop"], false) => Ok(Action::Stop),
         (["status"], false) => Ok(Action::Status),
+        (["update"], false) => Ok(Action::Update),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -181,6 +186,53 @@ fn start_detached(session: Option<&str>) -> io::Result<()> {
     )))
 }
 
+/// Background self-update of a running server (Unix only; Deck ships Windows').
+fn start_self_update() {
+    #[cfg(unix)]
+    match std::env::current_exe() {
+        Ok(exe) => self_update::spawn_background(exe, live_handoff),
+        Err(err) => tracing::warn!(%err, "self-update off: no executable path"),
+    }
+}
+
+/// Ask the running server to hand its panes over to the binary at `exe`.
+fn live_handoff(exe: &std::path::Path) -> Result<(), String> {
+    let line = serde_json::json!({
+        "id": "deck-server:update",
+        "method": "server.live_handoff",
+        "params": { "import_exe": exe },
+    })
+    .to_string();
+    match send_line(&line) {
+        Some(reply) if reply.contains("\"result\"") => Ok(()),
+        Some(reply) => Err(format!("live handoff refused: {}", reply.trim())),
+        // Nothing running: the new binary is simply used on the next start.
+        None => Ok(()),
+    }
+}
+
+/// `deck-server update`: check now and, if newer, install and hand off.
+fn update_now() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let exe = std::env::current_exe()?;
+        match self_update::check_and_apply(&exe, &live_handoff) {
+            Ok(self_update::Outcome::Disabled(why)) => println!("self-update off: {why}"),
+            Ok(self_update::Outcome::UpToDate(c)) => println!("deck-server is up to date ({c})"),
+            Ok(self_update::Outcome::Updated { from, to }) => {
+                println!("deck-server updated {from} -> {to}")
+            }
+            Err(err) => return Err(io::Error::other(err)),
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        println!("deck-server on Windows is updated with Netrunner Deck");
+        Ok(())
+    }
+}
+
 /// The `--session` value, if given (for passing it on to the detached server).
 fn session_arg(args: &[String]) -> Option<&str> {
     args.windows(2)
@@ -228,6 +280,15 @@ fn main() -> io::Result<()> {
     if let Some(code) = hook_call(&raw) {
         std::process::exit(code);
     }
+    // A live handoff (self-update) starts the new binary as
+    // `deck-server server --handoff-import SOCKET TOKEN`, with the session in its env.
+    if raw.get(1).map(String::as_str) == Some("server")
+        && raw.get(2).map(String::as_str) == Some("--handoff-import")
+    {
+        config::set_app_dir_name(APP_DIR_NAME);
+        start_self_update();
+        return server::headless::run_server();
+    }
     for var in INHERITED_HERDR_VARS {
         std::env::remove_var(var);
     }
@@ -239,8 +300,9 @@ fn main() -> io::Result<()> {
         .any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V")
     {
         println!(
-            "deck-server {} (herdr protocol {})\n{USAGE}\napi socket: {}",
+            "deck-server {} {} (herdr protocol {})\n{USAGE}\napi socket: {}",
             env!("CARGO_PKG_VERSION"),
+            option_env!("HERDR_BUILD_COMMIT").unwrap_or("local"),
             protocol::PROTOCOL_VERSION,
             api::socket_path().display()
         );
@@ -263,7 +325,11 @@ fn main() -> io::Result<()> {
     };
     let socket = api::socket_path();
     match action {
-        Action::Foreground => server::headless::run_server(),
+        Action::Foreground => {
+            start_self_update();
+            server::headless::run_server()
+        }
+        Action::Update => update_now(),
         Action::Start if running() => {
             println!("deck-server is already running at {}", socket.display());
             Ok(())
