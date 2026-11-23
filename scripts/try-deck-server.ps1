@@ -105,8 +105,8 @@ if ($Rebuild -or $stale) {
 if (Get-TrialServer) {
     Say 'deck-server is already running.'
 } else {
-    Say "Starting deck-server --session $Session in its own window..."
-    Start-Process -FilePath $Exe -ArgumentList '--session', $Session -WindowStyle Minimized | Out-Null
+    Say "Starting deck-server --session $Session in the background (no window, like Herdr's own server)..."
+    Start-Process -FilePath $Exe -ArgumentList '--session', $Session -WindowStyle Hidden | Out-Null
 }
 $pong = $null
 foreach ($i in 1..40) {
