@@ -1,7 +1,6 @@
 # Netrunner Deck
 
-Desktop GUI client for [Herdr](https://github.com/herdrdev/herdr) in the Daemon 2.0 / Cyberpunk
-look. It is a *client*: every workspace, tab, pane and agent you see here lives in the Herdr
+Desktop GUI client for [Herdr](https://github.com/herdrdev/herdr) with a dark neon look. It is a *client*: every workspace, tab, pane and agent you see here lives in the Herdr
 server, exactly as in the Herdr TUI. Deck keeps no session state of its own — the tree is
 re-fetched from Herdr, pane contents are `pane.read` snapshots, account data comes from `cswap`
 on every call. (UI-only settings such as window size may be persisted from milestone M4 on;
