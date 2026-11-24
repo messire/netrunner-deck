@@ -14,9 +14,10 @@ describe("parseLine", () => {
     const b = parseLine(line({ type: "user", uuid: "u3", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "ok" }], is_error: true }] } }));
     expect(b).toEqual([{ kind: "tool_result", uuid: "u3", ts: 0, toolUseId: "t1", text: "ok", isError: true }]);
   });
-  it("assistant text and tool_use blocks; thinking is dropped", () => {
-    const b = parseLine(line({ type: "assistant", uuid: "a1", message: { id: "m1", content: [{ type: "thinking", thinking: "…" }, { type: "text", text: "Готово." }, { type: "tool_use", id: "t2", name: "Bash", input: { command: "ls", description: "List" } }] } }));
+  it("assistant text, thinking summary and tool_use blocks; empty thinking is dropped", () => {
+    const b = parseLine(line({ type: "assistant", uuid: "a1", message: { id: "m1", content: [{ type: "thinking", thinking: " Проверяю конфиг. " }, { type: "thinking", thinking: "", signature: "sig" }, { type: "text", text: "Готово." }, { type: "tool_use", id: "t2", name: "Bash", input: { command: "ls", description: "List" } }] } }));
     expect(b).toEqual([
+      { kind: "assistant", uuid: "a1", ts: 0, msgId: "m1", text: "Проверяю конфиг.", summary: true },
       { kind: "assistant", uuid: "a1", ts: 0, msgId: "m1", text: "Готово." },
       { kind: "tool_use", uuid: "a1", ts: 0, msgId: "m1", id: "t2", name: "Bash", input: { command: "ls", description: "List" } },
     ]);
@@ -136,5 +137,22 @@ describe("ChatBuilder (incremental)", () => {
     const s3 = b.state();
     expect(s3.items[3].kind === "tools" && s3.items[3].calls[0]).toMatchObject({ result: "late", isError: true });
     expect(buildChat([])).toEqual({ items: [], title: null, pendingTools: 0 });
+  });
+});
+
+describe("thinking summaries", () => {
+  it("each summary is its own bubble between tool runs, never merged with the reply text", () => {
+    const s = buildChat([
+      ...parseLine(line({ type: "user", uuid: "u1", timestamp: 1, message: { content: "go" } })),
+      ...parseLine(line({ type: "assistant", uuid: "a1", timestamp: 2, message: { id: "m1", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] } })),
+      ...parseLine(line({ type: "assistant", uuid: "a2", timestamp: 3, message: { id: "m2", content: [{ type: "thinking", thinking: "Сначала выясняю X." }] } })),
+      ...parseLine(line({ type: "assistant", uuid: "a3", timestamp: 4, message: { id: "m2", content: [{ type: "tool_use", id: "t2", name: "Bash", input: { command: "pwd" } }] } })),
+      ...parseLine(line({ type: "assistant", uuid: "a4", timestamp: 5, message: { id: "m3", content: [{ type: "thinking", thinking: "Почти готово." }] } })),
+      ...parseLine(line({ type: "assistant", uuid: "a5", timestamp: 6, message: { id: "m3", content: [{ type: "text", text: "Готово." }] } })),
+    ]);
+    expect(s.items.map((i) => [i.kind, i.kind === "assistant" ? `${i.summary ? "~" : ""}${i.text}` : ""])).toEqual([
+      ["user", ""], ["tools", ""], ["assistant", "~Сначала выясняю X."], ["tools", ""], ["assistant", "~Почти готово."], ["assistant", "Готово."],
+    ]);
+    expect(new Set(s.items.map((i) => i.key)).size).toBe(s.items.length);
   });
 });

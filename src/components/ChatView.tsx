@@ -515,8 +515,8 @@ function Item(p: { it: ChatItem }) {
       );
     case "assistant":
       return (
-        <div class="msg agent"><div class="bub">
-          <div class="who">CLAUDE <span class="when">{clock(it.ts)}</span></div>
+        <div class={`msg agent${it.summary ? " summary" : ""}`}><div class="bub">
+          <div class="who">CLAUDE <span class="when">{clock(it.ts)}</span><Show when={it.summary}><span class="tag">· summary</span></Show></div>
           <div class="mdtext" innerHTML={md(it.text)} />
         </div></div>
       );
