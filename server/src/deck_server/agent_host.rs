@@ -438,9 +438,19 @@ fn run_claude(host: &Arc<Host>, options: &Options, session: proto::Session<'_>) 
                         .unwrap_or_else(PoisonError::into_inner)
                         .remove(id)
                 });
+                let refused = deck_agent::control_error(&msg).and_then(|(id, why)| {
+                    host.settings
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove(id)
+                        .map(|_| format!("Claude did not change it: {why}"))
+                });
                 host.emit(msg);
                 if let Some(note) = confirmed {
                     host.emit(note);
+                }
+                if let Some(why) = refused {
+                    host.emit(proto::host_state("log", Some(&why)));
                 }
             }
             _ if line.trim().is_empty() => {}

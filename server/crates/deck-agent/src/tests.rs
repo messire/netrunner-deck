@@ -35,6 +35,8 @@ fn args_for_new_and_resumed_sessions() {
         .windows(2)
         .any(|w| w == ["--permission-prompt-tool", "stdio"]));
     assert!(new.contains(&"--replay-user-messages".to_string()));
+    assert!(new.contains(&"--allow-dangerously-skip-permissions".to_string()));
+    assert!(!new.contains(&"--dangerously-skip-permissions".to_string()));
     let resumed = proto::claude_args(proto::Session::Resume("abc"), None, Some("plan"));
     assert!(resumed.windows(2).any(|w| w == ["--resume", "abc"]));
     assert!(resumed
@@ -298,4 +300,18 @@ fn the_running_note_names_the_session_and_stays_for_new_clients() {
     backlog.push(3, &proto::running("s-2"));
     let kept: Vec<u64> = backlog.since(None).iter().map(|e| e.seq).collect();
     assert_eq!(kept, vec![2, 3], "only the latest running note is pinned");
+}
+
+#[test]
+fn refused_control_requests_are_recognised() {
+    let refused = json!({"type":"control_response","response":{"subtype":"error","request_id":"deck-mode-3","error":"Cannot set permission mode to bypassPermissions"}});
+    assert_eq!(
+        control_error(&refused),
+        Some((
+            "deck-mode-3",
+            "Cannot set permission mode to bypassPermissions"
+        ))
+    );
+    let ok = json!({"type":"control_response","response":{"subtype":"success","request_id":"deck-mode-3"}});
+    assert_eq!(control_error(&ok), None);
 }

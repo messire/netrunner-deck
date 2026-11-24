@@ -13,7 +13,9 @@
 //! * `deck.accounts.remove {number}` → the list;
 //! * `deck.accounts.login.start` → `{login_id, url}`;
 //! * `deck.accounts.login.finish {login_id, code, activate?}` → the list
-//!   with `added` (the account's number).
+//!   with `added` (the account's number);
+//! * `deck.repos.list` → `{folders: [{name, root, git}]}`: the folders
+//!   Claude Code knows on this machine, for Deck's OPEN REPOSITORY.
 //!
 //! A switch or a sign-in that changed the machine's login asks every
 //! headless agent to start `claude` again at its next idle moment, so it
@@ -34,8 +36,17 @@ fn accounts() -> &'static Accounts<Curl> {
     })
 }
 
-/// The reply line for a `deck.accounts.*` request; `None` for any other line.
+/// The reply line for a `deck.accounts.*` or `deck.repos.list` request;
+/// `None` for any other line.
 pub(crate) fn handle(line: &str) -> Option<String> {
+    if line.contains("deck.repos.list") {
+        let request: Value = serde_json::from_str(line).ok()?;
+        if request.get("method")?.as_str()? == "deck.repos.list" {
+            let id = request.get("id").cloned().unwrap_or(Value::Null);
+            let folders = deck_accounts::known_folders(accounts().paths());
+            return Some(json!({ "id": id, "result": { "folders": folders } }).to_string());
+        }
+    }
     if !line.contains(PREFIX) {
         return None;
     }

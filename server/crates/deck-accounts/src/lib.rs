@@ -967,6 +967,40 @@ impl<H: Http> Accounts<H> {
     }
 }
 
+/// Folders Claude Code has worked in on this machine (the `projects` of its
+/// global config) that still exist, git repositories marked: what Deck
+/// offers when opening a repository on this server. `[{name, root, git}]`,
+/// repositories first, then by name.
+pub fn known_folders(paths: &Paths) -> Vec<Value> {
+    let config = read_json(&paths.global_config).ok().flatten();
+    let mut out: Vec<(bool, String, String)> = config
+        .as_ref()
+        .and_then(|c| c.get("projects"))
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|projects| projects.keys())
+        .filter_map(|root| {
+            let dir = Path::new(root);
+            if !dir.is_dir() {
+                return None;
+            }
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.clone());
+            Some((dir.join(".git").exists(), name, root.clone()))
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+    });
+    out.dedup_by(|a, b| a.2 == b.2);
+    out.into_iter()
+        .map(|(git, name, root)| json!({ "name": name, "root": root, "git": git }))
+        .collect()
+}
+
 /// The authorize URL for a pasted-code sign-in with a Claude subscription.
 pub fn authorize_url(challenge: &str, state: &str) -> String {
     let params = [

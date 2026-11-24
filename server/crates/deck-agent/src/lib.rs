@@ -59,6 +59,9 @@ pub mod proto {
             "--replay-user-messages",
             "--permission-prompt-tool",
             "stdio",
+            // Bypass stays off until the user picks it in the chat; without
+            // this flag Claude Code refuses to switch to it at all.
+            "--allow-dangerously-skip-permissions",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -445,6 +448,23 @@ pub fn control_success_id(msg: &Value) -> Option<&str> {
     (response.get("subtype").and_then(Value::as_str) == Some("success"))
         .then(|| response.get("request_id").and_then(Value::as_str))
         .flatten()
+}
+
+/// A control request `claude` refused: its request id and why.
+pub fn control_error(msg: &Value) -> Option<(&str, &str)> {
+    if msg_type(msg) != "control_response" {
+        return None;
+    }
+    let response = msg.get("response")?;
+    if response.get("subtype").and_then(Value::as_str) != Some("error") {
+        return None;
+    }
+    let id = response.get("request_id").and_then(Value::as_str)?;
+    let why = response
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("refused");
+    Some((id, why))
 }
 
 /// A `can_use_tool` request from `claude`: its request id.

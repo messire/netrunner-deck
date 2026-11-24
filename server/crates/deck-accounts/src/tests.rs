@@ -352,3 +352,25 @@ fn a_second_sign_in_is_added_without_taking_over() {
     let creds = read_json(&p.credentials()).unwrap().unwrap();
     assert_eq!(creds["claudeAiOauth"]["accessToken"], "a1");
 }
+
+#[test]
+fn known_folders_are_claudes_projects_that_exist() {
+    let p = paths();
+    let root = p.store.parent().unwrap().to_path_buf();
+    let repo = root.join("work").join("repo");
+    let plain = root.join("work").join("notes");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(&plain).unwrap();
+    let gone = root.join("gone");
+    let mut projects = serde_json::Map::new();
+    for d in [&plain, &repo, &gone] {
+        projects.insert(d.to_string_lossy().into_owned(), json!({}));
+    }
+    write_json(&p.global_config, &json!({ "projects": projects }), false).unwrap();
+    let list = known_folders(&p);
+    let names: Vec<&str> = list.iter().map(|f| f["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["repo", "notes"]);
+    assert_eq!(list[0]["git"], true);
+    assert_eq!(list[1]["git"], false);
+    assert!(known_folders(&paths()).is_empty());
+}
