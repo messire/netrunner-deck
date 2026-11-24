@@ -707,15 +707,17 @@ impl Registry {
         drop(st);
         if let Some(live) = live {
             live.stop.store(true, Ordering::SeqCst);
-            let host_in_use = match &live.endpoint {
-                Endpoint::Ssh { host, .. } => self
-                    .lock()
-                    .live
-                    .values()
-                    .any(|l| matches!(&l.endpoint, Endpoint::Ssh { host: h, .. } if h == host)),
-                Endpoint::Local(_) => false,
-            };
-            endpoint::close(&live.endpoint, host_in_use);
+            // A remote machine's bridge goes when its last server does; this
+            // machine's stays (discovery uses it too).
+            let machine = live.endpoint.machine();
+            let in_use = self
+                .lock()
+                .live
+                .values()
+                .any(|l| l.endpoint.machine() == machine);
+            if machine != endpoint::Machine::Local && !in_use {
+                endpoint::close(&machine);
+            }
         }
         let _ = app.emit(EVENT, "changed");
         Ok(())

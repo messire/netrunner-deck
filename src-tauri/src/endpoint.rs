@@ -1,41 +1,43 @@
-//! Where a Herdr-protocol server is and how a byte stream to it is opened.
+//! Where a Herdr-protocol server is and how a connection to it is opened.
 //!
-//! Deck has one connection type for every server, local or remote: a stream
-//! that carries Herdr's newline-delimited JSON API unchanged (one request
-//! per connection, `events.subscribe` keeps its connection). Only *opening*
-//! the stream depends on the address:
+//! Deck has exactly one way to connect to a server, local or remote: a
+//! channel through a `deck-server bridge` running on the server's machine
+//! (`bridge.rs`). The bridge opens the server's API socket there and the
+//! channel carries Herdr's newline-delimited JSON API unchanged (one request
+//! per connection, `events.subscribe` keeps its connection).
 //!
-//! * a **local** address is the server's socket path (on Windows the named
-//!   pipe `\\.\pipe\<path>`, elsewhere a unix socket);
-//! * an **ssh** address, `ssh://[user@]host[:port]/<absolute socket path>`,
-//!   is the same socket on another machine. Deck keeps one
-//!   `ssh host deck-server bridge` process per host (`bridge.rs`) and every
-//!   connection to any socket there is a channel inside it: one request is
-//!   one network round trip. A host without the bridge (only Herdr, or an
-//!   older deck-server) is reached through `ssh -N -L` instead, one loopback
-//!   TCP port forwarded to the remote socket per address (an SSH channel per
-//!   connection, a few round trips each). Keys, agent, `~/.ssh/config` and
-//!   `known_hosts` are the user's own OpenSSH setup; Deck stores only the
-//!   address, in its local preferences.
+//! The address only says which machine's bridge, and which socket on it:
 //!
+//! * a **local** address is the server's socket path (shown on Windows as
+//!   the named pipe `\\.\pipe\<path>`): the bridge is `deck-server bridge`
+//!   started here as a child process;
+//! * an **ssh** address, `ssh://[user@]host[:port]/<absolute socket path>`:
+//!   the bridge is `ssh host deck-server bridge`, with the user's own
+//!   OpenSSH setup (keys, agent, `~/.ssh/config`, `known_hosts`).
+//!
+//! One bridge per machine carries every connection to every server on it.
 //! Everything above this module (calls, deadlines, the event stream, the
 //! registry) sees only [`Endpoint`] and [`Stream`].
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// How long an SSH tunnel may take to come up (authentication included).
-const TUNNEL_START: Duration = Duration::from_secs(20);
-/// After a tunnel failed to start, wait this long before trying again so a
-/// down host does not get an SSH attempt for every call.
-const TUNNEL_RETRY: Duration = Duration::from_secs(10);
+use crate::bridge::{Link, StartError};
+
+/// How long a bridge may take to come up (SSH authentication included).
+const BRIDGE_START: Duration = Duration::from_secs(20);
+/// After a bridge failed to start, wait this long before trying again so a
+/// down host is not dialled for every call.
+const BRIDGE_RETRY: Duration = Duration::from_secs(10);
 /// One remote listing of server sockets (discovery).
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// A connection to a server: a channel of its machine's bridge.
+pub type Stream = crate::bridge::Channel;
 
 /// The app dirs a server can live in, on any machine (`servers::APP_DIRS`).
 use crate::servers::APP_DIRS;
@@ -160,38 +162,27 @@ impl Endpoint {
         matches!(self, Endpoint::Ssh { .. })
     }
 
-    /// Open one stream to the server. `read_timeout` bounds each read where
-    /// the stream supports it (unix sockets, TCP); `None` blocks forever,
-    /// which the long-lived event stream needs.
-    pub fn connect(&self, read_timeout: Option<Duration>) -> io::Result<Stream> {
+    /// The machine whose bridge reaches this server.
+    pub fn machine(&self) -> Machine {
         match self {
-            #[cfg(windows)]
-            Endpoint::Local(_) => {
-                let _ = read_timeout;
-                std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(self.address())
-                    .map(Stream::Local)
-            }
-            #[cfg(not(windows))]
-            Endpoint::Local(path) => {
-                let s = std::os::unix::net::UnixStream::connect(path)?;
-                s.set_read_timeout(read_timeout).ok();
-                Ok(Stream::Local(s))
-            }
-            Endpoint::Ssh { host, socket } => {
-                if let Some(link) = host_link(host)? {
-                    return Ok(Stream::Bridge(link.open(socket, read_timeout)?));
-                }
-                let port = tunnel_port(host, socket)?;
-                let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-                let s = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
-                s.set_nodelay(true).ok();
-                s.set_read_timeout(read_timeout).ok();
-                Ok(Stream::Tcp(s))
-            }
+            Endpoint::Local(_) => Machine::Local,
+            Endpoint::Ssh { host, .. } => Machine::Ssh(host.clone()),
         }
+    }
+
+    /// The socket path as the bridge on that machine opens it.
+    fn socket(&self) -> String {
+        match self {
+            Endpoint::Local(p) => p.to_string_lossy().into_owned(),
+            Endpoint::Ssh { socket, .. } => socket.clone(),
+        }
+    }
+
+    /// Open one connection to the server: a new channel of its machine's
+    /// bridge (started when needed). `read_timeout` bounds each read; `None`
+    /// blocks forever, which the long-lived event stream needs.
+    pub fn connect(&self, read_timeout: Option<Duration>) -> io::Result<Stream> {
+        link(&self.machine())?.open(&self.socket(), read_timeout)
     }
 }
 
@@ -223,44 +214,6 @@ fn split_host_path(rest: &str) -> Option<(SshHost, Option<String>)> {
         return None;
     }
     Some((SshHost { user, host, port }, path))
-}
-
-/// A connected stream: the same bytes whatever carries them.
-pub enum Stream {
-    #[cfg(windows)]
-    Local(std::fs::File),
-    #[cfg(not(windows))]
-    Local(std::os::unix::net::UnixStream),
-    Tcp(TcpStream),
-    Bridge(crate::bridge::Channel),
-}
-
-impl Read for Stream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Stream::Local(s) => s.read(buf),
-            Stream::Tcp(s) => s.read(buf),
-            Stream::Bridge(s) => s.read(buf),
-        }
-    }
-}
-
-impl Write for Stream {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Stream::Local(s) => s.write(buf),
-            Stream::Tcp(s) => s.write(buf),
-            Stream::Bridge(s) => s.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Stream::Local(s) => s.flush(),
-            Stream::Tcp(s) => s.flush(),
-            Stream::Bridge(s) => s.flush(),
-        }
-    }
 }
 
 // ---- ssh ------------------------------------------------------------------------
@@ -302,66 +255,122 @@ fn ssh_command(host: &SshHost) -> std::process::Command {
     cmd
 }
 
-struct Tunnel {
-    child: Child,
-    port: u16,
-    stderr: Arc<Mutex<String>>,
+// ---- one bridge per machine -------------------------------------------------------
+
+/// A machine with servers on it: this one, or an SSH host.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Machine {
+    Local,
+    Ssh(SshHost),
 }
 
-impl Drop for Tunnel {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+impl Machine {
+    fn name(&self) -> String {
+        match self {
+            Machine::Local => "this machine".into(),
+            Machine::Ssh(h) => h.key(),
+        }
+    }
+
+    /// The command that starts this machine's bridge.
+    fn bridge_command(&self) -> io::Result<std::process::Command> {
+        match self {
+            Machine::Local => {
+                let exe = local_deck_server().ok_or_else(|| {
+                    io::Error::other(
+                        "deck-server is not installed on this machine (Deck connects to every server through `deck-server bridge`)",
+                    )
+                })?;
+                let mut cmd = crate::archive::quiet_command(exe);
+                cmd.arg("bridge");
+                Ok(cmd)
+            }
+            Machine::Ssh(host) => {
+                let mut cmd = ssh_command(host);
+                cmd.arg(REMOTE_BRIDGE);
+                Ok(cmd)
+            }
+        }
     }
 }
 
+/// On an SSH host: deck-server from PATH, else where it is installed for
+/// the user (`~/.local/bin`; a non-login shell may not have it on PATH).
+const REMOTE_BRIDGE: &str =
+    "exec \"$(command -v deck-server || echo \"$HOME/.local/bin/deck-server\")\" bridge";
+
+/// deck-server on this machine: next to Deck, then `~/.local/bin`, then PATH.
+pub fn local_deck_server() -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "deck-server.exe"
+    } else {
+        "deck-server"
+    };
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join(name)));
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .filter(|v| !v.is_empty())
+        .map(|h| PathBuf::from(h).join(".local").join("bin").join(name));
+    let on_path = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .map(|d| d.join(name));
+    beside
+        .into_iter()
+        .chain(home)
+        .chain(on_path)
+        .find(|p| p.is_file())
+}
+
 #[derive(Default)]
-struct TunnelSlot {
-    tunnel: Option<Tunnel>,
-    /// Last failure and when, so callers fail fast while the host is down.
+struct Slot {
+    link: Option<Arc<Link>>,
     failed: Option<(Instant, String)>,
 }
 
-type Slots = Mutex<HashMap<(SshHost, String), Arc<Mutex<TunnelSlot>>>>;
+type Slots = Mutex<HashMap<Machine, Arc<Mutex<Slot>>>>;
 
 fn slots() -> &'static Slots {
     static SLOTS: std::sync::OnceLock<Slots> = std::sync::OnceLock::new();
     SLOTS.get_or_init(Default::default)
 }
 
-fn slot_of(host: &SshHost, socket: &str) -> Arc<Mutex<TunnelSlot>> {
-    slots()
+/// The bridge of `machine`, started when needed. A failure is remembered
+/// for [`BRIDGE_RETRY`] so a down host is not dialled on every call.
+fn link(machine: &Machine) -> io::Result<Arc<Link>> {
+    let slot = slots()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .entry((host.clone(), socket.to_string()))
+        .entry(machine.clone())
         .or_default()
-        .clone()
-}
-
-/// The loopback port forwarded to `socket` on `host`, starting the tunnel
-/// when it is not running (or died).
-fn tunnel_port(host: &SshHost, socket: &str) -> io::Result<u16> {
-    let slot = slot_of(host, socket);
+        .clone();
     let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(t) = slot.tunnel.as_mut() {
-        if matches!(t.child.try_wait(), Ok(None)) {
-            return Ok(t.port);
+    if let Some(link) = &slot.link {
+        if link.alive() {
+            return Ok(link.clone());
         }
-        let why = last_line(&t.stderr);
-        tracing::warn!(host = %host.key(), %why, "ssh tunnel exited; restarting");
-        slot.tunnel = None;
+        tracing::warn!(machine = %machine.name(), "bridge ended; restarting");
+        slot.link = None;
     }
     if let Some((at, why)) = &slot.failed {
-        if at.elapsed() < TUNNEL_RETRY {
+        if at.elapsed() < BRIDGE_RETRY {
             return Err(io::Error::new(io::ErrorKind::NotConnected, why.clone()));
         }
     }
-    match start_tunnel(host, socket) {
-        Ok(t) => {
-            let port = t.port;
-            slot.tunnel = Some(t);
+    let started = machine.bridge_command().and_then(|cmd| {
+        match crate::bridge::start(cmd, &machine.name(), BRIDGE_START) {
+            Ok(link) => Ok(link),
+            Err(StartError::NoBridge(why)) => Err(io::Error::other(why)),
+            Err(StartError::Failed(err)) => Err(err),
+        }
+    });
+    match started {
+        Ok(link) => {
+            tracing::info!(machine = %machine.name(), "bridge up");
+            slot.link = Some(link.clone());
             slot.failed = None;
-            Ok(port)
+            Ok(link)
         }
         Err(err) => {
             slot.failed = Some((Instant::now(), err.to_string()));
@@ -370,199 +379,26 @@ fn tunnel_port(host: &SshHost, socket: &str) -> io::Result<u16> {
     }
 }
 
-fn last_line(buf: &Arc<Mutex<String>>) -> String {
-    let text = buf.lock().unwrap_or_else(PoisonError::into_inner);
-    text.lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim()
-        .to_string()
-}
-
-fn free_port() -> io::Result<u16> {
-    let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-    Ok(l.local_addr()?.port())
-}
-
-fn start_tunnel(host: &SshHost, socket: &str) -> io::Result<Tunnel> {
-    let port = free_port()?;
-    let mut cmd = ssh_command(host);
-    cmd.args([
-        "-N",
-        "-o",
-        "ExitOnForwardFailure=yes",
-        "-L",
-        &format!("127.0.0.1:{port}:{socket}"),
-    ]);
-    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!("cannot start ssh ({}): {e}", ssh_program().display()),
-        )
-    })?;
-    let stderr = Arc::new(Mutex::new(String::new()));
-    if let Some(err) = child.stderr.take() {
-        let buf = stderr.clone();
-        std::thread::Builder::new()
-            .name("deck-ssh-stderr".into())
-            .spawn(move || {
-                for line in BufReader::new(err).lines().map_while(Result::ok) {
-                    let mut b = buf.lock().unwrap_or_else(PoisonError::into_inner);
-                    if b.len() > 8192 {
-                        b.clear();
-                    }
-                    b.push_str(&line);
-                    b.push('\n');
-                }
-            })
-            .ok();
-    }
-    let mut tunnel = Tunnel {
-        child,
-        port,
-        stderr,
-    };
-    // ssh listens only once the session is up: poll the port until it
-    // accepts, the process gives up, or the deadline passes.
-    let deadline = Instant::now() + TUNNEL_START;
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    loop {
-        if let Ok(Some(status)) = tunnel.child.try_wait() {
-            // Give the stderr reader a moment to collect ssh's last words.
-            std::thread::sleep(Duration::from_millis(100));
-            let why = last_line(&tunnel.stderr);
-            let why = if why.is_empty() {
-                format!("ssh exited ({status})")
-            } else {
-                why
-            };
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionRefused,
-                format!("ssh {}: {why}", host.key()),
-            ));
-        }
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
-            tracing::info!(host = %host.key(), %socket, port, "ssh tunnel up");
-            return Ok(tunnel);
-        }
-        if Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!(
-                    "ssh {}: no connection within {}s",
-                    host.key(),
-                    TUNNEL_START.as_secs()
-                ),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
-}
-
-// ---- bridge per host --------------------------------------------------------------
-
-/// How long "this host has no bridge" is believed before trying it again
-/// (its deck-server may update itself meanwhile).
-const NO_BRIDGE_FOR: Duration = Duration::from_secs(600);
-
-#[derive(Default)]
-struct HostSlot {
-    link: Option<Arc<crate::bridge::Link>>,
-    no_bridge: Option<Instant>,
-    failed: Option<(Instant, String)>,
-}
-
-type HostSlots = Mutex<HashMap<SshHost, Arc<Mutex<HostSlot>>>>;
-
-fn host_slots() -> &'static HostSlots {
-    static SLOTS: std::sync::OnceLock<HostSlots> = std::sync::OnceLock::new();
-    SLOTS.get_or_init(Default::default)
-}
-
-/// The bridge to `host`, started when needed; `None` when the host has no
-/// bridge (use the `-L` tunnel). An SSH failure is an error, remembered for
-/// [`TUNNEL_RETRY`] so a down host is not dialled on every call.
-fn host_link(host: &SshHost) -> io::Result<Option<Arc<crate::bridge::Link>>> {
-    let slot = host_slots()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .entry(host.clone())
-        .or_default()
-        .clone();
-    let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(link) = &slot.link {
-        if link.alive() {
-            return Ok(Some(link.clone()));
-        }
-        tracing::warn!(host = %host.key(), "ssh bridge ended; restarting");
-        slot.link = None;
-    }
-    if slot
-        .no_bridge
-        .is_some_and(|at| at.elapsed() < NO_BRIDGE_FOR)
-    {
-        return Ok(None);
-    }
-    if let Some((at, why)) = &slot.failed {
-        if at.elapsed() < TUNNEL_RETRY {
-            return Err(io::Error::new(io::ErrorKind::NotConnected, why.clone()));
-        }
-    }
-    match crate::bridge::start(ssh_command(host), host, TUNNEL_START) {
-        Ok(link) => {
-            slot.link = Some(link.clone());
-            slot.failed = None;
-            slot.no_bridge = None;
-            Ok(Some(link))
-        }
-        Err(crate::bridge::StartError::NoBridge(why)) => {
-            tracing::info!(host = %host.key(), %why, "no deck-server bridge; using ssh -L");
-            slot.no_bridge = Some(Instant::now());
-            Ok(None)
-        }
-        Err(crate::bridge::StartError::Ssh(err)) => {
-            slot.failed = Some((Instant::now(), err.to_string()));
-            Err(err)
-        }
-    }
-}
-
-/// Stop what carries a remote endpoint (the server was disconnected): its
-/// `-L` tunnel, and the host's bridge when `host_in_use` is false (no other
-/// connected server on that host). Open streams end, the event pump's too.
-pub fn close(endpoint: &Endpoint, host_in_use: bool) {
-    let Endpoint::Ssh { host, socket } = endpoint else {
-        return;
-    };
-    let key = (host.clone(), socket.clone());
+/// Stop `machine`'s bridge (no connected server is left on it); its open
+/// channels end, event streams too.
+pub fn close(machine: &Machine) {
     let slot = slots()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .remove(&key);
+        .remove(machine);
     if let Some(slot) = slot {
-        slot.lock().unwrap_or_else(PoisonError::into_inner).tunnel = None;
-    }
-    if !host_in_use {
-        let slot = host_slots()
+        if let Some(link) = slot
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(host);
-        if let Some(slot) = slot {
-            if let Some(link) = slot
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .link
-                .take()
-            {
-                link.kill();
-            }
+            .link
+            .take()
+        {
+            link.kill();
         }
     }
 }
 
-/// Stop every tunnel and bridge (Deck is exiting; ssh children would outlive it).
+/// Stop every bridge (Deck is exiting; the children would outlive it).
 pub fn close_all() {
     let all: Vec<_> = slots()
         .lock()
@@ -571,15 +407,6 @@ pub fn close_all() {
         .map(|(_, v)| v)
         .collect();
     for slot in all {
-        slot.lock().unwrap_or_else(PoisonError::into_inner).tunnel = None;
-    }
-    let hosts: Vec<_> = host_slots()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .drain()
-        .map(|(_, v)| v)
-        .collect();
-    for slot in hosts {
         if let Some(link) = slot
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

@@ -1,6 +1,8 @@
 //! Deck's side of `deck-server bridge` (see `server/src/deck_server/bridge.rs`):
-//! one `ssh host deck-server bridge` process per host, and every connection
-//! to any server socket on that host is a channel inside it.
+//! one bridge process per machine (`deck-server bridge` here, or
+//! `ssh host deck-server bridge`), and every connection to any server socket
+//! on that machine is a channel inside it. This is the only way Deck
+//! connects to a server (`endpoint.rs`).
 //!
 //! A channel is opened by sending its `open` frame and the request right
 //! after it, without waiting: one request costs one network round trip.
@@ -16,13 +18,6 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::endpoint::SshHost;
-
-/// The remote command: deck-server from PATH, else where it is installed
-/// for the user (`~/.local/bin`, a non-login shell may not have it on PATH).
-const REMOTE: &str =
-    "exec \"$(command -v deck-server || echo \"$HOME/.local/bin/deck-server\")\" bridge";
-
 enum Msg {
     Data(Vec<u8>),
     Close,
@@ -31,10 +26,10 @@ enum Msg {
 
 /// Why a bridge could not be started.
 pub enum StartError {
-    /// The host has no `deck-server bridge` (ssh itself worked): use another way.
+    /// The machine has no deck-server with a bridge (it ran and said so).
     NoBridge(String),
-    /// ssh failed (host down, key refused, …).
-    Ssh(io::Error),
+    /// The bridge could not be run (no ssh, host down, key refused, …).
+    Failed(io::Error),
 }
 
 pub struct Link {
@@ -122,17 +117,16 @@ fn kind_of(name: &str) -> io::ErrorKind {
     }
 }
 
-/// Start the bridge on `host` and wait for its hello.
+/// Run `cmd` (a bridge on machine `name`) and wait for its hello.
 pub fn start(
     mut cmd: std::process::Command,
-    host: &SshHost,
+    name: &str,
     timeout: Duration,
 ) -> Result<Arc<Link>, StartError> {
-    cmd.arg(REMOTE);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(StartError::Ssh)?;
+    let mut child = cmd.spawn().map_err(StartError::Failed)?;
     let stdin = child.stdin.take().expect("piped");
     let stdout = child.stdout.take().expect("piped");
     let stderr = child.stderr.take().expect("piped");
@@ -160,15 +154,14 @@ pub fn start(
     let (hello_tx, hello_rx) = mpsc::channel::<bool>();
     let weak = Arc::downgrade(&link);
     std::thread::Builder::new()
-        .name(format!("deck-bridge:{}", host.key()))
+        .name(format!("deck-bridge:{name}"))
         .spawn(move || read_frames(stdout, weak, hello_tx))
-        .map_err(StartError::Ssh)?;
+        .map_err(StartError::Failed)?;
     let hello = hello_rx.recv_timeout(timeout);
     if matches!(hello, Ok(true)) {
-        tracing::info!(host = %host.key(), "ssh bridge up");
         return Ok(link);
     }
-    // No hello: why? Give ssh a moment to exit and say so.
+    // No hello: why? Give the process a moment to exit and say so.
     let status = {
         let mut waited = None;
         for _ in 0..20 {
@@ -193,21 +186,20 @@ pub fn start(
         .clone();
     let what = |d: &str| {
         format!(
-            "ssh {}: {}",
-            host.key(),
+            "bridge on {name}: {}",
             if why.is_empty() { d } else { &why }
         )
     };
     match status.and_then(|s| s.code()) {
         // 255 is ssh's own failure (connect, auth, host key).
-        Some(255) => Err(StartError::Ssh(io::Error::new(
+        Some(255) => Err(StartError::Failed(io::Error::new(
             io::ErrorKind::ConnectionRefused,
             what("ssh failed"),
         ))),
         Some(_) => Err(StartError::NoBridge(what(
-            "no deck-server bridge on that host",
+            "no deck-server with a bridge there",
         ))),
-        None => Err(StartError::Ssh(io::Error::new(
+        None => Err(StartError::Failed(io::Error::new(
             io::ErrorKind::TimedOut,
             what("no answer"),
         ))),

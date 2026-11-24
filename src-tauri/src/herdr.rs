@@ -7,6 +7,10 @@
 //! that same ack line, then keeps the connection open and streams one JSON
 //! event per line (`{"event":"pane_updated", …}`, snake_case).
 //!
+//! Every connection, to a server here or on another machine, is a channel
+//! of that machine's `deck-server bridge` (`endpoint.rs`); the protocol in it
+//! is exactly the above.
+//!
 //! Blocking discipline (roadmap R3): every [`call`] runs its socket I/O on a
 //! helper thread and the caller waits at most [`CALL_TIMEOUT`]; at most
 //! [`MAX_CONCURRENT_CALLS`] request/reply connections are open at once so the
@@ -100,9 +104,7 @@ pub fn config_root() -> PathBuf {
     PathBuf::from(".")
 }
 
-/// Socket-level read timeout for request/reply connections, where the
-/// stream has one (unix sockets, TCP to a tunnel); a Windows named pipe has
-/// none, `run_with_deadline` covers it there.
+/// Read timeout of request/reply connections (the call deadline covers it too).
 const CALL_READ_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Connection for one request/reply exchange (see [`call`]).
@@ -298,15 +300,37 @@ fn call_blocking(endpoint: &Endpoint, method: &str, params: Value) -> Result<Val
     stream.flush()?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
+    if reader
+        .read_line(&mut line)
+        .map_err(|e| opened(endpoint, e))?
+        == 0
+    {
         return Err(closed_without_reply(endpoint));
     }
     parse_reply(method, &line)
 }
 
-/// The stream ended before a reply line. Through an SSH tunnel this is how a
-/// missing remote server shows (ssh accepts the local connection, then the
-/// remote socket refuses the channel), so it reads as "not reachable".
+/// The bridge opens the server's socket after the request is on its way, so
+/// "nothing there" / "refused" arrives as the first read's error: it is the
+/// same connect failure a direct open would have given.
+fn opened(endpoint: &Endpoint, err: std::io::Error) -> HerdrError {
+    use std::io::ErrorKind::{ConnectionRefused, NotFound, PermissionDenied};
+    match err.kind() {
+        NotFound | ConnectionRefused | PermissionDenied => HerdrError::Connect {
+            path: endpoint.address(),
+            hint: if endpoint.is_remote() {
+                ""
+            } else {
+                connect_hint(err.kind())
+            },
+            source: err,
+        },
+        _ => HerdrError::Io(err),
+    }
+}
+
+/// The stream ended before a reply line: the server went away mid-request
+/// (or the bridge did), so it reads as "not reachable".
 fn closed_without_reply(endpoint: &Endpoint) -> HerdrError {
     HerdrError::Connect {
         path: endpoint.address(),
@@ -433,7 +457,11 @@ pub fn subscribe(
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line)? == 0 {
+        if reader
+            .read_line(&mut line)
+            .map_err(|e| opened(endpoint, e))?
+            == 0
+        {
             return Err(HerdrError::Io(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "event stream closed",
