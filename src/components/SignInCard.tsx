@@ -1,6 +1,9 @@
 import { Show, createSignal } from "solid-js";
 import { api, type AccountList } from "../api";
 
+/** A sign-in started per server and not finished yet: survives the card being shown again (another tab, a refresh). */
+const pending = new Map<string, { id: string; url: string }>();
+
 /**
  * Sign in to Claude on a server's machine (deck-server's
  * `deck.accounts.login.*`): the server starts Claude Code's OAuth sign-in,
@@ -21,7 +24,9 @@ export default function SignInCard(p: {
   onDone: (list: AccountList) => void;
   onCancel?: () => void;
 }) {
-  const [login, setLogin] = createSignal<{ id: string; url: string } | null>(null);
+  const key = () => p.server ?? "";
+  const [login, setLoginRaw] = createSignal<{ id: string; url: string } | null>(pending.get(key()) ?? null);
+  const setLogin = (l: { id: string; url: string } | null) => { if (l) pending.set(key(), l); else pending.delete(key()); setLoginRaw(l); };
   const [code, setCode] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
