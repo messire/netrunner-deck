@@ -2,7 +2,10 @@
 
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
-## Unreleased
+## [0.5.0] — 2026-11-24
+- SERVERS: + ADD opens a dialog (user, host, port) whose CHECK lists the machine's servers and pings each through its bridge; only the ones that answer are offered, with kind and version, to connect in one go. Non-default SSH ports work.
+- SERVERS: ✕ removes a machine with all its servers (disconnects them, closes its bridge, stops scanning it); manually added addresses can be removed too.
+- The periodic scan pings remote servers through the bridge and offers only those that answer; a machine that cannot be reached shows as one grey row with the reason instead of its old rows.
 - deck-server runs Claude Code headless: `deck-server agent` in a pane starts Claude on the stream-json control protocol, without a terminal, and serves it as `deck.agent.*` (subscribe with replay, send, permission answers, interrupt, model and mode). See docs/adr/0003-headless-claude.md.
 - Deck shows a Claude tab on deck-server only as a chat, with no console: new tabs, Quickhacks and archive restore start `deck-server agent`; the reply streams in as it is written; permission requests, AskUserQuestion and plan approval are cards in the chat; permission mode, model and stop are in the header; pasted images go with the message.
 
