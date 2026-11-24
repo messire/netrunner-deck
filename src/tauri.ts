@@ -107,7 +107,7 @@ const fake = (() => {
   const online = { state: "online", version: "0.9.5", protocol: 22 };
   const servers: FakeServer[] = [
     { id: "herdr", name: "herdr", kind: "herdr", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock", connected: q.get("servers") !== "0", manual: false, found: true, new: false, status: { ...online } },
-    { id: "deck-server/try", name: "deck-server · try", kind: "deck-server", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\deck-server\\sessions\\try\\herdr.sock", connected: q.get("servers") !== "0", manual: false, found: true, new: false,
+    { id: "deck-server/try", name: "deck-server · try", kind: "deck-server", remote: q.get("remote") === "1", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\deck-server\\sessions\\try\\herdr.sock", connected: q.get("servers") !== "0", manual: false, found: true, new: false,
       status: q.get("servers") === "down" ? { state: "offline", error: "herdr server is not reachable at \\\\.\\pipe\\…\\try\\herdr.sock: Access is denied. (os error 5) — Herdr runs elevated" } : { ...online } },
     { id: "herdr-dev/decktest", name: "herdr-dev · decktest", kind: "herdr", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\herdr-dev\\sessions\\decktest\\herdr.sock", connected: false, manual: false, found: true, new: true, status: { ...online } },
     { id: "dev@build-box.example.com/deck-server", name: "deck-server @ dev@build-box.example.com", kind: "deck-server", address: "dev@build-box.example.com:/home/dev/.config/deck-server/herdr.sock", connected: false, manual: true, found: true, new: false, remote: true, machine: "dev@build-box.example.com", status: { state: "online", version: "0.4.0", protocol: 22 } },
@@ -284,12 +284,14 @@ const fake = (() => {
           ? { version: "9.9.9", current: "0.1.0", notes: "browser stand-in", date: null } : null;
       case "update_install": await new Promise((r) => setTimeout(r, 1500)); return null;
       case "fs_call": {
-        const path = String(args.path);
+        // A deck-server on another machine keeps folders in its user's home (/home/me).
+        const typed = String(args.path).trim();
+        const path = typed.startsWith("/home/me") ? typed : `/home/me/${typed.replace(/^~/, "").replace(/^[\/]+/, "")}`.replace(/\/$/, "");
+        if (/(^|\/)\.\.(\/|$)/.test(typed)) throw new Error(`the server refused deck.fs.stat: ${typed} leads outside your home folder /home/me`);
         const made = ((window as any).__deckMade ??= new Set<string>()) as Set<string>;
-        if (args.method === "mkdir" && path === "/repos") throw new Error("the server refused deck.fs.mkdir: no permission to create /repos as me: it is outside your home folder");
-        if (args.method === "mkdir") { const full = path.replace(/^~/, "/home/me"); made.add(full); return { path: full, exists: true, dir: true }; }
-        const exists = made.has(path) || !/missing|repos$/.test(path);
-        return { path, exists, dir: exists };
+        if (args.method === "mkdir") made.add(path);
+        const exists = made.has(path) || path === "/home/me/notes";
+        return { path, exists, dir: exists, home: "/home/me" };
       }
       case "repos_list": return { folders: [{ name: "atlas", root: "/home/me/work/atlas", git: true }, { name: "notes", root: "/home/me/notes", git: false }] };
       // deck-server's `deck.accounts.*`; `?signin=1` starts with a machine that has no login.

@@ -1017,43 +1017,96 @@ pub fn expand_home(path: &str) -> PathBuf {
     }
 }
 
-/// What is at `path` on this machine: `{path, exists, dir}` (`path` with
-/// `~` expanded), for Deck's OPEN REPOSITORY before it opens a space there.
-pub fn folder_state(path: &str) -> Result<Value> {
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Where a typed folder is, kept inside `home`: `repos`, `/repos` and
+/// `~/repos` are all `<home>/repos`; a path that already starts with
+/// `home` is taken as it is. `..` that would leave the home is refused,
+/// and so is a symlink inside it that points outside.
+pub fn resolve_in_home(input: &str, home: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let input = input.trim();
+    let raw = Path::new(input.strip_prefix('~').unwrap_or(input));
+    let rel = raw.strip_prefix(home).unwrap_or(raw);
+    let mut out = home.to_path_buf();
+    let mut depth = 0usize;
+    for part in rel.components() {
+        match part {
+            Component::Normal(name) => {
+                out.push(name);
+                depth += 1;
+            }
+            Component::ParentDir if depth > 0 => {
+                out.pop();
+                depth -= 1;
+            }
+            Component::ParentDir => {
+                return Err(format!(
+                    "{input} leads outside your home folder {}",
+                    home.display()
+                ))
+            }
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
+        }
+    }
+    // A symlink on the way may still point elsewhere: check the nearest
+    // existing ancestor's real place.
+    if let Ok(real_home) = std::fs::canonicalize(home) {
+        let mut probe = out.clone();
+        while !probe.exists() && probe.pop() {}
+        if let Ok(real) = std::fs::canonicalize(&probe) {
+            if !real.starts_with(&real_home) {
+                return Err(format!(
+                    "{} leads outside your home folder {}",
+                    out.display(),
+                    home.display()
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Where a typed folder is on this machine. On Unix (deck-server on a
+/// server machine) every folder Deck opens or creates is inside the home of
+/// the user the server runs as; on Windows (the user's own PC) a path is
+/// taken as it is, with `~` expanded.
+fn place_of(path: &str) -> Result<PathBuf> {
     if path.trim().is_empty() {
         return Err("a path is needed".into());
     }
-    let p = expand_home(path.trim());
+    if cfg!(unix) {
+        let home = home_dir().ok_or("the server has no home folder (HOME is not set)")?;
+        return resolve_in_home(path, &home);
+    }
+    Ok(expand_home(path.trim()))
+}
+
+/// What is at `path` on this machine: `{path, exists, dir, home}` (`path`
+/// resolved by [`place_of`]), for Deck's OPEN REPOSITORY before it opens or
+/// creates a space there.
+pub fn folder_state(path: &str) -> Result<Value> {
+    let p = place_of(path)?;
     let meta = std::fs::metadata(&p).ok();
     Ok(json!({
         "path": p.to_string_lossy(),
         "exists": meta.is_some(),
         "dir": meta.is_some_and(|m| m.is_dir()),
+        "home": home_dir().map(|h| h.to_string_lossy().into_owned()),
     }))
 }
 
 /// Creates the folder (and its parents) on this machine; its state after.
 pub fn make_folder(path: &str) -> Result<Value> {
-    if path.trim().is_empty() {
-        return Err("a path is needed".into());
-    }
-    let p = expand_home(path.trim());
+    let p = place_of(path)?;
     if !p.is_absolute() {
         return Err(format!("{} is not an absolute path", p.display()));
     }
-    std::fs::create_dir_all(&p).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            let user = std::env::var("USER")
-                .or_else(|_| std::env::var("USERNAME"))
-                .unwrap_or_else(|_| "this user".into());
-            format!(
-                "no permission to create {} as {user}: it is outside your home folder",
-                p.display()
-            )
-        } else {
-            format!("cannot create {}: {e}", p.display())
-        }
-    })?;
+    std::fs::create_dir_all(&p).map_err(|e| format!("cannot create {}: {e}", p.display()))?;
     folder_state(&p.to_string_lossy())
 }
 

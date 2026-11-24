@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { filterItems } from "../quickhacks";
 
 export interface KnownRepo { name: string; root: string; open: boolean }
@@ -24,6 +24,21 @@ export default function NewRepoBox(p: {
   let input!: HTMLInputElement;
   const rows = createMemo(() => filterItems(p.known.filter((r) => !r.open).map((r) => ({ ...r, description: r.root })), q()));
   const looksLikePath = () => /^([a-zA-Z]:[\\/]|\/|\\\\|~)/.test(q().trim());
+  /** On another machine anything typed that matches no known folder is a folder in the home there. */
+  const asPath = () => looksLikePath() || (!!p.remote && !!q().trim() && rows().length === 0);
+  /** Where the typed folder is on the server's machine, as it resolves it (inside the home there). */
+  const [resolved, setResolved] = createSignal<{ path: string; exists: boolean; dir: boolean } | null>(null);
+  let resolveTimer: number | undefined;
+  createEffect(on(q, (text) => {
+    clearTimeout(resolveTimer);
+    setResolved(null);
+    const v = text.trim();
+    if (!p.remote || !p.check || !v || !asPath()) return;
+    resolveTimer = window.setTimeout(() => {
+      p.check!(v).then((st) => { if (q().trim() === v) setResolved(st); }).catch(() => {});
+    }, 250);
+  }));
+  onCleanup(() => clearTimeout(resolveTimer));
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   /** A typed folder that is not there: offered to be created. */
@@ -35,10 +50,10 @@ export default function NewRepoBox(p: {
   };
   const open = (root: string) => run(async () => { await p.onPick(root); p.onClose(); });
   const go = () => {
-    if (looksLikePath()) {
+    if (asPath()) {
       const v = q().trim();
       return run(async () => {
-        const state = await p.check?.(v).catch((e) => { throw new Error(`cannot check ${v}: ${e}`); });
+        const state = await p.check?.(v).catch((e) => { throw new Error(String(e).replace(/^Error: /, "").replace(/^the server refused deck\.fs\.\w+: /, "")); });
         if (state && !state.exists) { setMissing(state.path); return; }
         if (state && !state.dir) throw new Error(`${state.path} is a file, not a folder`);
         await p.onPick(state?.path ?? v);
@@ -47,13 +62,6 @@ export default function NewRepoBox(p: {
     }
     const r = rows()[at()];
     if (r) void open(r.root);
-  };
-  /** A folder that could not be created for lack of permission: the same name in the home folder. */
-  const homeAlternative = () => {
-    const path = missing();
-    if (!path || !/no permission|permission denied|access is denied/i.test(error() ?? "") || path.startsWith("~")) return null;
-    const name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-    return name ? `~/${name}` : null;
   };
   /** Creates `path` (default: the missing one) on the server's machine and opens it. */
   const createAndOpen = (target?: string) => run(async () => {
@@ -77,9 +85,9 @@ export default function NewRepoBox(p: {
     <div class="veil" onClick={p.onClose}>
       <div class="dlgbox wiz" onClick={(e) => e.stopPropagation()}>
         <div class="dlgt">▞ OPEN REPOSITORY <span class="crumb"><span>› {p.where ? `on ${p.where}` : "a known repo, or a folder path"}</span></span></div>
-        <input ref={input} class="arc-q wide" placeholder={p.remote ? "search its folders… or a path on that machine (/home/…)" : "search known repos… or paste a path (C:\\Workspace\\…)"} value={q()} onInput={(e) => { setQ(e.currentTarget.value); setAt(0); setMissing(null); setError(null); }} />
+        <input ref={input} class="arc-q wide" placeholder={p.remote ? "search its folders… or a folder in your home there (repos → ~/repos)" : "search known repos… or paste a path (C:\\Workspace\\…)"} value={q()} onInput={(e) => { setQ(e.currentTarget.value); setAt(0); setMissing(null); setError(null); }} />
         <div class="wiz-list">
-          <Show when={looksLikePath()} fallback={
+          <Show when={asPath()} fallback={
             <Show when={rows().length} fallback={<div class="hk-empty">▞ {p.loading ? "ASKING THE SERVER FOR ITS FOLDERS…" : p.known.length ? "EVERYTHING KNOWN IS OPEN — paste a path" : p.remote ? "NO KNOWN FOLDERS ON THAT MACHINE — type a path there" : "NO KNOWN REPOS — paste a path"}</div>}>
               <For each={rows()}>{(r, i) => (
                 <button class={`cm-opt ${i() === at() ? "cur" : ""}`} disabled={busy()} onMouseMove={() => setAt(i())} onClick={() => void open(r.root)}>
@@ -88,22 +96,17 @@ export default function NewRepoBox(p: {
               )}</For>
             </Show>
           }>
-            <button class="cm-opt cur" disabled={busy()} onClick={() => void go()}><span class="n">↵</span><span class="lb">open folder<span class="hint">{q().trim()}</span></span></button>
+            <button class="cm-opt cur" disabled={busy()} onClick={() => void go()}><span class="n">↵</span><span class="lb">open folder<span class="hint">{resolved()?.path ?? q().trim()}{resolved() && !resolved()!.exists ? " · not there yet" : ""}</span></span></button>
           </Show>
         </div>
         <Show when={missing()}>{(path) => (
           <div class="repo-missing">
-            <span>Folder <b>{path()}</b> does not exist{p.where ? ` on ${p.where}` : ""}.</span>
-            <Show when={p.create}><button class="abtn ok" disabled={busy()} onClick={() => void createAndOpen()}>{busy() ? "CREATING…" : "CREATE FOLDER · OPEN"}</button></Show>
+            <span>Create folder <b>{path()}</b>{p.where ? ` on ${p.where}` : ""}?</span>
+            <Show when={p.create}><button class="abtn ok" disabled={busy()} onClick={() => void createAndOpen()}>{busy() ? "CREATING…" : "CREATE · OPEN"}</button></Show>
           </div>
         )}</Show>
         <Show when={error()}>{(e) => (
-          <div class="repo-error">
-            <span>{e().replace(/^the server refused deck\.fs\.mkdir: /, "")}{homeAlternative() ? `. Create it in your home folder instead, e.g. ${homeAlternative()}` : ""}</span>
-            <Show when={missing() && homeAlternative()}>{(alt) => (
-              <button class="abtn ok" disabled={busy()} onClick={() => { setQ(alt()); void createAndOpen(alt()); }}>CREATE {alt()} · OPEN</button>
-            )}</Show>
-          </div>
+          <div class="repo-error"><span>{e().replace(/^the server refused deck\.fs\.\w+: /, "")}</span></div>
         )}</Show>
         <div class="dlga"><span class="micro">↑↓ · Enter · Esc</span><span class="sp" /><button class="abtn" onClick={p.onClose}>CANCEL</button><button class="abtn ok" disabled={busy()} onClick={() => void go()}>{busy() ? "…" : "OPEN"}</button></div>
       </div>

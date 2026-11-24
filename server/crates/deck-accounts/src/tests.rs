@@ -354,28 +354,66 @@ fn a_second_sign_in_is_added_without_taking_over() {
 }
 
 #[test]
+fn typed_folders_stay_in_the_home() {
+    let home = temp_dir().join("home").join("me");
+    std::fs::create_dir_all(&home).unwrap();
+    let r = |s: &str| resolve_in_home(s, &home);
+    let want = home.join("repos");
+    for typed in [
+        "repos",
+        "/repos",
+        "~/repos",
+        " repos/ ",
+        "./repos",
+        "a/../repos",
+    ] {
+        assert_eq!(r(typed).unwrap(), want, "{typed}");
+    }
+    // Already under the home: as it is, never home/home/...
+    assert_eq!(r(&want.to_string_lossy()).unwrap(), want);
+    assert_eq!(
+        r(&home.join("x").join("y").to_string_lossy()).unwrap(),
+        home.join("x").join("y")
+    );
+    assert_eq!(r("~").unwrap(), home);
+    assert!(r("../other").is_err());
+    assert!(r("repos/../../x").is_err());
+    #[cfg(unix)]
+    {
+        let outside = temp_dir();
+        std::os::unix::fs::symlink(&outside, home.join("link")).unwrap();
+        assert!(r("link/x").is_err());
+    }
+}
+
+#[test]
 fn folders_are_checked_and_created() {
     let base = temp_dir();
-    let missing = base.join("a").join("b");
-    let state = folder_state(&missing.to_string_lossy()).unwrap();
-    assert_eq!(
-        (state["exists"].as_bool(), state["dir"].as_bool()),
-        (Some(false), Some(false))
-    );
-    let made = make_folder(&missing.to_string_lossy()).unwrap();
-    assert_eq!(
-        (made["exists"].as_bool(), made["dir"].as_bool()),
-        (Some(true), Some(true))
-    );
-    assert!(missing.is_dir());
-    let file = base.join("f.txt");
-    std::fs::write(&file, "x").unwrap();
-    let state = folder_state(&file.to_string_lossy()).unwrap();
-    assert_eq!(
-        (state["exists"].as_bool(), state["dir"].as_bool()),
-        (Some(true), Some(false))
-    );
-    assert!(make_folder("relative/path").is_err());
+    // On Windows paths are taken as they are; on Unix they land in HOME,
+    // which a test must not write to, so only the Windows behaviour is
+    // exercised end to end here (resolve_in_home covers Unix).
+    if cfg!(windows) {
+        let missing = base.join("a").join("b");
+        let state = folder_state(&missing.to_string_lossy()).unwrap();
+        assert_eq!(
+            (state["exists"].as_bool(), state["dir"].as_bool()),
+            (Some(false), Some(false))
+        );
+        let made = make_folder(&missing.to_string_lossy()).unwrap();
+        assert_eq!(
+            (made["exists"].as_bool(), made["dir"].as_bool()),
+            (Some(true), Some(true))
+        );
+        assert!(missing.is_dir());
+        let file = base.join("f.txt");
+        std::fs::write(&file, "x").unwrap();
+        let state = folder_state(&file.to_string_lossy()).unwrap();
+        assert_eq!(
+            (state["exists"].as_bool(), state["dir"].as_bool()),
+            (Some(true), Some(false))
+        );
+        assert!(make_folder("relative/path").is_err());
+    }
     assert!(folder_state("  ").is_err());
     assert_eq!(expand_home("/x"), PathBuf::from("/x"));
     assert_ne!(expand_home("~/x"), PathBuf::from("~/x"));
