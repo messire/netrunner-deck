@@ -197,6 +197,12 @@ pub mod proto {
     pub fn host_state(state: &str, detail: Option<&str>) -> Value {
         json!({ "type": "deck_host", "state": state, "detail": detail })
     }
+
+    /// `claude` started on this conversation: clients know the session id
+    /// (and can show its transcript) before `claude` says anything.
+    pub fn running(session_id: &str) -> Value {
+        json!({ "type": "deck_host", "state": "running", "detail": null, "session_id": session_id })
+    }
 }
 
 /// One operation a client asks the host to perform (the server forwards
@@ -216,6 +222,24 @@ pub enum Op {
         model: Option<Option<String>>,
         permission_mode: Option<String>,
     },
+    /// Open this existing conversation instead (archive restore): the host
+    /// stops its `claude` and starts it again with `--resume`.
+    Resume {
+        session_id: String,
+    },
+    /// Start `claude` again on the same conversation once it is idle (it
+    /// reads the account's credentials only when it starts; the server asks
+    /// for this after an account switch or a sign-in).
+    Restart,
+}
+
+/// A session id the host may pass to `claude --resume`: a uuid-like token.
+pub fn valid_session_id(id: &str) -> bool {
+    id.len() <= 128
+        && id.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 impl Op {
@@ -275,6 +299,14 @@ impl Op {
                     permission_mode,
                 })
             }
+            "resume" => {
+                let session_id = text("session_id").ok_or("session_id is required")?;
+                if !valid_session_id(&session_id) {
+                    return Err(format!("not a session id: {session_id}"));
+                }
+                Ok(Op::Resume { session_id })
+            }
+            "restart" => Ok(Op::Restart),
             other => Err(format!("unknown agent operation {other}")),
         }
     }
@@ -298,6 +330,8 @@ impl Op {
                 }
                 v
             }
+            Op::Resume { session_id } => json!({ "op": "resume", "session_id": session_id }),
+            Op::Restart => json!({ "op": "restart" }),
         }
         .to_string()
     }
@@ -360,6 +394,8 @@ impl Op {
                 }
                 lines
             }
+            // The host handles these itself; nothing goes to `claude`.
+            Op::Resume { .. } | Op::Restart => Vec::new(),
         })
     }
 }
@@ -564,6 +600,9 @@ impl Backlog {
                         == Some(INIT_REQUEST_ID) =>
                 {
                     Pin::Meta("initialize")
+                }
+                ("deck_host", _) if msg.get("state").and_then(Value::as_str) == Some("running") => {
+                    Pin::Meta("running")
                 }
                 _ => Pin::None,
             }

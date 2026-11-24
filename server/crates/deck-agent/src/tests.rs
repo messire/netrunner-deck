@@ -108,6 +108,27 @@ fn ops_round_trip_through_the_inbox() {
 }
 
 #[test]
+fn resume_and_restart_are_host_operations() {
+    let resume = Op::from_request("resume", &json!({"session_id":"5f0c-ab_9"})).unwrap();
+    assert_eq!(
+        resume,
+        Op::Resume {
+            session_id: "5f0c-ab_9".into()
+        }
+    );
+    let restart = Op::from_request("restart", &json!({})).unwrap();
+    for op in [resume, restart] {
+        assert_eq!(Op::from_line(&op.to_line()).unwrap(), op);
+        assert!(op.stdin_lines(1).unwrap().is_empty());
+    }
+    assert!(Op::from_request("resume", &json!({})).is_err());
+    assert!(Op::from_request("resume", &json!({"session_id":"a b"})).is_err());
+    assert!(Op::from_request("resume", &json!({"session_id":"--model"})).is_err());
+    assert!(!valid_session_id(""));
+    assert!(!valid_session_id("x;rm"));
+}
+
+#[test]
 fn tracker_follows_a_real_session() {
     let mut t = Tracker::default();
     let mut seen = Vec::new();
@@ -264,4 +285,17 @@ fn settings_are_confirmed_by_claude() {
     assert_eq!(t.permission_mode.as_deref(), Some("plan"));
     assert_eq!(t.model.as_deref(), Some("sonnet"));
     assert!(Op::Interrupt.settings_requests(1).is_empty());
+}
+
+#[test]
+fn the_running_note_names_the_session_and_stays_for_new_clients() {
+    let mut tracker = Tracker::default();
+    let mut backlog = Backlog::default();
+    backlog.push(1, &proto::running("s-1"));
+    tracker.observe(&proto::running("s-1"));
+    assert_eq!(tracker.session_id.as_deref(), Some("s-1"));
+    backlog.push(2, &json!({"type":"result","subtype":"success"}));
+    backlog.push(3, &proto::running("s-2"));
+    let kept: Vec<u64> = backlog.since(None).iter().map(|e| e.seq).collect();
+    assert_eq!(kept, vec![2, 3], "only the latest running note is pinned");
 }

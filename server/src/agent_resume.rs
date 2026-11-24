@@ -113,12 +113,35 @@ impl AgentSessionRef {
     }
 }
 
+/// deck-server's headless Claude (`deck-server agent`, reported by the host
+/// itself): its session id is kept like a native agent's, so the tree's
+/// `agent_session` names the Claude session and ARCHIVE can restore it.
+pub(crate) fn is_deck_agent_source(source: &str, agent: &str) -> bool {
+    source == "deck:agent" && agent == "deck-claude"
+}
+
+/// The arguments after `agent` for a deck-server pane restoring `argv`: the
+/// host's own `deck-server agent --resume ID`, or a plain `claude --resume
+/// ID` saved by an older server; anything else starts a new session.
+pub fn agent_pane_resume_args(argv: &[String]) -> Vec<String> {
+    match argv {
+        [exe, agent, rest @ ..] if exe == "deck-server" && agent == "agent" => rest.to_vec(),
+        [claude, flag, id] if claude == "claude" && flag == "--resume" && !id.starts_with('-') => {
+            vec![flag.clone(), id.clone()]
+        }
+        _ => Vec::new(),
+    }
+}
+
 pub fn session_ref_from_report(
     source: &str,
     agent: &str,
     agent_session_id: Option<String>,
     _agent_session_path: Option<String>,
 ) -> Option<AgentSessionRef> {
+    if is_deck_agent_source(source, agent) {
+        return agent_session_id.and_then(AgentSessionRef::id);
+    }
     if !is_official_agent_source(source, agent) {
         return None;
     }
@@ -181,7 +204,7 @@ pub fn session_ref_from_snapshot(
     kind: AgentSessionRefKind,
     value: &str,
 ) -> Option<PersistedAgentSession> {
-    if !is_official_agent_source(source, agent) {
+    if !is_official_agent_source(source, agent) && !is_deck_agent_source(source, agent) {
         return None;
     }
     let session_ref = match (agent, kind) {
@@ -197,6 +220,18 @@ pub fn session_ref_from_snapshot(
 }
 
 pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<AgentResumePlan> {
+    if is_deck_agent_source(source, agent) && session_ref.kind == AgentSessionRefKind::Id {
+        return Some(AgentResumePlan {
+            agent: agent.to_string(),
+            argv: vec![
+                "deck-server".into(),
+                "agent".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ],
+            dedupe_key: dedupe_key(source, agent, session_ref),
+        });
+    }
     if !is_official_agent_source(source, agent) {
         return None;
     }

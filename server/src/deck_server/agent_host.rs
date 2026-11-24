@@ -1,7 +1,8 @@
 //! `deck-server agent`: Claude Code without a terminal, in a deck-server pane.
 //!
-//! Deck types this into a new pane's shell instead of `claude` (and Herdr's
-//! restore types `deck-server agent --resume <id>` after a server restart).
+//! Every deck-server pane runs this program directly, with no shell (the
+//! server spawns its own executable as `agent`, see `pane.rs`
+//! `set_agent_pane_program`; restore after a restart passes `--resume <id>`).
 //! The host starts `claude -p` on the stream-json control protocol with
 //! pipes, not the pane's terminal, and relays it to the server
 //! (`src/api/agent.rs`): every output line goes up as a numbered event, and
@@ -109,6 +110,12 @@ struct Host {
     /// Model / mode changes sent to `claude`, by control request id, with
     /// the note to emit when it confirms them.
     settings: Mutex<HashMap<String, Value>>,
+    /// The running `claude`, so a resume or restart can stop it.
+    child: Mutex<Option<Child>>,
+    /// A restart was asked for while a turn ran: done at the next idle.
+    restart_pending: AtomicBool,
+    /// The current `claude` was stopped on purpose: start the next at once.
+    restarting: AtomicBool,
 }
 
 impl Host {
@@ -135,7 +142,23 @@ impl Host {
         drop(s);
         if let Some(status) = changed {
             let _ = self.reports.send(status);
+            if status == Status::Idle && self.restart_pending.swap(false, Ordering::Relaxed) {
+                self.stop_claude();
+            }
         }
+    }
+
+    /// Stops the running `claude`; the main loop starts the next one at once.
+    fn stop_claude(&self) {
+        let mut child = self.child.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(child) = child.as_mut() {
+            self.restarting.store(true, Ordering::Relaxed);
+            let _ = child.kill();
+        }
+    }
+
+    fn idle(&self) -> bool {
+        self.lock().tracker.status() == Status::Idle
     }
 
     fn write_stdin(&self, lines: &[String]) -> io::Result<()> {
@@ -151,6 +174,31 @@ impl Host {
     }
 
     fn apply(&self, op: Op) {
+        match &op {
+            Op::Resume { session_id } => {
+                *self
+                    .session_id
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = session_id.clone();
+                self.used.store(true, Ordering::Relaxed);
+                let _ = self.reports.send(Status::Idle);
+                self.emit(proto::host_state(
+                    "log",
+                    Some(&format!("resuming session {session_id}")),
+                ));
+                self.stop_claude();
+                return;
+            }
+            Op::Restart => {
+                if self.idle() {
+                    self.stop_claude();
+                } else {
+                    self.restart_pending.store(true, Ordering::Relaxed);
+                }
+                return;
+            }
+            _ => {}
+        }
         if let Op::Respond { request_id, .. } = &op {
             // Another client answered first.
             if !self
@@ -299,18 +347,23 @@ fn report_states(host: Arc<Host>, states: mpsc::Receiver<Status>) {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
+        let mut params = json!({
+            "pane_id": host.pane_id,
+            "source": deck_agent::SOURCE,
+            "agent": deck_agent::AGENT_LABEL,
+            "state": status.as_str(),
+            "seq": now_ns(),
+        });
+        // The session exists on disk only after its first turn: before
+        // that there is nothing to archive or resume.
+        if host.used.load(Ordering::Relaxed) {
+            params["agent_session_id"] = json!(session);
+            params["resume_argv"] = json!(["deck-server", "agent", "--resume", session]);
+        }
         let request = json!({
             "id": format!("deck-agent:report:{}", now_ns()),
             "method": "pane.report_agent",
-            "params": {
-                "pane_id": host.pane_id,
-                "source": deck_agent::SOURCE,
-                "agent": deck_agent::AGENT_LABEL,
-                "state": status.as_str(),
-                "seq": now_ns(),
-                "agent_session_id": session,
-                "resume_argv": ["deck-server", "agent", "--resume", session],
-            },
+            "params": params,
         });
         if let Ok(mut stream) = connect_local_stream(&host.socket) {
             if write_line(&mut stream, &request.to_string()).is_ok() {
@@ -360,7 +413,9 @@ fn run_claude(host: &Arc<Host>, options: &Options, session: proto::Session<'_>) 
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     *host.stdin.lock().unwrap_or_else(PoisonError::into_inner) = child.stdin.take();
-    host.emit(proto::host_state("running", None));
+    *host.child.lock().unwrap_or_else(PoisonError::into_inner) = Some(child);
+    let (proto::Session::New(id) | proto::Session::Resume(id)) = session;
+    host.emit(proto::running(id));
     let _ = host.write_stdin(&[proto::initialize()]);
 
     let errors = {
@@ -374,7 +429,7 @@ fn run_claude(host: &Arc<Host>, options: &Options, session: proto::Session<'_>) 
         })
     };
     for line in BufReader::new(stdout).lines() {
-        let line = line?;
+        let Ok(line) = line else { break };
         match serde_json::from_str::<Value>(&line) {
             Ok(msg) if msg.is_object() => {
                 let confirmed = deck_agent::control_success_id(&msg).and_then(|id| {
@@ -393,6 +448,14 @@ fn run_claude(host: &Arc<Host>, options: &Options, session: proto::Session<'_>) 
         }
     }
     *host.stdin.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    let child = host
+        .child
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    let Some(mut child) = child else {
+        return Ok(-1);
+    };
     let status = child.wait()?;
     let _ = errors.join();
     let code = status.code().unwrap_or(-1);
@@ -435,9 +498,13 @@ pub(crate) fn run(args: &[String]) -> i32 {
         session_id: Mutex::new(session_id.clone()),
         reports,
         settings: Mutex::new(HashMap::new()),
+        child: Mutex::new(None),
+        restart_pending: AtomicBool::new(false),
+        restarting: AtomicBool::new(false),
     });
     println!("Claude Code runs here without a terminal; Netrunner Deck shows this pane as a chat.");
     println!("session {session_id}");
+    let _ = session_id;
     for task in [keep_events_linked, keep_inbox_linked] {
         let host = Arc::clone(&host);
         std::thread::spawn(move || task(host));
@@ -452,6 +519,11 @@ pub(crate) fn run(args: &[String]) -> i32 {
     let mut pause = Duration::from_secs(1);
     loop {
         let started = Instant::now();
+        let session_id = host
+            .session_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let session = if host.used.load(Ordering::Relaxed) {
             proto::Session::Resume(&session_id)
         } else {
@@ -462,6 +534,10 @@ pub(crate) fn run(args: &[String]) -> i32 {
                 "exited",
                 Some(&format!("could not run claude: {err}")),
             ));
+        }
+        if host.restarting.swap(false, Ordering::Relaxed) {
+            pause = Duration::from_secs(1);
+            continue;
         }
         if started.elapsed() > Duration::from_secs(60) {
             pause = Duration::from_secs(1);

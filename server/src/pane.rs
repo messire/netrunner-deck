@@ -1987,6 +1987,9 @@ fn default_pane_shell() -> String {
 pub(crate) struct PaneShellConfig<'a> {
     pub(crate) default_shell: &'a str,
     pub(crate) mode: crate::config::ShellModeConfig,
+    /// Arguments after `agent` when panes run the headless agent
+    /// ([`set_agent_pane_program`]), e.g. `--resume ID` on restore.
+    pub(crate) agent_args: &'a [String],
 }
 
 impl<'a> PaneShellConfig<'a> {
@@ -1994,8 +1997,37 @@ impl<'a> PaneShellConfig<'a> {
         Self {
             default_shell,
             mode,
+            agent_args: &[],
         }
     }
+
+    pub(crate) fn with_agent_args(mut self, agent_args: &'a [String]) -> Self {
+        self.agent_args = agent_args;
+        self
+    }
+}
+
+/// deck-server: every pane runs `<this executable> agent` (Claude Code
+/// headless, Deck shows it as a chat) instead of a shell. Set once at
+/// startup, before any pane is spawned; the path is the running binary's
+/// own, so nothing depends on `PATH`.
+static AGENT_PANE_PROGRAM: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+pub(crate) fn set_agent_pane_program(exe: std::path::PathBuf) {
+    let _ = AGENT_PANE_PROGRAM.set(exe);
+}
+
+/// The program every pane runs instead of a shell, when there is one.
+pub(crate) fn agent_pane_program() -> Option<&'static std::path::Path> {
+    AGENT_PANE_PROGRAM.get().map(std::path::PathBuf::as_path)
+}
+
+/// The command line of an agent pane: `exe agent ARGS`.
+fn agent_pane_command_builder(exe: &Path, agent_args: &[String]) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(exe);
+    cmd.arg("agent");
+    cmd.args(agent_args);
+    cmd
 }
 
 /// Target platform for shell launch policy. Parameterized (instead of raw
@@ -2152,6 +2184,9 @@ fn pane_shell_command_builder_for_target(
 }
 
 fn pane_shell_command_builder(shell_config: PaneShellConfig<'_>) -> io::Result<CommandBuilder> {
+    if let Some(exe) = agent_pane_program() {
+        return Ok(agent_pane_command_builder(exe, shell_config.agent_args));
+    }
     pane_shell_command_builder_for_target(shell_config, ShellLaunchTarget::current())
 }
 
@@ -2159,7 +2194,8 @@ fn pane_shell_command_builder(shell_config: PaneShellConfig<'_>) -> io::Result<C
 /// Gates the prompt-based cwd reporting pipeline and the agent-exit shell
 /// respawn recovery.
 pub(crate) fn uses_windows_powershell_pane_shell(shell_config: PaneShellConfig<'_>) -> bool {
-    uses_windows_powershell_pane_shell_for_target(shell_config, ShellLaunchTarget::current())
+    agent_pane_program().is_none()
+        && uses_windows_powershell_pane_shell_for_target(shell_config, ShellLaunchTarget::current())
 }
 
 fn uses_windows_powershell_pane_shell_for_target(

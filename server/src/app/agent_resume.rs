@@ -238,6 +238,10 @@ impl App {
             return false;
         }
 
+        // deck-server: the pane runs the headless agent itself, resuming the
+        // session from its arguments; nothing is typed into a shell.
+        let agent_args = crate::pane::agent_pane_program()
+            .map(|_| crate::agent_resume::agent_pane_resume_args(&plan.argv));
         let Some(resume_command) = shell_command_from_argv(&plan.argv) else {
             tracing::warn!(
                 pane = pane_id.raw(),
@@ -271,7 +275,8 @@ impl App {
             self.state.pane_scrollback_limit_bytes,
             host_terminal_theme,
             self.state.host_terminal_appearance,
-            crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
+            crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode)
+                .with_agent_args(agent_args.as_deref().unwrap_or_default()),
             &launch_env,
             self.event_tx.clone(),
             self.render_notify.clone(),
@@ -297,7 +302,9 @@ impl App {
 
         let mut input = resume_command;
         input.push('\r');
-        if let Err(err) = runtime.try_send_bytes(Bytes::from(input)) {
+        if agent_args.is_some() {
+            // Started with its resume arguments above.
+        } else if let Err(err) = runtime.try_send_bytes(Bytes::from(input)) {
             tracing::warn!(
                 pane = pane_id.raw(),
                 terminal = %terminal_id,

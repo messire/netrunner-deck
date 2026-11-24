@@ -368,6 +368,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "deck-accounts"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "getrandom 0.3.4",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "deck-agent"
 version = "0.1.0"
 dependencies = [
@@ -385,6 +395,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "ctrlc",
+ "deck-accounts",
  "deck-agent",
  "futures-util",
  "ghostty-vt",

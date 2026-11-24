@@ -31,7 +31,10 @@
 //! * `deck.agent.send {pane_id, text, images?: [{media_type, data}]}`,
 //!   `deck.agent.respond {pane_id, request_id, response}`,
 //!   `deck.agent.interrupt {pane_id}`,
-//!   `deck.agent.set {pane_id, model?, permission_mode?}` → `{queued}`
+//!   `deck.agent.set {pane_id, model?, permission_mode?}`,
+//!   `deck.agent.resume {pane_id, session_id}` (open that conversation in
+//!   the pane instead: archive restore),
+//!   `deck.agent.restart {pane_id}` (start `claude` again once idle) → `{queued}`
 //!   (`queued: true` = the host is not connected yet; sent when it is).
 //!   `respond` to a request that is no longer open is `already_answered`.
 //! * `deck.agent.list` → `{agents: [{pane_id, epoch, connected, status,
@@ -195,12 +198,14 @@ pub(crate) fn handle(
                 running,
             ));
         }
-        ("send" | "respond" | "interrupt" | "set", Some(pane)) => {
+        ("send" | "respond" | "interrupt" | "set" | "resume" | "restart", Some(pane)) => {
             operation(&method, &pane, &params)
         }
-        ("host" | "inbox" | "subscribe" | "send" | "respond" | "interrupt" | "set", None) => {
-            missing("pane_id")
-        }
+        (
+            "host" | "inbox" | "subscribe" | "send" | "respond" | "interrupt" | "set" | "resume"
+            | "restart",
+            None,
+        ) => missing("pane_id"),
         (other, _) => Err(("unknown_method", format!("unknown method {PREFIX}{other}"))),
     };
     let line = reply_line(&id, result);
@@ -217,6 +222,24 @@ fn list() -> Value {
         .map(|(pane, a)| a.summary(pane))
         .collect();
     json!({ "agents": agents })
+}
+
+/// Asks every headless agent to start `claude` again once it is idle (the
+/// machine's account changed; `claude` reads its login when it starts).
+pub(crate) fn restart_all() {
+    let line = Op::Restart.to_line();
+    let mut reg = registry();
+    for agent in reg.values_mut().filter(|a| !a.epoch.is_empty()) {
+        if let Some((_, tx)) = &agent.inbox {
+            if tx.send(line.clone()).is_ok() {
+                continue;
+            }
+            agent.inbox = None;
+        }
+        if agent.queued.len() < MAX_QUEUED {
+            agent.queued.push_back(line.clone());
+        }
+    }
 }
 
 fn operation(method: &str, pane_id: &str, params: &Value) -> Reply {

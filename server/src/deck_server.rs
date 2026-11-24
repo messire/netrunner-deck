@@ -15,7 +15,8 @@
 //! * `deck-server --foreground [--session NAME]` runs it in this console
 //!   (debugging; this is also what the detached process runs);
 //! * `deck-server agent [--resume ID]` runs Claude Code headless in a pane
-//!   (Deck shows it as a chat, see `deck_server/agent_host.rs`);
+//!   (every pane of the server runs it instead of a shell; Deck shows it as a
+//!   chat, see `deck_server/agent_host.rs`);
 //! * `deck-server bridge` carries Deck's API connections over stdin/stdout
 //!   (Deck runs it through `ssh` to reach a server on this machine).
 
@@ -27,12 +28,12 @@ use std::io;
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
 
+#[path = "deck_server/agent_host.rs"]
+mod agent_host;
 mod agent_resume;
 mod agent_view_eval;
 mod api;
 mod app;
-#[path = "deck_server/agent_host.rs"]
-mod agent_host;
 #[path = "deck_server/bridge.rs"]
 mod bridge;
 mod build_info;
@@ -195,6 +196,15 @@ fn start_detached(session: Option<&str>) -> io::Result<()> {
     )))
 }
 
+/// Every pane of this server runs `<this executable> agent` (Claude Code
+/// headless, shown by Deck as a chat), never a shell.
+fn panes_run_agents() {
+    match std::env::current_exe() {
+        Ok(exe) => pane::set_agent_pane_program(exe),
+        Err(err) => tracing::warn!(%err, "no executable path: panes fall back to a shell"),
+    }
+}
+
 /// Background self-update of a running server (Unix only; Deck ships Windows').
 fn start_self_update() {
     #[cfg(unix)]
@@ -304,6 +314,7 @@ fn main() -> io::Result<()> {
         && raw.get(2).map(String::as_str) == Some("--handoff-import")
     {
         config::set_app_dir_name(APP_DIR_NAME);
+        panes_run_agents();
         start_self_update();
         return server::headless::run_server();
     }
@@ -344,6 +355,7 @@ fn main() -> io::Result<()> {
     let socket = api::socket_path();
     match action {
         Action::Foreground => {
+            panes_run_agents();
             start_self_update();
             server::headless::run_server()
         }

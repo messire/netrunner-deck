@@ -1,3 +1,4 @@
+mod accounts;
 mod agent;
 pub mod client;
 mod event_hub;
