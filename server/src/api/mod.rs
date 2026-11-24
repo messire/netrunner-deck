@@ -4,6 +4,7 @@ pub mod schema;
 mod server;
 mod status;
 mod subscriptions;
+mod transcript;
 mod wait;
 
 pub use event_hub::EventHub;

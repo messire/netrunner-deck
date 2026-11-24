@@ -8,6 +8,7 @@ import { ChatBuilder, backgroundTasks, fmtDuration, parseLine, turnFooters, type
 import { MODE_LABEL, cliMode, inputHint, menuOf, type CliMenu, type InputHint } from "../dialogue";
 import { IMAGE_PASTE_KEY } from "../keys";
 import { debounceTrailing } from "../events";
+import { serverOf } from "../servers";
 
 /**
  * Deck's own chat for a pane that runs Claude Code: the conversation is read
@@ -98,7 +99,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
     loading = (async () => {
       try {
         const first = offset === 0;
-        const chunk = await api.transcriptRead(p.sessionId, first ? undefined : offset, first ? TAIL_BYTES : undefined);
+        const chunk = await api.transcriptRead(p.sessionId, first ? undefined : offset, first ? TAIL_BYTES : undefined, serverOf(p.paneId));
         if (disposed || chunk.session_id !== p.sessionId) return;
         if (first && chunk.start > 0) setTruncated(true);
         if (chunk.end > offset) {
@@ -123,7 +124,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   });
   createEffect(on(() => p.sessionId, (id) => {
     offset = 0; dropBlobs(); builder = new ChatBuilder(); setChat(builder.state()); setTruncated(false); setError(null);
-    api.transcriptWatch(id).catch((e) => setError(String(e)));
+    api.transcriptWatch(id, serverOf(p.paneId)).catch((e) => setError(String(e)));
     void pull();
   }));
 

@@ -15,11 +15,13 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{mpsc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
+use crate::endpoint::{Endpoint, Stream};
 
 /// Upper bound for one request/reply exchange, including waiting for a
 /// connection slot. Applies on every platform: `std::fs::File` has no read
@@ -30,6 +32,9 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 /// Herdr's listener is an `interprocess` local socket; on Windows a client
 /// that connects while no pipe instance is free gets `ERROR_PIPE_BUSY`.
 const MAX_CONCURRENT_CALLS: usize = 2;
+
+/// The same for a server reached over SSH.
+const MAX_REMOTE_CALLS: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HerdrError {
@@ -95,66 +100,31 @@ pub fn config_root() -> PathBuf {
     PathBuf::from(".")
 }
 
-/// The address shown to the user and used to connect: on Windows the pipe
-/// name `\\.\pipe\<socket path>`, elsewhere the socket path.
-pub fn address_of(socket: &Path) -> String {
-    let display = socket.to_string_lossy();
-    if cfg!(windows) {
-        format!(r"\\.\pipe\{display}")
-    } else {
-        display.into_owned()
-    }
-}
-
-#[cfg(windows)]
-type Stream = std::fs::File;
-#[cfg(not(windows))]
-type Stream = std::os::unix::net::UnixStream;
-
-/// Socket-level read timeout for request/reply connections. Honoured on
-/// unix only: `std::fs::File` has no such knob on Windows, where
-/// `run_with_deadline` covers it.
+/// Socket-level read timeout for request/reply connections, where the
+/// stream has one (unix sockets, TCP to a tunnel); a Windows named pipe has
+/// none, `run_with_deadline` covers it there.
 const CALL_READ_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Connection for one request/reply exchange (see [`call`]).
-fn connect(socket: &Path) -> Result<Stream> {
-    connect_with(socket, Some(CALL_READ_TIMEOUT))
+fn connect(endpoint: &Endpoint) -> Result<Stream> {
+    connect_with(endpoint, Some(CALL_READ_TIMEOUT))
 }
 
-/// Connect to Herdr. `read_timeout` is applied only where the platform
-/// stream supports it (unix); `None` leaves reads unbounded, which the
-/// long-lived event stream needs — an idle subscription must not be torn
+/// Connect to the server. `None` leaves reads unbounded, which the
+/// long-lived event stream needs: an idle subscription must not be torn
 /// down just because nothing happened for a while.
-fn connect_with(path: &Path, read_timeout: Option<Duration>) -> Result<Stream> {
-    let display = path.to_string_lossy().into_owned();
-    #[cfg(windows)]
-    {
-        let _ = read_timeout;
-        let name = address_of(path);
-        let _ = display;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&name)
-            .map_err(|source| HerdrError::Connect {
-                path: name,
-                hint: connect_hint(source.kind()),
-                source,
-            })
-    }
-    #[cfg(not(windows))]
-    {
-        let stream = std::os::unix::net::UnixStream::connect(path).map_err(|source| {
-            HerdrError::Connect {
-                path: display,
-                hint: connect_hint(source.kind()),
-                source,
-            }
-        })?;
-        // `None` is the default (block forever); setting it is a no-op.
-        stream.set_read_timeout(read_timeout).ok();
-        Ok(stream)
-    }
+fn connect_with(endpoint: &Endpoint, read_timeout: Option<Duration>) -> Result<Stream> {
+    endpoint
+        .connect(read_timeout)
+        .map_err(|source| HerdrError::Connect {
+            path: endpoint.address(),
+            hint: if endpoint.is_remote() {
+                ""
+            } else {
+                connect_hint(source.kind())
+            },
+            source,
+        })
 }
 
 /// Why a connect failed, in words the user can act on. `PermissionDenied`
@@ -233,12 +203,21 @@ impl Drop for SlotGuard {
 /// Slots for request/reply connections, one set per server socket (a busy or
 /// hung server must not starve the others). `subscribe` does not use them.
 /// Leaked on purpose: one small struct per server address ever used.
-fn call_slots(socket: &Path) -> &'static Semaphore {
-    static SLOTS: Mutex<Option<HashMap<PathBuf, &'static Semaphore>>> = Mutex::new(None);
+fn call_slots(endpoint: &Endpoint) -> &'static Semaphore {
+    static SLOTS: Mutex<Option<HashMap<Endpoint, &'static Semaphore>>> = Mutex::new(None);
     let mut map = SLOTS.lock().unwrap_or_else(PoisonError::into_inner);
     map.get_or_insert_with(HashMap::new)
-        .entry(socket.to_path_buf())
-        .or_insert_with(|| Box::leak(Box::new(Semaphore::new(MAX_CONCURRENT_CALLS))))
+        .entry(endpoint.clone())
+        .or_insert_with(|| {
+            // A remote server has no pipe-instance limit; its round trips
+            // are long, so more of them may be in flight.
+            let cap = if endpoint.is_remote() {
+                MAX_REMOTE_CALLS
+            } else {
+                MAX_CONCURRENT_CALLS
+            };
+            Box::leak(Box::new(Semaphore::new(cap)))
+        })
 }
 
 /// Run `work` on a helper thread under a connection slot from `slots` and
@@ -292,30 +271,55 @@ where
 ///
 /// Blocking: safe to call from a Tauri thread-pool command but never from the
 /// main thread. Bounded by [`CALL_TIMEOUT`] and [`MAX_CONCURRENT_CALLS`].
-pub fn call(socket: &Path, method: &str, params: Value) -> Result<Value> {
-    call_within(socket, method, params, CALL_TIMEOUT)
+pub fn call(endpoint: &Endpoint, method: &str, params: Value) -> Result<Value> {
+    call_within(endpoint, method, params, CALL_TIMEOUT)
 }
 
 /// [`call`] with its own deadline (discovery pings use a short one).
-pub fn call_within(socket: &Path, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+pub fn call_within(
+    endpoint: &Endpoint,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value> {
     let owned_method = method.to_owned();
-    let owned_socket = socket.to_path_buf();
-    run_with_deadline(call_slots(socket), method, timeout, move || {
-        call_blocking(&owned_socket, &owned_method, params)
+    let owned = endpoint.clone();
+    run_with_deadline(call_slots(endpoint), method, timeout, move || {
+        call_blocking(&owned, &owned_method, params)
     })
 }
 
 /// The raw exchange: connect, write one request line, read one reply line.
-fn call_blocking(socket: &Path, method: &str, params: Value) -> Result<Value> {
-    let mut stream = connect(socket)?;
+fn call_blocking(endpoint: &Endpoint, method: &str, params: Value) -> Result<Value> {
+    let mut stream = connect(endpoint)?;
     let request = json!({ "id": next_id(), "method": method, "params": params });
     stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    if reader.read_line(&mut line)? == 0 {
+        return Err(closed_without_reply(endpoint));
+    }
     parse_reply(method, &line)
+}
+
+/// The stream ended before a reply line. Through an SSH tunnel this is how a
+/// missing remote server shows (ssh accepts the local connection, then the
+/// remote socket refuses the channel), so it reads as "not reachable".
+fn closed_without_reply(endpoint: &Endpoint) -> HerdrError {
+    HerdrError::Connect {
+        path: endpoint.address(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "connection closed without a reply",
+        ),
+        hint: if endpoint.is_remote() {
+            " — is the server running on that machine?"
+        } else {
+            ""
+        },
+    }
 }
 
 fn parse_reply(method: &str, line: &str) -> Result<Value> {
@@ -410,12 +414,12 @@ fn classify_line(line: &str) -> LineClass {
 /// and no socket read timeout (an idle stream is normal); the caller already
 /// runs it on a dedicated thread.
 pub fn subscribe(
-    socket: &Path,
+    endpoint: &Endpoint,
     types: &[&str],
     mut on_event: impl FnMut(Value) -> bool,
 ) -> Result<()> {
     const METHOD: &str = "events.subscribe";
-    let mut stream = connect_with(socket, None)?;
+    let mut stream = connect_with(endpoint, None)?;
     let subscriptions: Vec<Value> = types.iter().map(|t| json!({ "type": t })).collect();
     let request = json!({
         "id": next_id(),

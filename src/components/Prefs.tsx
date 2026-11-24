@@ -114,10 +114,10 @@ export default function Prefs(p: {
           <div class="add">
             <span class="micro">+ ADD</span>
             <input ref={addInput} value={address()} onInput={(e) => setAddress(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }}
-                   placeholder="full path to herdr.sock (or \\.\pipe\…)" aria-label="pipe or socket path" spellcheck={false} />
+                   placeholder="herdr.sock path, \\.\pipe\…, or user@host for SSH" aria-label="server address" spellcheck={false} />
             <button class="btn pri" disabled={!address().trim()} onClick={add}>CONNECT</button>
           </div>
-          <p class="micro">Found servers are only offered: nothing connects until you switch it on. Remote machines (SSH) will use the same row with another address.</p>
+          <p class="micro">Found servers are only offered: nothing connects until you switch it on. A remote machine is the same kind of row: type user@host (or ssh://user@host/path/herdr.sock) and Deck reaches it with your own SSH setup; the address stays in Deck's local preferences.</p>
         </div>
       </div>
     </div>

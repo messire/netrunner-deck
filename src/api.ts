@@ -275,12 +275,12 @@ export const api = {
   onHarness: (cb: (e: { key: string; written?: number; error?: string }) => void): Promise<UnlistenFn> =>
     listen<{ key: string; written?: number; error?: string }>("deck://harness", (e) => cb(e.payload)),
   /** `from`: continue after this byte offset; `tail`: only the last N bytes (initial load). */
-  transcriptRead: (sessionId: string, from?: number, tail?: number) =>
-    invoke<TranscriptChunk>("transcript_read", { sessionId, from: from ?? null, tail: tail ?? null }),
+  transcriptRead: (sessionId: string, from?: number, tail?: number, server?: string | null) =>
+    invoke<TranscriptChunk>("transcript_read", { server: srv(server), sessionId, from: from ?? null, tail: tail ?? null }),
   /** Transcript modified time (ms) per session id; sessions without a transcript are absent. */
-  transcriptMtimes: (sessionIds: string[]) => invoke<Record<string, number>>("transcript_mtimes", { sessionIds }),
+  transcriptMtimes: (sessionIds: string[], server?: string | null) => invoke<Record<string, number>>("transcript_mtimes", { server: srv(server), sessionIds }),
   /** Tell the poller which transcript to watch for growth (`null` = none). */
-  transcriptWatch: (sessionId: string | null) => invoke<void>("transcript_watch", { sessionId }),
+  transcriptWatch: (sessionId: string | null, server?: string | null) => invoke<void>("transcript_watch", { server: srv(server), sessionId }),
   onTranscript: (cb: (e: { session_id: string; len: number }) => void): Promise<UnlistenFn> =>
     listen<{ session_id: string; len: number }>("deck://transcript", (e) => cb(e.payload)),
   cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },

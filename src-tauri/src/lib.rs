@@ -1,4 +1,6 @@
 mod archive;
+mod bridge;
+mod endpoint;
 mod harness;
 mod herdr;
 mod quickhacks;
@@ -419,29 +421,39 @@ fn resolve_cswap() -> Option<PathBuf> {
 
 // ---- transcript (chat view source) -----------------------------------------
 
-/// Lines of a session transcript from a byte offset (or its last `tail` bytes).
+/// Lines of a session transcript from a byte offset (or its last `tail`
+/// bytes), from the machine of `server` (the pane's; null = the primary).
 #[tauri::command]
 async fn transcript_read(
+    app: AppHandle,
+    server: Option<String>,
     session_id: String,
     from: Option<u64>,
     tail: Option<u64>,
 ) -> Result<transcript::Chunk, String> {
-    blocking(move || transcript::read(&session_id, from, tail)).await
+    blocking(move || transcript::read_on(&app, server.as_deref(), &session_id, from, tail)).await
 }
 
-/// Last-modified time (ms since epoch) of each session's transcript; sessions
-/// without one are left out. Orders the session map by real recency.
+/// Last-modified time (ms since epoch) of each session's transcript on
+/// `server`; sessions without one are left out. Orders the session map by
+/// real recency.
 #[tauri::command]
 async fn transcript_mtimes(
+    app: AppHandle,
+    server: Option<String>,
     session_ids: Vec<String>,
 ) -> Result<std::collections::HashMap<String, u64>, String> {
-    blocking(move || Ok(transcript::mtimes(&session_ids))).await
+    blocking(move || transcript::mtimes_on(&app, server.as_deref(), &session_ids)).await
 }
 
 /// Watch one transcript for growth (`deck://transcript`); null stops.
 #[tauri::command]
-async fn transcript_watch(app: AppHandle, session_id: Option<String>) -> Result<(), String> {
-    transcript::watch(&app, session_id)
+async fn transcript_watch(
+    app: AppHandle,
+    server: Option<String>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    blocking(move || transcript::watch(&app, server, session_id)).await
 }
 
 // ---- external links ---------------------------------------------------------
@@ -1041,8 +1053,14 @@ pub fn run() {
             servers::server_add,
             servers::server_forget,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Netrunner Deck");
+        .build(tauri::generate_context!())
+        .expect("error while building Netrunner Deck")
+        .run(|_, event| {
+            // SSH tunnels are child processes: they must not outlive Deck.
+            if let tauri::RunEvent::Exit = event {
+                endpoint::close_all();
+            }
+        });
 }
 
 #[cfg(test)]

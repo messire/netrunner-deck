@@ -21,6 +21,8 @@ export interface ServerView {
   manual: boolean;
   found: boolean;
   new: boolean;
+  /** On another machine (an `ssh://` address). */
+  remote?: boolean;
   status: ServerStatus;
 }
 export interface ServersView { servers: ServerView[]; scanned: boolean }
@@ -109,6 +111,7 @@ export function hintOf(error: string | null | undefined): string | null {
     return "The server runs as administrator. Start it with --allow-unelevated-clients or set [server] allow_unelevated_clients.";
   if (/not reachable|os error 2|cannot find|no such file|is `herdr server` running/i.test(error))
     return "Nothing answers at this address. Start the server, or check the path.";
+  if (/^ssh |ssh bridge|publickey/i.test(error)) return "SSH could not reach the machine. Check that `ssh user@host` works without a password prompt (key or agent).";
   if (/timed out/i.test(error)) return "The server did not answer in time. It may be busy or hung.";
   return null;
 }

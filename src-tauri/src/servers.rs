@@ -12,7 +12,14 @@
 //!   tags every event with the server id (`herdr://event` gains `server`).
 //!
 //! Server ids are short and stable: `herdr`, `herdr-dev/decktest`,
-//! `deck-server/try`; an address outside the known dirs is its own id.
+//! `deck-server/try`, and on another machine the same prefixed with its SSH
+//! host (`dev@build-box.example.com/deck-server`); an address outside the known
+//! dirs is its own id.
+//!
+//! A remote server is the same kind of row with an `ssh://` address
+//! (`endpoint.rs`): the same runtime, event pump and calls. Typing just a
+//! host (`user@host`) lists the servers on it over SSH, connects the
+//! preferred one, and from then on that host is scanned like the local dirs.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::endpoint::{self, Endpoint, SshHost};
 use crate::herdr;
 use crate::runtime::{HerdrRuntime, SharedRuntime};
 
@@ -43,6 +51,8 @@ pub struct Place {
     pub id: String,
     pub app: Option<String>,
     pub session: Option<String>,
+    /// The SSH host (`user@host`) of a server on another machine.
+    pub host: Option<String>,
 }
 
 /// The id of the server at `socket`: `app` for `<root>/<app>/herdr.sock`,
@@ -52,6 +62,7 @@ pub fn place_of(root: &Path, socket: &Path) -> Place {
         id: socket.to_string_lossy().into_owned(),
         app: None,
         session: None,
+        host: None,
     };
     if socket.file_name().and_then(|n| n.to_str()) != Some("herdr.sock") {
         return other();
@@ -69,6 +80,7 @@ pub fn place_of(root: &Path, socket: &Path) -> Place {
                 id: app.clone(),
                 app: Some(app),
                 session: None,
+                host: None,
             };
         }
     }
@@ -84,10 +96,46 @@ pub fn place_of(root: &Path, socket: &Path) -> Place {
                 id: format!("{app}/{session}"),
                 app: Some(app),
                 session: Some(session),
+                host: None,
             };
         }
     }
     other()
+}
+
+/// The id of a server on another machine: the remote socket is placed like
+/// a local one (`<app>/herdr.sock`, `<app>/sessions/<s>/herdr.sock`, any
+/// config root), prefixed with the host; anything else is its address.
+pub fn place_of_remote(host: &SshHost, socket: &str) -> Place {
+    let key = host.key();
+    let parts: Vec<&str> = socket.trim_end_matches('/').rsplit('/').collect();
+    let known = |a: &str| APP_DIRS.contains(&a);
+    let (app, session) = match parts.as_slice() {
+        ["herdr.sock", app, ..] if known(app) => (Some(app.to_string()), None),
+        ["herdr.sock", session, "sessions", app, ..] if known(app) => {
+            (Some(app.to_string()), Some(session.to_string()))
+        }
+        _ => (None, None),
+    };
+    let id = match (&app, &session) {
+        (Some(a), Some(s)) => format!("{key}/{a}/{s}"),
+        (Some(a), None) => format!("{key}/{a}"),
+        _ => format!("ssh://{key}{socket}"),
+    };
+    Place {
+        id,
+        app,
+        session,
+        host: Some(key),
+    }
+}
+
+/// [`place_of`] or [`place_of_remote`], whichever the endpoint is.
+pub fn place_of_endpoint(root: &Path, endpoint: &Endpoint) -> Place {
+    match endpoint {
+        Endpoint::Local(p) => place_of(root, p),
+        Endpoint::Ssh { host, socket } => place_of_remote(host, socket),
+    }
 }
 
 /// `herdr` or `deck-server`, from the app dir; unknown places count as Herdr.
@@ -98,12 +146,17 @@ pub fn kind_of(place: &Place) -> &'static str {
     }
 }
 
-/// Default display name: `herdr`, `herdr-dev · decktest`, or the file path.
+/// Default display name: `herdr`, `herdr-dev · decktest`, the file path;
+/// a remote one adds `@ host` (`deck-server @ dev@build-box.example.com`).
 pub fn default_name(place: &Place) -> String {
-    match (&place.app, &place.session) {
+    let base = match (&place.app, &place.session) {
         (Some(app), Some(session)) => format!("{app} · {session}"),
         (Some(app), None) => app.clone(),
-        _ => place.id.clone(),
+        _ => return place.id.clone(),
+    };
+    match &place.host {
+        Some(h) => format!("{base} @ {h}"),
+        None => base,
     }
 }
 
@@ -130,15 +183,16 @@ pub fn candidates(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// A user-typed address as a socket path: `\\.\pipe\` is dropped on Windows,
-/// surrounding quotes and whitespace too.
-pub fn normalize_address(input: &str) -> Option<PathBuf> {
-    let t = input.trim().trim_matches('"').trim();
-    let t = t
-        .strip_prefix(r"\\.\pipe\")
-        .or_else(|| t.strip_prefix(r"\\?\pipe\"))
-        .unwrap_or(t);
-    (!t.is_empty()).then(|| PathBuf::from(t))
+/// Which of a host's servers a bare `user@host` connects: deck-server's root
+/// session, else Herdr's, else the first one listed.
+pub fn preferred_remote(sockets: &[String]) -> Option<&String> {
+    let ends = |app: &str| {
+        let tail = format!("/{app}/herdr.sock");
+        sockets.iter().find(move |s| s.ends_with(&tail))
+    };
+    ends("deck-server")
+        .or_else(|| ends("herdr"))
+        .or_else(|| sockets.first())
 }
 
 /// A ping failure that means "nothing is listening there": not offered.
@@ -159,13 +213,30 @@ pub struct Prefs {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavedServer {
     pub id: String,
-    pub socket: PathBuf,
+    /// The address (`endpoint.rs`): a local socket path as before, or an
+    /// `ssh://` URL. The field keeps its old name so older files load.
+    pub socket: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default)]
     pub connected: bool,
     #[serde(default)]
     pub manual: bool,
+}
+
+impl SavedServer {
+    pub fn endpoint(&self) -> Option<Endpoint> {
+        Endpoint::parse(&self.socket)
+    }
+}
+
+/// How an endpoint is written to `preferences.json`: a local server by its
+/// path (as Deck always did), a remote one by its URL.
+fn stored(endpoint: &Endpoint) -> String {
+    match endpoint {
+        Endpoint::Local(p) => p.to_string_lossy().into_owned(),
+        Endpoint::Ssh { .. } => endpoint.address(),
+    }
 }
 
 impl Prefs {
@@ -177,7 +248,7 @@ impl Prefs {
             servers: vec![SavedServer {
                 manual: place.app.is_none(),
                 id: place.id,
-                socket: default_socket.to_path_buf(),
+                socket: default_socket.to_string_lossy().into_owned(),
                 name: None,
                 connected: true,
             }],
@@ -212,18 +283,31 @@ impl Prefs {
         self.servers.iter().find(|s| s.id == id)
     }
 
-    fn entry(&mut self, id: &str, socket: &Path, manual: bool) -> &mut SavedServer {
+    fn entry(&mut self, id: &str, endpoint: &Endpoint, manual: bool) -> &mut SavedServer {
         if let Some(i) = self.servers.iter().position(|s| s.id == id) {
             return &mut self.servers[i];
         }
         self.servers.push(SavedServer {
             id: id.to_string(),
-            socket: socket.to_path_buf(),
+            socket: stored(endpoint),
             name: None,
             connected: false,
             manual,
         });
         self.servers.last_mut().expect("just pushed")
+    }
+
+    /// The SSH hosts of the saved servers: each is scanned for more servers.
+    pub fn remote_hosts(&self) -> Vec<SshHost> {
+        let mut hosts: Vec<SshHost> = Vec::new();
+        for s in &self.servers {
+            if let Some(Endpoint::Ssh { host, .. }) = s.endpoint() {
+                if !hosts.contains(&host) {
+                    hosts.push(host);
+                }
+            }
+        }
+        hosts
     }
 }
 
@@ -232,7 +316,8 @@ impl Prefs {
 /// Link state of a connected server, or the ping result of a found one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Status {
-    /// `connecting` | `online` | `offline`
+    /// `connecting` | `online` | `offline`; empty for a remote server that
+    /// was listed but not pinged (it is not connected).
     pub state: &'static str,
     pub version: Option<String>,
     pub protocol: Option<u64>,
@@ -268,13 +353,13 @@ impl Status {
 #[derive(Debug, Clone)]
 struct Found {
     place: Place,
-    socket: PathBuf,
+    endpoint: Endpoint,
     status: Status,
 }
 
 struct Live {
     rt: SharedRuntime,
-    socket: PathBuf,
+    endpoint: Endpoint,
     status: Status,
     stop: Arc<AtomicBool>,
 }
@@ -300,6 +385,8 @@ pub struct ServerView {
     pub found: bool,
     /// Found and never shown in preferences before (the gear's cyan dot).
     pub new: bool,
+    /// On another machine (SSH).
+    pub remote: bool,
     pub status: Status,
 }
 
@@ -337,7 +424,7 @@ impl Registry {
             let place = place_of(&root, &socket);
             if prefs.get(&place.id).is_none() {
                 prefs
-                    .entry(&place.id, &socket, place.app.is_none())
+                    .entry(&place.id, &Endpoint::Local(socket), place.app.is_none())
                     .connected = true;
                 let _ = prefs.save(&prefs_path);
             }
@@ -361,7 +448,12 @@ impl Registry {
         let reg = app.state::<Registry>();
         let saved: Vec<SavedServer> = reg.lock().prefs.servers.clone();
         for s in saved.iter().filter(|s| s.connected) {
-            reg.attach(app, &s.id, &s.socket);
+            match s.endpoint() {
+                Some(e) => reg.attach(app, &s.id, e),
+                None => {
+                    tracing::warn!(id = %s.id, address = %s.socket, "saved server has no usable address")
+                }
+            }
         }
         let app = app.clone();
         std::thread::Builder::new()
@@ -396,7 +488,7 @@ impl Registry {
             .find(|l| l.status.state == "online")
             .or_else(|| order().next())
             .map(|l| l.rt.clone())
-            .unwrap_or_else(|| Arc::new(HerdrRuntime::new(herdr::socket_path())))
+            .unwrap_or_else(|| Arc::new(HerdrRuntime::local(herdr::socket_path())))
     }
 
     /// The primary server's id, if any is connected.
@@ -414,11 +506,12 @@ impl Registry {
             .map(|s| s.id.clone())
     }
 
-    /// Config dir of a connected server (its `session.json`), for the archive.
+    /// Config dir of a connected server (its `session.json`), for the
+    /// archive. Only a server on this machine has one Deck can read.
     pub fn config_dir(&self, server: Option<&str>) -> Option<PathBuf> {
         let id = server.map(str::to_string).or_else(|| self.primary_id())?;
         let st = self.lock();
-        let socket = st.live.get(&id).map(|l| l.socket.clone())?;
+        let socket = st.live.get(&id)?.endpoint.local_path()?.to_path_buf();
         socket.parent().map(Path::to_path_buf)
     }
 
@@ -426,7 +519,10 @@ impl Registry {
         let st = self.lock();
         let mut rows: Vec<ServerView> = Vec::new();
         for s in &st.prefs.servers {
-            let place = place_of(&self.root, &s.socket);
+            let Some(endpoint) = s.endpoint() else {
+                continue;
+            };
+            let place = place_of_endpoint(&self.root, &endpoint);
             let found = st.found.iter().find(|f| f.place.id == s.id);
             let status = match st.live.get(&s.id) {
                 Some(l) => l.status.clone(),
@@ -440,11 +536,12 @@ impl Registry {
                 id: s.id.clone(),
                 name: s.name.clone().unwrap_or_else(|| default_name(&place)),
                 kind: kind_of(&place),
-                address: herdr::address_of(&s.socket),
+                address: endpoint.address(),
                 connected: s.connected,
                 manual: s.manual,
                 found: found.is_some(),
                 new: false,
+                remote: endpoint.is_remote(),
                 status,
             });
         }
@@ -456,11 +553,12 @@ impl Registry {
                 id: f.place.id.clone(),
                 name: default_name(&f.place),
                 kind: kind_of(&f.place),
-                address: herdr::address_of(&f.socket),
+                address: f.endpoint.address(),
                 connected: false,
                 manual: false,
                 found: true,
                 new: true,
+                remote: f.endpoint.is_remote(),
                 status: f.status.clone(),
             });
         }
@@ -470,50 +568,95 @@ impl Registry {
         }
     }
 
-    /// Ping every candidate (in parallel) and keep the ones that answer or
-    /// exist but refuse us (an elevated server). Emits [`EVENT`] on change.
+    /// Ping every local candidate and saved local address, and list the
+    /// servers on every saved SSH host (all in parallel); keep the ones that
+    /// answer, exist but refuse us (an elevated server), or are listed on a
+    /// host. A host that cannot be reached keeps what it had: its rows are
+    /// saved anyway. Emits [`EVENT`] on change.
     pub fn scan(&self, app: &AppHandle) {
         let mut sockets = candidates(&self.root);
+        let (saved, hosts) = {
+            let st = self.lock();
+            (st.prefs.servers.clone(), st.prefs.remote_hosts())
+        };
         // Manual and saved addresses are pinged too, so their rows have a status.
-        for s in self.lock().prefs.servers.iter() {
-            if !sockets.contains(&s.socket) {
-                sockets.push(s.socket.clone());
+        for s in &saved {
+            if let Some(Endpoint::Local(p)) = s.endpoint() {
+                if !sockets.contains(&p) {
+                    sockets.push(p);
+                }
             }
         }
-        let handles: Vec<_> = sockets
+        let pings: Vec<_> = sockets
             .into_iter()
             .map(|socket| {
                 std::thread::spawn(move || {
-                    let r = herdr::call_within(&socket, "ping", json!({}), PING_TIMEOUT);
-                    (socket, r)
+                    let e = Endpoint::Local(socket);
+                    let r = herdr::call_within(&e, "ping", json!({}), PING_TIMEOUT);
+                    (e, r)
                 })
             })
             .collect();
+        let listings: Vec<_> = hosts
+            .into_iter()
+            .map(|host| std::thread::spawn(move || (endpoint::list_remote(&host), host)))
+            .collect();
         let mut found = Vec::new();
-        for h in handles {
-            let Ok((socket, result)) = h.join() else {
+        for h in pings {
+            let Ok((endpoint, result)) = h.join() else {
                 continue;
             };
             if matches!(&result, Err(e) if is_absent(e)) {
                 continue;
             }
             found.push(Found {
-                place: place_of(&self.root, &socket),
+                place: place_of_endpoint(&self.root, &endpoint),
                 status: Status::from_ping(&result),
-                socket,
+                endpoint,
             });
+        }
+        let mut unreachable: Vec<SshHost> = Vec::new();
+        for h in listings {
+            let Ok((listing, host)) = h.join() else {
+                continue;
+            };
+            match listing {
+                Ok(remote) => {
+                    for socket in remote {
+                        let endpoint = Endpoint::Ssh {
+                            host: host.clone(),
+                            socket,
+                        };
+                        found.push(Found {
+                            place: place_of_endpoint(&self.root, &endpoint),
+                            status: Status::default(),
+                            endpoint,
+                        });
+                    }
+                }
+                Err(err) => {
+                    tracing::info!(host = %host.key(), %err, "remote scan failed");
+                    unreachable.push(host);
+                }
+            }
         }
         let changed = {
             let mut st = self.lock();
-            let before: Vec<(String, Status)> = st
+            // An unreachable host keeps the servers the last scan listed.
+            let kept: Vec<Found> = st
                 .found
                 .iter()
-                .map(|f| (f.place.id.clone(), f.status.clone()))
+                .filter(|f| matches!(&f.endpoint, Endpoint::Ssh { host, .. } if unreachable.contains(host)))
+                .cloned()
                 .collect();
-            let after: Vec<(String, Status)> = found
-                .iter()
-                .map(|f| (f.place.id.clone(), f.status.clone()))
-                .collect();
+            found.extend(kept);
+            let ids = |v: &[Found]| -> Vec<(String, Status)> {
+                v.iter()
+                    .map(|f| (f.place.id.clone(), f.status.clone()))
+                    .collect()
+            };
+            let before = ids(&st.found);
+            let after = ids(&found);
             st.found = found;
             let first = !st.scanned;
             st.scanned = true;
@@ -528,29 +671,29 @@ impl Registry {
         st.prefs.save(&self.prefs_path)
     }
 
-    fn socket_of(&self, st: &State, id: &str) -> Option<(PathBuf, bool)> {
+    fn endpoint_of(&self, st: &State, id: &str) -> Option<(Endpoint, bool)> {
         st.prefs
             .get(id)
-            .map(|s| (s.socket.clone(), s.manual))
+            .and_then(|s| Some((s.endpoint()?, s.manual)))
             .or_else(|| {
                 st.found
                     .iter()
                     .find(|f| f.place.id == id)
-                    .map(|f| (f.socket.clone(), false))
+                    .map(|f| (f.endpoint.clone(), false))
             })
     }
 
     pub fn connect(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let socket = {
+        let endpoint = {
             let mut st = self.lock();
-            let (socket, manual) = self
-                .socket_of(&st, id)
+            let (endpoint, manual) = self
+                .endpoint_of(&st, id)
                 .ok_or_else(|| format!("unknown server {id}"))?;
-            st.prefs.entry(id, &socket, manual).connected = true;
+            st.prefs.entry(id, &endpoint, manual).connected = true;
             self.save(&st)?;
-            socket
+            endpoint
         };
-        self.attach(app, id, &socket);
+        self.attach(app, id, endpoint);
         Ok(())
     }
 
@@ -559,39 +702,78 @@ impl Registry {
         if let Some(s) = st.prefs.servers.iter_mut().find(|s| s.id == id) {
             s.connected = false;
         }
-        if let Some(live) = st.live.remove(id) {
-            live.stop.store(true, Ordering::SeqCst);
-        }
+        let live = st.live.remove(id);
         self.save(&st)?;
         drop(st);
+        if let Some(live) = live {
+            live.stop.store(true, Ordering::SeqCst);
+            let host_in_use = match &live.endpoint {
+                Endpoint::Ssh { host, .. } => self
+                    .lock()
+                    .live
+                    .values()
+                    .any(|l| matches!(&l.endpoint, Endpoint::Ssh { host: h, .. } if h == host)),
+                Endpoint::Local(_) => false,
+            };
+            endpoint::close(&live.endpoint, host_in_use);
+        }
         let _ = app.emit(EVENT, "changed");
         Ok(())
     }
 
     pub fn rename(&self, app: &AppHandle, id: &str, name: &str) -> Result<(), String> {
         let mut st = self.lock();
-        let (socket, manual) = self
-            .socket_of(&st, id)
+        let (endpoint, manual) = self
+            .endpoint_of(&st, id)
             .ok_or_else(|| format!("unknown server {id}"))?;
         let name = name.trim();
-        st.prefs.entry(id, &socket, manual).name = (!name.is_empty()).then(|| name.to_string());
+        st.prefs.entry(id, &endpoint, manual).name = (!name.is_empty()).then(|| name.to_string());
         self.save(&st)?;
         drop(st);
         let _ = app.emit(EVENT, "changed");
         Ok(())
     }
 
-    /// Add an address by hand and connect it. Returns its id.
+    /// Add an address by hand and connect it. Returns its id. A bare SSH
+    /// host (`user@host`, `ssh://user@host`) is asked for its servers first
+    /// (blocking: one SSH session); the preferred one is connected and the
+    /// others are offered like found local ones.
     pub fn add(&self, app: &AppHandle, address: &str) -> Result<String, String> {
-        let socket = normalize_address(address).ok_or("empty address")?;
-        let place = place_of(&self.root, &socket);
+        let endpoint = match Endpoint::parse_host(address) {
+            Some(host) => {
+                let sockets = endpoint::list_remote(&host)?;
+                let socket = preferred_remote(&sockets).cloned().ok_or_else(|| {
+                    format!("no Herdr or deck-server is running on {}", host.key())
+                })?;
+                let mut st = self.lock();
+                for s in &sockets {
+                    let e = Endpoint::Ssh {
+                        host: host.clone(),
+                        socket: s.clone(),
+                    };
+                    let place = place_of_endpoint(&self.root, &e);
+                    if !st.found.iter().any(|f| f.place.id == place.id) {
+                        st.found.push(Found {
+                            place,
+                            endpoint: e,
+                            status: Status::default(),
+                        });
+                    }
+                }
+                Endpoint::Ssh { host, socket }
+            }
+            None => Endpoint::parse(address).ok_or("empty address")?,
+        };
+        let place = place_of_endpoint(&self.root, &endpoint);
         {
             let mut st = self.lock();
-            let manual = place.app.is_none();
-            st.prefs.entry(&place.id, &socket, manual).connected = true;
+            // A remote server stays in the list (its host is scanned through
+            // it) even when it is not in a known app dir.
+            let manual = place.app.is_none() || endpoint.is_remote();
+            st.prefs.entry(&place.id, &endpoint, manual).connected = true;
             self.save(&st)?;
         }
-        self.attach(app, &place.id, &socket);
+        self.attach(app, &place.id, endpoint);
         Ok(place.id)
     }
 
@@ -607,17 +789,17 @@ impl Registry {
     /// The user saw the found servers: they stop being "new".
     pub fn mark_seen(&self, app: &AppHandle) -> Result<(), String> {
         let mut st = self.lock();
-        let fresh: Vec<(String, PathBuf)> = st
+        let fresh: Vec<(String, Endpoint)> = st
             .found
             .iter()
             .filter(|f| st.prefs.get(&f.place.id).is_none())
-            .map(|f| (f.place.id.clone(), f.socket.clone()))
+            .map(|f| (f.place.id.clone(), f.endpoint.clone()))
             .collect();
         if fresh.is_empty() {
             return Ok(());
         }
-        for (id, socket) in fresh {
-            st.prefs.entry(&id, &socket, false);
+        for (id, endpoint) in fresh {
+            st.prefs.entry(&id, &endpoint, false);
         }
         self.save(&st)?;
         drop(st);
@@ -626,9 +808,9 @@ impl Registry {
     }
 
     /// Start the runtime and event pump of a server (no-op when running).
-    fn attach(&self, app: &AppHandle, id: &str, socket: &Path) {
+    fn attach(&self, app: &AppHandle, id: &str, endpoint: Endpoint) {
         let stop = Arc::new(AtomicBool::new(false));
-        let rt: SharedRuntime = Arc::new(HerdrRuntime::new(socket));
+        let rt: SharedRuntime = Arc::new(HerdrRuntime::new(endpoint.clone()));
         {
             let mut st = self.lock();
             if st.live.contains_key(id) {
@@ -638,7 +820,7 @@ impl Registry {
                 id.to_string(),
                 Live {
                     rt: rt.clone(),
-                    socket: socket.to_path_buf(),
+                    endpoint,
                     status: Status {
                         state: "connecting",
                         ..Status::default()
@@ -713,10 +895,14 @@ pub fn server_rename(app: AppHandle, id: String, name: String) -> Result<Servers
     Ok(view_of(&app))
 }
 
+/// Async: a bare SSH host is listed over SSH first, which takes a moment.
 #[tauri::command]
-pub fn server_add(app: AppHandle, address: String) -> Result<ServersView, String> {
-    app.state::<Registry>().add(&app, &address)?;
-    Ok(view_of(&app))
+pub async fn server_add(app: AppHandle, address: String) -> Result<ServersView, String> {
+    crate::blocking(move || {
+        app.state::<Registry>().add(&app, &address)?;
+        Ok(view_of(&app))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -801,16 +987,60 @@ mod tests {
     }
 
     #[test]
-    fn normalize_address_strips_pipe_prefix_and_quotes() {
+    fn remote_places_mirror_local_ones_under_the_host() {
+        let host = Endpoint::parse_host("dev@build-box.example.com").unwrap();
+        let p = place_of_remote(&host, "/home/dev/.config/deck-server/herdr.sock");
+        assert_eq!(p.id, "dev@build-box.example.com/deck-server");
+        assert_eq!(kind_of(&p), "deck-server");
+        assert_eq!(default_name(&p), "deck-server @ dev@build-box.example.com");
+        let q = place_of_remote(&host, "/srv/x/.config/herdr/sessions/try/herdr.sock");
+        assert_eq!(q.id, "dev@build-box.example.com/herdr/try");
+        assert_eq!(default_name(&q), "herdr · try @ dev@build-box.example.com");
+        let r = place_of_remote(&host, "/tmp/odd.sock");
+        assert_eq!(r.id, "ssh://dev@build-box.example.com/tmp/odd.sock");
+        assert_eq!(r.app, None);
+    }
+
+    #[test]
+    fn preferred_remote_is_deck_server_then_herdr() {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let all = v(&[
+            "/h/.config/herdr/herdr.sock",
+            "/h/.config/deck-server/sessions/a/herdr.sock",
+            "/h/.config/deck-server/herdr.sock",
+        ]);
         assert_eq!(
-            normalize_address(r#"  "\\.\pipe\C:\x\herdr.sock" "#),
-            Some(PathBuf::from(r"C:\x\herdr.sock"))
+            preferred_remote(&all).unwrap(),
+            "/h/.config/deck-server/herdr.sock"
         );
+        let herdr = v(&[
+            "/h/.config/deck-server/sessions/a/herdr.sock",
+            "/h/.config/herdr/herdr.sock",
+        ]);
         assert_eq!(
-            normalize_address("/tmp/h.sock"),
-            Some(PathBuf::from("/tmp/h.sock"))
+            preferred_remote(&herdr).unwrap(),
+            "/h/.config/herdr/herdr.sock"
         );
-        assert_eq!(normalize_address("   "), None);
+        let odd = v(&["/h/.config/deck-server/sessions/a/herdr.sock"]);
+        assert_eq!(preferred_remote(&odd).unwrap(), &odd[0]);
+        assert_eq!(preferred_remote(&[]), None);
+    }
+
+    #[test]
+    fn saved_servers_keep_local_paths_and_store_remote_urls() {
+        let mut p = Prefs::default();
+        let local = Endpoint::Local(PathBuf::from("/x/herdr.sock"));
+        let remote = Endpoint::parse("ssh://u@h/home/u/.config/deck-server/herdr.sock").unwrap();
+        p.entry("deck-server/try", &local, false);
+        p.entry("u@h/deck-server", &remote, true);
+        assert_eq!(p.servers[0].socket, "/x/herdr.sock");
+        assert_eq!(p.servers[0].endpoint(), Some(local));
+        assert_eq!(
+            p.servers[1].socket,
+            "ssh://u@h/home/u/.config/deck-server/herdr.sock"
+        );
+        assert_eq!(p.servers[1].endpoint(), Some(remote));
+        assert_eq!(p.remote_hosts(), vec![Endpoint::parse_host("u@h").unwrap()]);
     }
 
     #[test]
@@ -829,13 +1059,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(Prefs::load(&path), None);
         let mut p = Prefs::default();
-        p.entry("deck-server/try", Path::new("/x/herdr.sock"), false)
-            .connected = true;
-        p.entry("manual", Path::new("/y.sock"), true).name = Some("box".into());
+        p.entry(
+            "deck-server/try",
+            &Endpoint::Local("/x/herdr.sock".into()),
+            false,
+        )
+        .connected = true;
+        p.entry("manual", &Endpoint::Local("/y.sock".into()), true)
+            .name = Some("box".into());
         p.save(&path).unwrap();
         assert_eq!(Prefs::load(&path), Some(p.clone()));
         // Entry is idempotent: the same id is not added twice.
-        p.entry("manual", Path::new("/y.sock"), true);
+        p.entry("manual", &Endpoint::Local("/y.sock".into()), true);
         assert_eq!(p.servers.len(), 2);
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(Prefs::load(&path), Some(Prefs::default()));
@@ -875,12 +1110,17 @@ mod tests {
         let mut answered = 0;
         for socket in candidates(&root) {
             let place = place_of(&root, &socket);
-            let r = herdr::call_within(&socket, "ping", json!({}), PING_TIMEOUT);
+            let r = herdr::call_within(
+                &Endpoint::Local(socket.clone()),
+                "ping",
+                json!({}),
+                PING_TIMEOUT,
+            );
             if matches!(&r, Err(e) if is_absent(e)) {
                 continue;
             }
             let st = Status::from_ping(&r);
-            let ws = HerdrRuntime::new(&socket)
+            let ws = HerdrRuntime::local(&socket)
                 .workspace_list()
                 .map(|v| v["workspaces"].as_array().map_or(0, Vec::len));
             println!(

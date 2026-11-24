@@ -16,6 +16,7 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Manager};
 
+use crate::endpoint::Endpoint;
 use crate::herdr;
 
 pub use crate::herdr::Result;
@@ -70,6 +71,21 @@ pub trait Runtime: Send + Sync {
     /// Stream the named events to `on_event` until it returns `false`
     /// (then `Ok`) or the stream fails (`Err`, including a rejected name set).
     fn subscribe(&self, events: &[&str], on_event: &mut dyn FnMut(Value) -> bool) -> Result<()>;
+
+    /// deck-server's `deck.transcript.read` (`{session_id, from?, tail?}` →
+    /// a chunk of the Claude Code transcript on the server's machine). A
+    /// server without it (stock Herdr) answers with an API error.
+    fn transcript_read(
+        &self,
+        session_id: &str,
+        from: Option<u64>,
+        tail: Option<u64>,
+    ) -> Result<Value>;
+    /// deck-server's `deck.transcript.stat` (`{session_ids}` →
+    /// `{sessions: {id: {len, mtime_ms}}}`, absent ids have no transcript).
+    fn transcript_stat(&self, session_ids: &[String]) -> Result<Value>;
+    /// The server runs on another machine: its files are not Deck's files.
+    fn is_remote(&self) -> bool;
 }
 
 // ---- params ---------------------------------------------------------------------
@@ -262,23 +278,27 @@ pub fn dispatch(rt: &dyn Runtime, req: Request) -> Result<Value> {
 
 // ---- Herdr ----------------------------------------------------------------------
 
-/// The Herdr-protocol server (Herdr or deck-server) at `socket`. Holds only
-/// the address: connection slots, deadline and reply parsing stay in `herdr.rs`.
+/// The Herdr-protocol server (Herdr or deck-server) at `endpoint`, local or
+/// remote alike. Holds only the address: how a stream is opened lives in
+/// `endpoint.rs`, connection slots, deadline and reply parsing in `herdr.rs`.
 #[derive(Debug, Clone)]
 pub struct HerdrRuntime {
-    socket: PathBuf,
+    endpoint: Endpoint,
 }
 
 impl HerdrRuntime {
-    pub fn new(socket: impl Into<PathBuf>) -> Self {
-        Self {
-            socket: socket.into(),
-        }
+    pub fn new(endpoint: Endpoint) -> Self {
+        Self { endpoint }
+    }
+
+    /// A server on this machine at `socket`.
+    pub fn local(socket: impl Into<PathBuf>) -> Self {
+        Self::new(Endpoint::Local(socket.into()))
     }
 
     fn send(&self, req: Request) -> Result<Value> {
         let (method, params) = req.herdr();
-        herdr::call(&self.socket, method, params)
+        herdr::call(&self.endpoint, method, params)
     }
 }
 
@@ -546,7 +566,32 @@ impl Runtime for HerdrRuntime {
     }
 
     fn subscribe(&self, events: &[&str], on_event: &mut dyn FnMut(Value) -> bool) -> Result<()> {
-        herdr::subscribe(&self.socket, events, on_event)
+        herdr::subscribe(&self.endpoint, events, on_event)
+    }
+
+    fn transcript_read(
+        &self,
+        session_id: &str,
+        from: Option<u64>,
+        tail: Option<u64>,
+    ) -> Result<Value> {
+        herdr::call(
+            &self.endpoint,
+            "deck.transcript.read",
+            json!({ "session_id": session_id, "from": from, "tail": tail }),
+        )
+    }
+
+    fn transcript_stat(&self, session_ids: &[String]) -> Result<Value> {
+        herdr::call(
+            &self.endpoint,
+            "deck.transcript.stat",
+            json!({ "session_ids": session_ids }),
+        )
+    }
+
+    fn is_remote(&self) -> bool {
+        self.endpoint.is_remote()
     }
 }
 
@@ -803,6 +848,15 @@ mod tests {
         }
         fn subscribe(&self, _: &[&str], _: &mut dyn FnMut(Value) -> bool) -> Result<()> {
             Ok(())
+        }
+        fn transcript_read(&self, _: &str, _: Option<u64>, _: Option<u64>) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        fn transcript_stat(&self, _: &[String]) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        fn is_remote(&self) -> bool {
+            false
         }
     }
 

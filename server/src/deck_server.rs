@@ -13,7 +13,9 @@
 //! * `deck-server stop [--session NAME]` stops it (`server.stop`);
 //! * `deck-server status [--session NAME]` says whether it runs;
 //! * `deck-server --foreground [--session NAME]` runs it in this console
-//!   (debugging; this is also what the detached process runs).
+//!   (debugging; this is also what the detached process runs);
+//! * `deck-server bridge` carries Deck's API connections over stdin/stdout
+//!   (Deck runs it through `ssh` to reach a server on this machine).
 
 // Modules shared with `herdr` carry code (and re-exports) only its TUI/CLI uses.
 #![allow(dead_code, unused_imports)]
@@ -27,6 +29,8 @@ mod agent_resume;
 mod agent_view_eval;
 mod api;
 mod app;
+#[path = "deck_server/bridge.rs"]
+mod bridge;
 mod build_info;
 #[path = "deck_server/cli.rs"]
 mod cli;
@@ -95,7 +99,8 @@ const INHERITED_HERDR_VARS: &[&str] = &[
     HERDR_ENV_VAR,
 ];
 
-const USAGE: &str = "usage: deck-server [start|stop|status|update] [--session NAME] [--foreground]";
+const USAGE: &str =
+    "usage: deck-server [start|stop|status|update|bridge] [--session NAME] [--foreground]";
 
 /// What the command line asks for, after `--session` was taken out.
 #[derive(Debug, PartialEq, Eq)]
@@ -279,6 +284,10 @@ fn main() -> io::Result<()> {
     let raw: Vec<String> = std::env::args().collect();
     if let Some(code) = hook_call(&raw) {
         std::process::exit(code);
+    }
+    // `ssh host deck-server bridge` (Deck): no server state, only sockets.
+    if raw.get(1).map(String::as_str) == Some("bridge") && raw.len() == 2 {
+        return bridge::run();
     }
     // A live handoff (self-update) starts the new binary as
     // `deck-server server --handoff-import SOCKET TOKEN`, with the session in its env.

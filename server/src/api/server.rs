@@ -347,6 +347,11 @@ fn handle_connection_with_stop(
         return Ok(());
     }
 
+    // Deck's transcript methods are answered here, before Herdr's typed parse.
+    if let Some(response) = crate::api::transcript::handle(line) {
+        return write_text_line_allow_disconnect(&mut stream, &response);
+    }
+
     let request = match serde_json::from_str::<Request>(line) {
         Ok(request) => request,
         Err(request_error) => {

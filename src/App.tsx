@@ -530,7 +530,10 @@ export default function App() {
     const bySession = new Map<string, string>();
     for (const x of t.panes) { const sid = x.agent_session?.kind === "id" ? x.agent_session.value : null; if (sid) bySession.set(sid, x.pane_id); }
     if (!bySession.size) return;
-    api.transcriptMtimes([...bySession.keys()]).then((m) => {
+    // Each server is asked for its own sessions: the transcripts are on its machine.
+    const perServer = new Map<string, string[]>();
+    for (const [sid, pane] of bySession) { const s = serverOf(pane); perServer.set(s, [...(perServer.get(s) ?? []), sid]); }
+    for (const [server, sids] of perServer) api.transcriptMtimes(sids, server).then((m) => {
       // authoritative for Claude panes: set, not max (an old inflated value must not win)
       setActivity((prev) => {
         const n = new Map(prev);
