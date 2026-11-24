@@ -47,6 +47,16 @@ fn kind_name(err: &io::Error) -> &'static str {
 /// Where the bridge writes frames: stdout, shared by every channel's reader.
 type Out = Arc<Mutex<Box<dyn Write + Send>>>;
 
+/// The open channels. A channel leaves it when Deck closes it or when its
+/// socket closes (the server answered and hung up): either way its socket
+/// handles are released at once, so a long-lived bridge does not run out of
+/// file descriptors.
+type Channels = Arc<Mutex<HashMap<u64, Conn>>>;
+
+fn lock(channels: &Channels) -> std::sync::MutexGuard<'_, HashMap<u64, Conn>> {
+    channels.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 fn send(out: &Out, frame: &Value) {
     let mut w = out.lock().unwrap_or_else(PoisonError::into_inner);
     let _ = writeln!(w, "{frame}");
@@ -153,7 +163,7 @@ pub(crate) fn run() -> io::Result<()> {
 pub fn serve(mut input: impl BufRead, output: Box<dyn Write + Send>) -> io::Result<()> {
     let out: Out = Arc::new(Mutex::new(output));
     send(&out, &json!({ "bridge": 1 }));
-    let mut channels: HashMap<u64, Conn> = HashMap::new();
+    let channels: Channels = Arc::new(Mutex::new(HashMap::new()));
     let mut line = String::new();
     loop {
         line.clear();
@@ -162,11 +172,11 @@ pub fn serve(mut input: impl BufRead, output: Box<dyn Write + Send>) -> io::Resu
         }
         match parse(&line) {
             Frame::Open(c, path) => match connect(&path) {
-                Ok(mut conn) => {
+                Ok(conn) => {
+                    lock(&channels).insert(c, conn);
                     if !READ_AFTER_REQUEST {
-                        start_pump(c, &mut conn, &out);
+                        start_pump(c, &channels, &out);
                     }
-                    channels.insert(c, conn);
                 }
                 Err(err) => send(
                     &out,
@@ -174,31 +184,36 @@ pub fn serve(mut input: impl BufRead, output: Box<dyn Write + Send>) -> io::Resu
                 ),
             },
             Frame::Data(c, d) => {
-                let Some(conn) = channels.get_mut(&c) else {
-                    continue;
+                let written = {
+                    let mut map = lock(&channels);
+                    let Some(conn) = map.get_mut(&c) else {
+                        continue;
+                    };
+                    conn.writer
+                        .write_all(d.as_bytes())
+                        .and_then(|()| conn.writer.flush())
                 };
-                let written = conn
-                    .writer
-                    .write_all(d.as_bytes())
-                    .and_then(|()| conn.writer.flush());
                 if written.is_err() {
-                    if let Some(conn) = channels.remove(&c) {
+                    let gone = lock(&channels).remove(&c);
+                    if let Some(conn) = gone {
                         close(conn);
                     }
                     send(&out, &json!({ "c": c, "close": true }));
                 } else if d.ends_with('\n') {
-                    start_pump(c, conn, &out);
+                    start_pump(c, &channels, &out);
                 }
             }
             Frame::Close(c) => {
-                if let Some(conn) = channels.remove(&c) {
+                let gone = lock(&channels).remove(&c);
+                if let Some(conn) = gone {
                     close(conn);
                 }
             }
             Frame::Bad => {}
         }
     }
-    for (_, conn) in channels.drain() {
+    let all: Vec<Conn> = lock(&channels).drain().map(|(_, conn)| conn).collect();
+    for conn in all {
         close(conn);
     }
     Ok(())
@@ -210,11 +225,27 @@ fn close(conn: Conn) {
 }
 
 /// Start forwarding what the socket says (once per channel).
-fn start_pump(c: u64, conn: &mut Conn, out: &Out) {
-    if let Some(reader) = conn.reader.take() {
+fn start_pump(c: u64, channels: &Channels, out: &Out) {
+    let started = {
+        let mut map = lock(channels);
+        map.get_mut(&c)
+            .and_then(|conn| Some((conn.reader.take()?, conn.closed.clone())))
+    };
+    if let Some((reader, closed)) = started {
         let out = out.clone();
-        let closed = conn.closed.clone();
-        std::thread::spawn(move || pump(c, reader, &closed, &out));
+        let channels = channels.clone();
+        std::thread::spawn(move || {
+            pump(c, reader, &closed, &out);
+            // The socket is done: drop the channel's handles now (unless
+            // Deck closed it first and a new channel took the number).
+            let mut map = lock(&channels);
+            if map
+                .get(&c)
+                .is_some_and(|conn| Arc::ptr_eq(&conn.closed, &closed))
+            {
+                map.remove(&c);
+            }
+        });
     }
 }
 
@@ -265,6 +296,39 @@ mod tests {
         assert_eq!(kind_name(&e(io::ErrorKind::ConnectionRefused)), "refused");
         assert_eq!(kind_name(&e(io::ErrorKind::PermissionDenied)), "denied");
         assert_eq!(kind_name(&e(io::ErrorKind::TimedOut)), "other");
+    }
+
+    #[test]
+    fn a_channel_whose_socket_closed_is_forgotten() {
+        struct Sink;
+        impl Write for Sink {
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let out: Out = Arc::new(Mutex::new(Box::new(Sink)));
+        let channels: Channels = Arc::new(Mutex::new(HashMap::new()));
+        let conn = |reply: &[u8]| Conn {
+            writer: Box::new(Sink),
+            reader: Some(Box::new(io::Cursor::new(reply.to_vec()))),
+            closed: Arc::new(AtomicBool::new(false)),
+            shutdown: Box::new(|| {}),
+        };
+        for c in 0..50 {
+            lock(&channels).insert(c, conn(b"{\"result\":{}}\n"));
+            start_pump(c, &channels, &out);
+        }
+        let t0 = std::time::Instant::now();
+        while !lock(&channels).is_empty() && t0.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            lock(&channels).is_empty(),
+            "every answered channel is dropped"
+        );
     }
 
     #[test]

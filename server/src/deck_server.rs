@@ -293,7 +293,23 @@ fn hook_call(args: &[String]) -> Option<i32> {
     }
 }
 
+/// Raise the open-files limit to the hard limit (often 1024 soft): a
+/// bridge or server with many channels and agents must not run out.
+fn raise_open_files_limit() {
+    #[cfg(unix)]
+    // SAFETY: plain getrlimit/setrlimit on a local struct.
+    unsafe {
+        let mut limit: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 && limit.rlim_cur < limit.rlim_max
+        {
+            limit.rlim_cur = limit.rlim_max;
+            let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
+        }
+    }
+}
+
 fn main() -> io::Result<()> {
+    raise_open_files_limit();
     // Before the env is cleaned: a hook call targets the server in HERDR_SOCKET_PATH.
     let raw: Vec<String> = std::env::args().collect();
     if let Some(code) = hook_call(&raw) {
