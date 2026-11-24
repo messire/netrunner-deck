@@ -2,6 +2,12 @@
 
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
+## [Unreleased]
+- deck-server: every pane is a Claude chat from the start. The server spawns each pane (default space, new space, tab, split, opened repository or worktree, restore after a restart) as its own `deck-server agent`, with no shell and nothing typed; Deck's typing path for deck-server is gone. See docs/adr/0004-chat-only-panes-and-accounts.md.
+- ARCHIVE sees headless sessions: their Claude session id is in the tree (`agent_session`) and in the server's session snapshot; restore opens a tab and resumes the conversation in it (`deck.agent.resume`).
+- Accounts per machine: deck-server keeps its machine's Claude accounts (list with 5h/7d usage, switch, remove; claude-swap's model in Rust) as `deck.accounts.*`. ACCOUNTS, the account badge and F1 show the accounts of the server that owns the selected session; a stock Herdr says accounts are not managed there. Deck no longer runs `cswap`.
+- Sign in without a console: a chat on a machine with no Claude login shows a sign-in card; the server starts Claude's OAuth sign-in, Deck opens the link, you paste the code, the server keeps the account. ACCOUNTS' `+` adds another account the same way. After a switch or sign-in the machine's agents restart Claude when idle.
+
 ## [0.5.0] — 2026-11-24
 - SERVERS: + ADD opens a dialog (user, host, port) whose CHECK lists the machine's servers and pings each through its bridge; only the ones that answer are offered, with kind and version, to connect in one go. Non-default SSH ports work.
 - SERVERS: ✕ removes a machine with all its servers (disconnects them, closes its bridge, stops scanning it); manually added addresses can be removed too.

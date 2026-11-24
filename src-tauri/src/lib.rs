@@ -1,3 +1,4 @@
+mod accounts;
 mod agent;
 mod archive;
 mod bridge;
@@ -10,7 +11,7 @@ mod servers;
 mod transcript;
 mod uplink;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -22,7 +23,7 @@ use runtime::Request;
 // body is handed to `spawn_blocking` via `blocking()`. Per-call deadline and
 // connection slots live in `herdr::call` (R3), reached through `runtime`.
 
-/// Run a blocking Herdr/cswap call on tokio's blocking pool.
+/// Run a blocking Herdr call on tokio's blocking pool.
 pub(crate) async fn blocking<T, E>(
     work: impl FnOnce() -> Result<T, E> + Send + 'static,
 ) -> Result<T, E>
@@ -356,70 +357,6 @@ fn focus_request(target: &str, id: String) -> Result<Request, String> {
     }
 }
 
-/// Absolute path of the `cswap` executable, resolved once at startup (audit #18).
-/// `None` means neither `PATH` nor `~/.local/bin` had it; the commands report that.
-pub struct CswapPath(pub Option<PathBuf>);
-
-const CSWAP_NOT_FOUND: &str = "cswap not found (searched PATH and ~/.local/bin)";
-
-/// File names to try for `cswap` in each directory, in priority order.
-fn cswap_candidates() -> Vec<String> {
-    #[cfg(windows)]
-    {
-        windows_candidates(std::env::var("PATHEXT").ok().as_deref())
-    }
-    #[cfg(not(windows))]
-    {
-        vec!["cswap".to_string()]
-    }
-}
-
-/// Windows names: every `PATHEXT` extension in order (when set), then
-/// `cswap.exe`, `cswap.cmd`, `cswap` for anything the variable did not cover.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn windows_candidates(pathext: Option<&str>) -> Vec<String> {
-    let mut names: Vec<String> = pathext
-        .map(|exts| {
-            exts.split(';')
-                .filter(|ext| !ext.is_empty())
-                .map(|ext| format!("cswap{}", ext.to_ascii_lowercase()))
-                .collect()
-        })
-        .unwrap_or_default();
-    for fixed in ["cswap.exe", "cswap.cmd", "cswap"] {
-        if !names.iter().any(|n| n == fixed) {
-            names.push(fixed.to_string());
-        }
-    }
-    names
-}
-
-/// `~` for the fallback lookup: `USERPROFILE` on Windows, `HOME` elsewhere.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let key = "USERPROFILE";
-    #[cfg(not(windows))]
-    let key = "HOME";
-    std::env::var_os(key)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-}
-
-/// Search `PATH` entries, then `~/.local/bin`, for a `cswap` file.
-fn resolve_cswap() -> Option<PathBuf> {
-    let names = cswap_candidates();
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).collect())
-        .unwrap_or_default();
-    if let Some(home) = home_dir() {
-        dirs.push(home.join(".local").join("bin"));
-    }
-    dirs.into_iter()
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
-        .find(|candidate| candidate.is_file())
-}
-
 // ---- transcript (chat view source) -----------------------------------------
 
 /// Lines of a session transcript from a byte offset (or its last `tail`
@@ -459,7 +396,7 @@ async fn transcript_watch(
 
 // ---- headless Claude sessions (deck-server) ---------------------------------
 
-/// `deck.agent.<method>` (send, respond, interrupt, set, list) on `server`.
+/// `deck.agent.<method>` (send, respond, interrupt, set, resume, restart, list) on `server`.
 #[tauri::command]
 async fn agent_call(
     app: AppHandle,
@@ -729,90 +666,17 @@ async fn archive_summarize(app: AppHandle, id: String) -> Result<(), String> {
     archive::resummarize(&app, &id)
 }
 
-/// `cswap list --json`, as the accounts section needs it.
+/// `deck.accounts.<method>` on `server`: the Claude Code accounts of that
+/// server's machine (list, switch, remove, login.start, login.finish).
+/// A stock Herdr has none: `{managed: false}`.
 #[tauri::command]
-async fn cswap_list(cswap: tauri::State<'_, CswapPath>) -> Result<Value, String> {
-    // State is borrowed from the app; copy the path out before leaving the thread.
-    let program = cswap.0.clone().ok_or_else(|| CSWAP_NOT_FOUND.to_string())?;
-    blocking(move || run_json(&program, &["list", "--json"])).await
-}
-
-#[tauri::command]
-async fn cswap_switch(cswap: tauri::State<'_, CswapPath>, number: u64) -> Result<Value, String> {
-    let program = cswap.0.clone().ok_or_else(|| CSWAP_NOT_FOUND.to_string())?;
-    blocking(move || run_json(&program, &["switch", &number.to_string(), "--json"])).await
-}
-
-/// Run `program args` and parse the JSON object it prints to stdout.
-///
-/// A non-zero exit is an error carrying trimmed stderr; the JSON is taken from
-/// the first line that starts with `{`, so warnings printed before it (even
-/// ones containing a brace) do not confuse the parser.
-fn run_json(program: &Path, args: &[&str]) -> Result<Value, String> {
-    let name = program
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| program.display().to_string());
-    let mut command = std::process::Command::new(program);
-    command.args(args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = command
-        .output()
-        .map_err(|e| format!("{name} ({}): {e}", program.display()))?;
-    if !output.status.success() {
-        let code = output
-            .status
-            .code()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "signal".to_string());
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "{name} exited with {code}: {}",
-            truncate_chars(stderr.trim(), 300)
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_json_stdout(&stdout).map_err(|e| format!("{name}: {e}"))
-}
-
-/// Parse the JSON object from a process's stdout: the first line starting
-/// with `{` (after trimming leading whitespace) through the end of the text.
-fn parse_json_stdout(stdout: &str) -> Result<Value, String> {
-    let mut offset = 0usize;
-    let mut start = None;
-    for line in stdout.split_inclusive('\n') {
-        if line.trim_start().starts_with('{') {
-            start = Some(offset);
-            break;
-        }
-        offset += line.len();
-    }
-    let Some(start) = start else {
-        return Err(format!(
-            "no json object in output: {:?}",
-            truncate_chars(stdout.trim(), 200)
-        ));
-    };
-    serde_json::from_str(stdout[start..].trim_start()).map_err(|e| {
-        format!(
-            "bad json: {e}; output starts with {:?}",
-            truncate_chars(stdout.trim(), 200)
-        )
-    })
-}
-
-/// First `max` chars of `text` (char-safe), with `...` when cut.
-fn truncate_chars(text: &str, max: usize) -> String {
-    let mut chars = text.char_indices();
-    match chars.nth(max) {
-        Some((idx, _)) => format!("{}...", &text[..idx]),
-        None => text.to_string(),
-    }
+async fn accounts_call(
+    app: AppHandle,
+    server: Option<String>,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
+    blocking(move || accounts::call(&app, server.as_deref(), &method, params)).await
 }
 
 /// Forward Herdr events to the webview as `herdr://event` until the window dies.
@@ -995,14 +859,12 @@ fn window_state_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 }
 
 pub fn run() {
-    let cswap = resolve_cswap();
     tauri::Builder::default()
         // Window size/position survive restarts (UI-only state, roadmap M4).
         .plugin(window_state_plugin())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .manage(CswapPath(cswap))
         .manage(PendingUpdate(std::sync::Mutex::new(None)))
         .setup(|app| {
             init_tracing(app.handle());
@@ -1016,12 +878,6 @@ pub fn run() {
             app.manage(quickhacks::Store::open(&data_dir));
             app.manage(uplink::Store::open(&data_dir));
             transcript::start_poller(app.handle().clone());
-            match &app.state::<CswapPath>().0 {
-                Some(path) => tracing::info!(path = %path.display(), "cswap resolved"),
-                None => {
-                    tracing::info!("cswap not found in PATH or ~/.local/bin; accounts disabled")
-                }
-            }
             servers::Registry::start(app.handle());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("Netrunner Deck");
@@ -1042,8 +898,7 @@ pub fn run() {
             clipboard_write_text,
             update_check,
             update_install,
-            cswap_list,
-            cswap_switch,
+            accounts_call,
             archive_list,
             archive_close,
             archive_restore,
@@ -1106,55 +961,6 @@ mod tests {
         options: Option<&Value>,
     ) -> Result<(&'static str, Value), String> {
         action_request(action, id, options).map(|r| r.herdr())
-    }
-
-    #[test]
-    fn parse_json_stdout_accepts_plain_object() {
-        let value = parse_json_stdout("{\"accounts\": []}\n").unwrap();
-        assert_eq!(value, json!({ "accounts": [] }));
-    }
-
-    #[test]
-    fn parse_json_stdout_skips_warning_line_before_json() {
-        let out = "warning: config is stale\n{\"ok\": true}\n";
-        assert_eq!(parse_json_stdout(out).unwrap(), json!({ "ok": true }));
-    }
-
-    #[test]
-    fn parse_json_stdout_ignores_brace_inside_warning() {
-        // The old `find('{')` would have started here and failed on `profile}`.
-        let out = "warning: missing key {profile} in config\n  {\"ok\": 1}\n";
-        assert_eq!(parse_json_stdout(out).unwrap(), json!({ "ok": 1 }));
-    }
-
-    #[test]
-    fn parse_json_stdout_handles_crlf_and_multiline_json() {
-        let out = "note\r\n{\r\n  \"a\": [1, 2]\r\n}\r\n";
-        assert_eq!(parse_json_stdout(out).unwrap(), json!({ "a": [1, 2] }));
-    }
-
-    #[test]
-    fn parse_json_stdout_rejects_empty_output() {
-        let err = parse_json_stdout("").unwrap_err();
-        assert!(err.starts_with("no json object in output"), "got {err}");
-        let err = parse_json_stdout("just text\n").unwrap_err();
-        assert!(err.contains("just text"), "got {err}");
-    }
-
-    #[test]
-    fn parse_json_stdout_reports_bad_json_with_prefix() {
-        let err = parse_json_stdout("{not json").unwrap_err();
-        assert!(err.starts_with("bad json:"), "got {err}");
-        assert!(err.contains("{not json"), "got {err}");
-    }
-
-    #[test]
-    fn truncate_chars_is_char_safe() {
-        assert_eq!(truncate_chars("abc", 5), "abc");
-        assert_eq!(truncate_chars("abcdef", 3), "abc...");
-        assert_eq!(truncate_chars("ééé", 2), "éé...");
-        let long = "x".repeat(500);
-        assert_eq!(truncate_chars(&long, 300).chars().count(), 303);
     }
 
     #[test]
@@ -1295,29 +1101,5 @@ mod tests {
         assert_eq!(err, "unknown focus target: window");
         assert!(focus_request("", "x".into()).is_err());
         assert!(focus_request("Pane", "x".into()).is_err());
-    }
-
-    #[test]
-    fn windows_candidates_follow_pathext_then_fixed_list() {
-        assert_eq!(
-            windows_candidates(None),
-            vec!["cswap.exe", "cswap.cmd", "cswap"]
-        );
-        assert_eq!(
-            windows_candidates(Some(".COM;.EXE;.BAT;.CMD")),
-            vec!["cswap.com", "cswap.exe", "cswap.bat", "cswap.cmd", "cswap"]
-        );
-        assert_eq!(
-            windows_candidates(Some("")),
-            vec!["cswap.exe", "cswap.cmd", "cswap"]
-        );
-    }
-
-    #[test]
-    fn cswap_candidates_always_include_bare_name() {
-        let names = cswap_candidates();
-        assert!(names.iter().any(|n| n == "cswap"), "got {names:?}");
-        #[cfg(not(windows))]
-        assert_eq!(names, vec!["cswap".to_string()]);
     }
 }

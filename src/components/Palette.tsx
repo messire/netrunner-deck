@@ -13,7 +13,7 @@ export interface PaletteItem {
 /**
  * Command palette (Ctrl+K) and account picker (F1): a filter box over a list.
  * Type to filter, ↑/↓ to move, Enter to run, Esc to close; a digit alone picks
- * that row when `digits` is on (accounts are numbered like `cswap` shows them).
+ * that row when `digits` is on (accounts are numbered as the server lists them).
  */
 export default function Palette(p: { title: string; items: PaletteItem[]; digits?: boolean; onClose: () => void }) {
   let input!: HTMLInputElement;

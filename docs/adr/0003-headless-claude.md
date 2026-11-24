@@ -1,6 +1,9 @@
 # ADR 0003: Claude Code runs headless; Deck shows only the chat
 
-Status: accepted, 2026-11-24 (implemented: server and Deck)
+Status: accepted, 2026-11-24 (implemented: server and Deck). Amended by
+[ADR 0004](0004-chat-only-panes-and-accounts.md): every deck-server pane
+now starts as the host directly (no shell, nothing typed), and sign-in and
+accounts are the server's.
 
 ## Context
 
@@ -25,8 +28,9 @@ Claude Code runs without a terminal, on the stream-json control protocol
 
 ### Host in the pane
 
-`deck-server agent [--resume ID] [--model M] [--permission-mode M]` runs in
-the pane's shell, in place of `claude` (`server/src/deck_server/agent_host.rs`).
+`deck-server agent [--resume ID] [--model M] [--permission-mode M]` is what
+every deck-server pane runs (ADR 0004; first it was typed into the pane's
+shell) (`server/src/deck_server/agent_host.rs`).
 It starts `claude` with pipes and relays it:
 
 * every output line goes to the server as a numbered event
@@ -44,7 +48,7 @@ The host reports the pane as agent `deck-claude` under the hook source
 `deck:agent` with state idle / working / blocked read from the stream and
 `resume_argv = deck-server agent --resume <id>`. So the tree, the sidebar
 status and Herdr's restore after a server restart work unchanged: restore
-types the resume command into the new pane's shell. Herdr's own Claude
+starts the new pane as `agent --resume <id>` (ADR 0004). Herdr's own Claude
 hooks are switched off for this `claude` (no `HERDR_ENV`), so they do not
 claim the pane. The server puts its own directory first on every pane's
 `PATH`, so `deck-server` is a bare command there.
@@ -96,6 +100,4 @@ dropped: the transcript has the full history.
   its tests pin what the host relies on.
 * A stock Herdr has no host: there Deck keeps today's terminal + transcript
   view.
-* Login on a fresh machine is still to be designed (the server reports
-  that sign-in is needed; Deck shows a sign-in card), together with the
-  accounts module.
+* Login on a fresh machine and the accounts of each machine: ADR 0004.

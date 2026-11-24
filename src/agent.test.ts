@@ -130,3 +130,22 @@ describe("answers and labels", () => {
     expect(isHeadlessAgent("claude")).toBe(false);
   });
 });
+
+describe("sign-in needed", () => {
+  const init = (tokenSource: string) => ({ type: "control_response", response: { subtype: "success", request_id: "deck-init", response: { account: { apiProvider: "firstParty", tokenSource } } } });
+  it("follows Claude Code's own verdict", () => {
+    let a = applyMsg(emptyAgent("e"), init("none"));
+    expect(a.authRequired).toBe(true);
+    a = applyMsg(a, { type: "result", subtype: "success", is_error: true, result: "Authentication required · Sign in again to continue" });
+    expect(a.authRequired).toBe(true);
+    a = applyMsg(applyMsg(emptyAgent("e"), init("claude.ai")), { type: "assistant", error: "authentication_failed", message: { content: [] } });
+    expect(a.authRequired).toBe(true);
+    a = applyMsg(a, { type: "result", subtype: "success", is_error: false, result: "hi" });
+    expect(a.authRequired).toBe(false);
+    expect(applyMsg(emptyAgent("e"), init("claude.ai")).authRequired).toBe(false);
+  });
+  it("the host's running note names the session", () => {
+    const a = applyMsg(emptyAgent("e"), { type: "deck_host", state: "running", detail: null, session_id: "s-9" });
+    expect([a.sessionId, a.host.state]).toEqual(["s-9", "running"]);
+  });
+});

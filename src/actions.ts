@@ -1,4 +1,4 @@
-import type { Agent, CswapAccount, Tree } from "./api";
+import type { Agent, Account, Tree } from "./api";
 
 /**
  * M3: global hotkeys and the command palette, as pure functions so they can be
@@ -48,7 +48,7 @@ export interface Command {
 }
 
 /** Palette entries for the current tree and accounts; order: context actions, agents, accounts. */
-export function commands(tree: Tree | undefined, accounts: CswapAccount[], currentPane: string | null): Command[] {
+export function commands(tree: Tree | undefined, accounts: Account[], currentPane: string | null): Command[] {
   const out: Command[] = [];
   const pane = tree?.panes.find((p) => p.pane_id === currentPane);
   const ws = pane && tree?.workspaces.find((w) => w.workspace_id === pane.workspace_id);
@@ -63,7 +63,7 @@ export function commands(tree: Tree | undefined, accounts: CswapAccount[], curre
   out.push({ id: "view.harness", label: "OPEN HARNESS", hint: "Claude Code config per repository", keys: "harness config claude.md skills agents", do: { kind: "view", view: "harness" } });
   out.push({ id: "view.uplink", label: "OPEN UPLINK", hint: "what git pull brought in", keys: "uplink pull updates git", do: { kind: "view", view: "uplink" } });
   out.push({ id: "view.archive", label: "OPEN ARCHIVE", hint: "cold storage · restore / delete", keys: "history archive sessions", do: { kind: "view", view: "archive" } });
-  out.push({ id: "accounts.refresh", label: "REFRESH ACCOUNTS", hint: "cswap list", do: { kind: "refresh" } });
+  out.push({ id: "accounts.refresh", label: "REFRESH ACCOUNTS", hint: "accounts of the server", do: { kind: "refresh" } });
   for (const a of tree?.agents ?? []) {
     out.push({
       id: `agent:${a.pane_id}`,
@@ -77,7 +77,7 @@ export function commands(tree: Tree | undefined, accounts: CswapAccount[], curre
     out.push({
       id: `account:${acc.number}`,
       label: `${acc.active ? "◆" : "◇"} ACCOUNT ${acc.alias ?? acc.email}`,
-      hint: acc.active ? "ACTIVE" : "cswap switch",
+      hint: acc.active ? "ACTIVE" : "switch the server's account",
       keys: `${acc.email} account switch`,
       do: { kind: "switch", account: acc.number },
     });

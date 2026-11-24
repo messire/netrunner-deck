@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
-import { api, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type CswapList, type Tab, type Pane, type Workspace, type CswapAccount, type TreeAction, type ActionOptions, zoneOf, usageOf, accountLabel } from "./api";
+import { api, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type AccountList, type Tab, type Pane, type Workspace, type Account, type TreeAction, type ActionOptions, UNMANAGED, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SidebarSection, type SwitchError } from "./components/Sidebar";
 import ServerMenu, { dotOf, type Scope } from "./components/ServerMenu";
 import Prefs from "./components/Prefs";
@@ -8,7 +8,8 @@ import { connectedServers, filterTree, keepDown, LEGACY_SERVERS, migrateKey, off
 import TabBar, { Clock, Pulse } from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
 import ChatView from "./components/ChatView";
-import { HEADLESS_CLAUDE, isHeadlessAgent } from "./agent";
+import { isHeadlessAgent } from "./agent";
+import SignInCard from "./components/SignInCard";
 import { agentOf, syncAgents } from "./agentStore";
 import KeyBar from "./components/KeyBar";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
@@ -118,13 +119,13 @@ export default function App() {
   const closePrefs = () => { setPrefsOpen(false); serverCall(api.serversSeen()); };
   const connectServer = (id: string) => serverCall(api.serverConnect(id));
   const [accountsError, setAccountsError] = createSignal<string | null>(null);
-  // Account number of the `cswap switch` in flight (null = idle) and the last switch failure.
+  // Account number of the switch in flight (null = idle) and the last switch failure.
   const [switching, setSwitching] = createSignal<number | null>(null);
   const [switchError, setSwitchError] = createSignal<SwitchError | null>(null);
 
   // Fetchers never reject: a Solid resource in the errored state throws on read,
   // which would take the whole render down. Errors go to signals; the previous
-  // value is kept so the UI stays populated while Herdr/cswap are unreachable.
+  // value is kept so the UI stays populated while a server is unreachable.
   // Only the latest fetch of each resource may touch the status signals: a
   // slow, stale `herdr_tree` finishing after a fresh one must not flip OFFLINE.
   const gate = createLatestGate();
@@ -166,30 +167,6 @@ export default function App() {
     const sel = selectedPane();
     if (first && sel && !sel.includes("|")) setSelectedPane(migrateKey(sel, first));
   });
-  const [accounts, { refetch: refetchAccounts }] = createResource<CswapList | undefined>(async (_, { value }) => {
-    const seq = gate.begin("accounts");
-    try {
-      const l = await api.cswapList();
-      if (!gate.isCurrent("accounts", seq)) return value;
-      setAccountsError(null);
-      setSwitchError(null);
-      return l;
-    } catch (e) {
-      if (!gate.isCurrent("accounts", seq)) return value;
-      setAccountsError(String(e));
-      return value;
-    }
-  });
-
-  const switchAccount = (n: number) => {
-    if (switching() !== null) return; // one `cswap switch` at a time
-    setSwitching(n);
-    setSwitchError(null);
-    api.cswapSwitch(n)
-      .catch((e) => setSwitchError({ number: n, message: String(e) }))
-      .finally(() => { setSwitching(null); refetchAccounts(); });
-  };
-
   // Pick the focused pane of the focused workspace when nothing is selected yet.
   const currentPane = () => {
     const t = tree();
@@ -201,6 +178,46 @@ export default function App() {
     return pane?.pane_id ?? null;
   };
   const selectPane = (id: string) => { setSelectedPane(id); api.focus("pane", id).catch(() => {}); };
+
+  // ---- ACCOUNTS: the Claude accounts of the machine that owns the selected
+  // session (deck-server keeps them; a stock Herdr has none) -----------------
+  const kindOf = (id: string | null) => (id === null ? undefined : servers()?.servers.find((s) => s.id === id)?.kind);
+  /** A new pane on this server runs Claude headless by itself (docs/adr/0003-headless-claude.md). */
+  const onDeckServer = (id: string | null) => kindOf(id) === "deck-server";
+  /** The server ACCOUNTS and the badge show: the selected session's, else where a new space would go. */
+  const accountsServer = (): string | null => { const p = currentPane(); return p !== null ? serverOf(p) : targetServer(); };
+  const accountsServerName = () => { const id = accountsServer(); return connected().find((s) => s.id === id)?.name ?? id ?? ""; };
+  const accountsKey = () => (servers() ? JSON.stringify([accountsServer(), onDeckServer(accountsServer())]) : false);
+  const [accounts, { refetch: refetchAccounts, mutate: setAccounts }] = createResource<AccountList | undefined, string | false>(accountsKey, async (key, { value }) => {
+    const [server, managed] = JSON.parse(String(key)) as [string | null, boolean];
+    if (!managed) { setAccountsError(null); return UNMANAGED; }
+    const seq = gate.begin("accounts");
+    try {
+      const l = await api.accountsList(server);
+      if (!gate.isCurrent("accounts", seq)) return value;
+      setAccountsError(null);
+      setSwitchError(null);
+      return l;
+    } catch (e) {
+      if (!gate.isCurrent("accounts", seq)) return value;
+      setAccountsError(String(e));
+      return value?.managed === false ? undefined : value;
+    }
+  });
+
+  const switchAccount = (n: number) => {
+    if (switching() !== null || accounts()?.managed === false) return; // one switch at a time
+    setSwitching(n);
+    setSwitchError(null);
+    api.accountsSwitch(accountsServer(), n)
+      .then((l) => setAccounts(l))
+      .catch((e) => setSwitchError({ number: n, message: String(e) }))
+      .finally(() => { setSwitching(null); refetchAccounts(); });
+  };
+  const removeAccount = (a: Account) =>
+    api.accountsRemove(accountsServer(), a.number).then((l) => setAccounts(l)).catch((e) => showError(`remove account: ${String(e)}`));
+  /** "+ ADD ACCOUNT": the sign-in card for the accounts' server. */
+  const [addAccountFor, setAddAccountFor] = createSignal<string | null | undefined>(undefined);
 
   // ---- M3: tree actions, context menus, palette, hotkeys -------------------
   // Action failures (Herdr refused, link down) show in the title bar for a while.
@@ -339,7 +356,7 @@ export default function App() {
   // WORKTREE it runs in the fresh space's own first pane (`pane`).
   const [newTabFor, setNewTabFor] = createSignal<{ workspaceId: string; pane?: string } | null>(null);
   const newTab = (workspaceId: string, pane?: string) => setNewTabFor({ workspaceId, pane });
-  /** Wait for the shell prompt (≤ 6 s), then type `command` + Enter into `paneId`. */
+  /** Stock Herdr: wait for the shell prompt (≤ 6 s), then type `command` + Enter into `paneId`. */
   const startIn = async (paneId: string, command: string) => {
     const t0 = Date.now();
     while (Date.now() - t0 < 6000) {
@@ -353,8 +370,8 @@ export default function App() {
     await api.sendText(paneId, command);
     await api.sendKeys(paneId, ["enter"]);
   };
-  const openTab = async (target: { workspaceId: string; pane?: string }, kind: TabKind) => {
-    remember("deck.newTabKind", kind.id === "custom" ? "claude" : kind.id);
+  const openTab = async (target: { workspaceId: string; pane?: string }, kind: TabKind | null) => {
+    if (kind) remember("deck.newTabKind", kind.id === "custom" ? "claude" : kind.id);
     try {
       let paneId = target.pane;
       if (!paneId) {
@@ -364,11 +381,13 @@ export default function App() {
       }
       if (!paneId) return;
       setSelectedPane(paneId);
-      // On deck-server Claude runs headless (only ever a chat, docs/adr/0003-headless-claude.md).
-      const onDeckServer = servers()?.servers.find((s) => s.id === serverOf(paneId!))?.kind === "deck-server";
-      const command = kind.id === "claude" && onDeckServer ? HEADLESS_CLAUDE : kind.command;
-      if (command) await startIn(paneId, command);
+      if (kind?.command) await startIn(paneId, kind.command);
     } catch (e) { showError(`tab.create: ${String(e)}`); }
+  };
+  // On deck-server every new pane is already a Claude chat: nothing to pick or type.
+  const newTabOrPick = (workspaceId: string, pane?: string) => {
+    if (onDeckServer(serverOf(pane ?? workspaceId))) void openTab({ workspaceId, pane }, null);
+    else newTab(workspaceId, pane);
   };
   // "+" next to SESSIONS: open a repository as a space, then ask what to run in it.
   const [repoBox, setRepoBox] = createSignal(false);
@@ -385,7 +404,7 @@ export default function App() {
       if (server === null) { showError("no server connected — ⚙ PREFERENCES"); return; }
       const r = await api.repoOpen(root, undefined, server);
       refetchTree();
-      newTab(r.workspace_id, r.pane_id);
+      newTabOrPick(r.workspace_id, r.pane_id);
     } catch (e) { showError(`open repository: ${String(e)}`); }
   };
   // "+" on a repository row: a new linked worktree, then ask what to run in it.
@@ -396,7 +415,7 @@ export default function App() {
       if (target === null) { showError("no server connected — ⚙ PREFERENCES"); return; }
       const r = await api.worktreeCreate(root, branch, base || undefined, target);
       refetchTree();
-      newTab(r.workspace_id, r.pane_id);
+      newTabOrPick(r.workspace_id, r.pane_id);
     } catch (e) { showError(`worktree.create: ${String(e)}`); }
   };
   // RENAME for a space / tab / pane: Deck's prompt → `*.rename {label}`.
@@ -413,7 +432,7 @@ export default function App() {
       { label: "FOCUS IN HERDR", hint: "workspace.focus", run: () => api.focus("workspace", w.workspace_id).catch((er) => showError(String(er))) },
       { label: "RENAME", hint: "workspace.rename", run: () => rename("workspace", w.workspace_id, w.label) },
       ...(w.worktree?.checkout_path ? [{ label: "PULL · UPDATE", hint: "git pull --ff-only · log in UPLINK", run: () => pull(w) }] : []),
-      { label: "NEW TAB", hint: "tab.create", run: () => newTab(w.workspace_id) },
+      { label: "NEW TAB", hint: "tab.create", run: () => newTabOrPick(w.workspace_id) },
       { label: "NEW SPACE", hint: "workspace.create", run: () => runAction("workspace.create", w.workspace_id) },
       { label: "CLOSE · ARCHIVE", hint: "keep for restore", run: () => archiveClose(w) },
       { label: "CLOSE SPACE", hint: "workspace.close", danger: true, run: () => runAction("workspace.close", w.workspace_id) },
@@ -431,7 +450,7 @@ export default function App() {
     items: [
       { label: "FOCUS IN HERDR", hint: "tab.focus", run: () => api.focus("tab", t.tab_id).catch((er) => showError(String(er))) },
       { label: "RENAME", hint: "tab.rename", run: () => rename("tab", t.tab_id, t.label) },
-      { label: "NEW TAB", hint: "tab.create", run: () => newTab(t.workspace_id) },
+      { label: "NEW TAB", hint: "tab.create", run: () => newTabOrPick(t.workspace_id) },
       { label: "SPLIT RIGHT", hint: "pane.split", run: () => runAction("pane.split", tabPane(t)?.pane_id, { direction: "right" }) },
       { label: "SPLIT DOWN", hint: "pane.split", run: () => runAction("pane.split", tabPane(t)?.pane_id, { direction: "down" }) },
       { label: "CLOSE TAB", hint: "tab.close", danger: true, run: () => runAction("tab.close", t.tab_id) },
@@ -448,11 +467,13 @@ export default function App() {
       { label: "CLOSE PANE", hint: "pane.close", danger: true, run: () => runAction("pane.close", pane.pane_id) },
     ],
   });
-  const accountMenu = (e: MouseEvent, a: CswapAccount) => setMenu({
+  const accountMenu = (e: MouseEvent, a: Account) => setMenu({
     x: e.clientX, y: e.clientY, title: accountLabel(a).toUpperCase(),
     items: [
-      { label: a.active ? "ACTIVE" : "SWITCH", hint: "cswap switch", disabled: a.active || switching() !== null, run: () => switchAccount(a.number) },
-      { label: "REFRESH", hint: "cswap list", run: () => refetchAccounts() },
+      { label: a.active ? "ACTIVE" : "SWITCH", hint: `this machine: ${accountsServerName()}`, disabled: a.active || switching() !== null, run: () => switchAccount(a.number) },
+      { label: "ADD ACCOUNT", hint: "sign in on this machine", run: () => setAddAccountFor(accountsServer()) },
+      { label: "REFRESH", hint: "accounts and usage", run: () => refetchAccounts() },
+      { label: "REMOVE", hint: a.active ? "switch to another account first" : "forget it on this machine", danger: true, disabled: a.active, run: () => removeAccount(a) },
     ],
   });
 
@@ -463,7 +484,7 @@ export default function App() {
     else if (d.kind === "select") selectPane(d.paneId);
     else if (d.kind === "switch") switchAccount(d.account);
     else if (d.kind === "refresh") refetchAccounts();
-    else if (d.action === "tab.create" && d.id) newTab(d.id);
+    else if (d.action === "tab.create" && d.id) newTabOrPick(d.id);
     else if (d.action === "workspace.create") newRepo();
     else runAction(d.action, d.id);
   };
@@ -720,6 +741,8 @@ export default function App() {
         onSelectPane={selectPane}
         onSwitchAccount={switchAccount}
         onRefreshAccounts={() => refetchAccounts()}
+        accountsServer={accountsServerName()}
+        onAddAccount={() => setAddAccountFor(accountsServer())}
         onWorkspaceMenu={workspaceMenu}
         onTabMenu={tabMenu}
         onPaneMenu={paneMenu}
@@ -741,12 +764,12 @@ export default function App() {
             <button class="btn" onClick={openPrefs}>⚙ PREFERENCES</button>
           </div>
         ) : undefined}
-        onNewTab={newTab}
+        onNewTab={newTabOrPick}
         onSplit={(paneId) => runAction("pane.split", paneId, { direction: "right" })}
       />
 
       <main class="main">
-        <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} onTabMenu={tabMenu} onNewTab={newTab} />
+        <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} onTabMenu={tabMenu} onNewTab={newTabOrPick} />
         <Show when={currentPane()} fallback={<div class="empty">NO PANE SELECTED · open a workspace in Herdr</div>}>
           {(id) => (
             <Show when={headless(id())} fallback={
@@ -755,7 +778,14 @@ export default function App() {
                 {(sid) => <ChatView paneId={id()} sessionId={sid()} tree={tree()} outputTick={outputTick()} harness={harness()} onTerminal={() => setPaneView(id(), "term")} />}
               </Show>
             }>
-              <ChatView paneId={id()} sessionId={claudeSession(id()) ?? ""} tree={tree()} outputTick={outputTick()} harness={harness()} agent={() => agentOf(id())} />
+              <ChatView paneId={id()} sessionId={claudeSession(id()) ?? ""} tree={tree()} outputTick={outputTick()} harness={harness()} agent={() => agentOf(id())}
+                signIn={() => {
+                  // The machine has no login (its accounts say so), or Claude refused the one it has.
+                  const l = accounts();
+                  const noLogin = !!l && l.managed !== false && l.signedIn === false && serverOf(id()) === accountsServer();
+                  if (!noLogin && !agentOf(id())?.authRequired) return null;
+                  return <SignInCard server={serverOf(id()) || null} where={accountsServerName()} activate onDone={(list) => { setAccounts(list); refetchAccounts(); }} />;
+                }} />
             </Show>
           )}
         </Show>
@@ -790,6 +820,15 @@ export default function App() {
       <Show when={ask()}>{(q) => <PromptBox title={q().title} value={q().value} placeholder="name" ok={q().ok} onClose={() => setAsk(null)} />}</Show>
       <Show when={overlay() === "palette"}><Palette title="Palette" items={paletteItems()} onClose={() => setOverlay(null)} /></Show>
       <Show when={overlay() === "accounts"}><Palette title="Account" items={accountItems()} digits onClose={() => setOverlay(null)} /></Show>
+      <Show when={addAccountFor() !== undefined}>
+        <div class="veil" onClick={() => setAddAccountFor(undefined)}>
+          <div class="dlgbox signin-box" onClick={(e) => e.stopPropagation()}>
+            <SignInCard server={addAccountFor() ?? null} where={accountsServerName()} title="ADD ACCOUNT"
+              intro="Sign in to another Claude account on this machine. It is kept here next to the others; switch to it in ACCOUNTS."
+              onDone={(list) => { setAccounts(list); setAddAccountFor(undefined); refetchAccounts(); }} onCancel={() => setAddAccountFor(undefined)} />
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }

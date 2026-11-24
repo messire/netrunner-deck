@@ -141,7 +141,15 @@ pub fn call(
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    const METHODS: &[&str] = &["send", "respond", "interrupt", "set", "list"];
+    const METHODS: &[&str] = &[
+        "send",
+        "respond",
+        "interrupt",
+        "set",
+        "resume",
+        "restart",
+        "list",
+    ];
     if !METHODS.contains(&method) {
         return Err(format!("unknown agent method {method}"));
     }

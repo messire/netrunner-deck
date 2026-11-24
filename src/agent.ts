@@ -51,6 +51,8 @@ export interface AgentLive {
   host: { state: "running" | "exited" | ""; detail: string | null };
   /** Recent stderr lines and failed results, newest last. */
   notes: Note[];
+  /** `claude` has no usable login on its machine (no token, or the API refused it): the chat offers sign-in. */
+  authRequired: boolean;
 }
 
 export const MAX_NOTES = 30;
@@ -59,6 +61,7 @@ export function emptyAgent(epoch = ""): AgentLive {
   return {
     epoch, seq: 0, connected: false, linkError: null, busy: false, asks: [], sessionId: null, model: null,
     permissionMode: null, streaming: "", thinking: false, commands: [], models: [], host: { state: "", detail: null }, notes: [],
+    authRequired: false,
   };
 }
 
@@ -97,6 +100,9 @@ export function applyMsg(a: AgentLive, msg: Record<string, unknown>): AgentLive 
         ? body.commands.map(rec).filter((c): c is Record<string, unknown> => !!c && !!str(c.name))
           .map((c) => ({ name: str(c.name), description: str(c.description), argumentHint: str(c.argumentHint) }))
         : next.commands;
+      // Claude Code says which credential it found; "none" = not signed in.
+      const tokenSource = str(rec(body?.account)?.tokenSource);
+      if (tokenSource) next = { ...next, authRequired: tokenSource === "none" && !str(rec(body?.account)?.apiKeySource) };
       const models = Array.isArray(body?.models)
         ? body.models.map(rec).filter((m): m is Record<string, unknown> => !!m && !!str(m.value))
           .map((m) => ({ value: str(m.value), displayName: str(m.displayName) || str(m.value), description: str(m.description) }))
@@ -142,6 +148,7 @@ export function applyMsg(a: AgentLive, msg: Record<string, unknown>): AgentLive 
       }
     }
     case "assistant":
+      if (msg.error === "authentication_failed") return { ...next, busy: true, authRequired: true };
       return next.busy ? next : { ...next, busy: true };
     case "user":
       return isUserTurn(msg) ? { ...next, busy: true, streaming: "" } : next;
@@ -152,6 +159,7 @@ export function applyMsg(a: AgentLive, msg: Record<string, unknown>): AgentLive 
       return {
         ...next, busy: false, asks: [], thinking: false,
         notes: failed && text ? note(next, { kind: "error", text }) : next.notes,
+        authRequired: failed ? next.authRequired : false,
       };
     }
     case "deck_settings": {
@@ -216,9 +224,7 @@ export function foldAgentLine(prev: AgentLive | undefined, line: unknown): Agent
   }
 }
 
-/** What starts Claude Code headless in a deck-server pane (typed into its shell). */
-export const HEADLESS_CLAUDE = "deck-server agent";
-/** Panes run by `deck-server agent` report this agent label. */
+/** deck-server panes run `deck-server agent` and report this agent label. */
 export const HEADLESS_AGENT = "deck-claude";
 export const isHeadlessAgent = (agent: string | null | undefined) => (agent ?? "").toLowerCase() === HEADLESS_AGENT;
 

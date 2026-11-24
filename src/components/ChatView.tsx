@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { api, type HarnessRepo, type Tree } from "../api";
@@ -50,7 +50,9 @@ const clock = (ts: number) => {
   return d.toDateString() === new Date().toDateString() ? t : `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")} ${t}`;
 };
 
-export default function ChatView(p: { paneId: string; sessionId: string; tree?: Tree; outputTick?: number; harness?: HarnessRepo[]; onTerminal?: () => void; agent?: () => AgentLive | undefined }) {
+export default function ChatView(p: { paneId: string; sessionId: string; tree?: Tree; outputTick?: number; harness?: HarnessRepo[]; onTerminal?: () => void; agent?: () => AgentLive | undefined;
+  /** Headless: the sign-in card, when the session's machine has no usable Claude login. */
+  signIn?: () => JSX.Element | null }) {
   const headless = () => !!p.agent;
   const live = () => p.agent?.();
   // The chat is folded incrementally: only new transcript blocks are pushed,
@@ -417,6 +419,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
             <div class="chat-working"><Think size={28} /> {hint().activity || `${verb()}…`} <span class="mono">({elapsed()}{chat().pendingTools ? ` · ${chat().pendingTools} tool${chat().pendingTools > 1 ? "s" : ""} running` : ""})</span></div>
           </Show>
           <Show when={headless()}>
+            {p.signIn?.()}
             <For each={live()?.asks ?? []}>{(a) => <AskCard ask={a} md={md} answer={(r, then) => answer(a.requestId, r, then)} />}</For>
             <Show when={live()?.host.state === "exited"}>
               <div class="chat-note err">· Claude stopped ({live()?.host.detail ?? "exited"}) · starting it again ·</div>

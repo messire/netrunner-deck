@@ -57,21 +57,34 @@ export interface Tree { workspaces: Workspace[]; tabs: Tab[]; panes: Pane[]; age
 /** The merged tree of every connected server, and why the servers that failed did. */
 export interface MultiTree { tree: Tree; down: Record<string, string> }
 
-export interface CswapAccount {
+/** One Claude Code account of a server's machine (deck-server's `deck.accounts.list`, shaped like `cswap list --json`). */
+export interface Account {
   number: number;
   email: string;
   alias?: string;
+  organizationName?: string | null;
   active: boolean;
   usageStatus?: string;
-  usage?: CswapUsage;
-  lastGoodUsage?: CswapUsage;
+  usage?: AccountUsage;
+  lastGoodUsage?: AccountUsage;
 }
-export interface CswapUsage {
+export interface AccountUsage {
   fiveHour?: { pct: number; countdown?: string };
   sevenDay?: { pct: number; countdown?: string };
   scoped?: { name: string; pct: number; countdown?: string }[];
 }
-export interface CswapList { activeAccountNumber: number; accounts: CswapAccount[] }
+export interface AccountList {
+  activeAccountNumber: number | null;
+  accounts: Account[];
+  /** False: the server keeps no accounts (a stock Herdr). */
+  managed?: boolean;
+  /** The machine has a live Claude login its agents run under. */
+  signedIn?: boolean;
+  /** After a sign-in: the number of the account it stored. */
+  added?: number;
+}
+/** What a server without accounts (stock Herdr) shows. */
+export const UNMANAGED: AccountList = { managed: false, activeAccountNumber: null, accounts: [] };
 
 /**
  * One event from Herdr's `events.subscribe` stream, forwarded as-is by the
@@ -212,7 +225,7 @@ export const api = {
    * `send {text, images?}`, `respond {request_id, response}`, `interrupt`,
    * `set {model?, permission_mode?}` on the pane's server.
    */
-  agentCall: (paneKey: string, method: "send" | "respond" | "interrupt" | "set", params: Record<string, unknown> = {}) => {
+  agentCall: (paneKey: string, method: "send" | "respond" | "interrupt" | "set" | "resume" | "restart", params: Record<string, unknown> = {}) => {
     const { server, id } = splitId(paneKey);
     return invoke<unknown>("agent_call", { server: srv(server), method, params: { ...params, pane_id: id } });
   },
@@ -319,8 +332,14 @@ export const api = {
   transcriptWatch: (sessionId: string | null, server?: string | null) => invoke<void>("transcript_watch", { server: srv(server), sessionId }),
   onTranscript: (cb: (e: { session_id: string; len: number }) => void): Promise<UnlistenFn> =>
     listen<{ session_id: string; len: number }>("deck://transcript", (e) => cb(e.payload)),
-  cswapList: () => { count("cswap_list"); return invoke<CswapList>("cswap_list"); },
-  cswapSwitch: (number: number) => { count("cswap_switch"); return invoke("cswap_switch", { number }); },
+  /** The accounts of `server`'s machine (deck-server keeps them; Deck only asks). */
+  accountsList: (server: string | null) => { count("accounts_call"); return invoke<AccountList>("accounts_call", { server: srv(server), method: "list", params: {} }); },
+  accountsSwitch: (server: string | null, number: number) => invoke<AccountList>("accounts_call", { server: srv(server), method: "switch", params: { number } }),
+  accountsRemove: (server: string | null, number: number) => invoke<AccountList>("accounts_call", { server: srv(server), method: "remove", params: { number } }),
+  /** Starts Claude's sign-in on the server: the link to open and the id `accountsLoginFinish` needs. */
+  accountsLoginStart: (server: string | null) => invoke<{ login_id: string; url: string }>("accounts_call", { server: srv(server), method: "login.start", params: {} }),
+  accountsLoginFinish: (server: string | null, loginId: string, code: string, activate = false) =>
+    invoke<AccountList>("accounts_call", { server: srv(server), method: "login.finish", params: { login_id: loginId, code, activate } }),
   // The payload is whatever Herdr sent plus `server`; its ids are tagged here
   // and `routeEvent` validates the shape.
   onEvent: (cb: (event: HerdrEvent, server: string | null) => void): Promise<UnlistenFn> =>
@@ -334,7 +353,7 @@ export const api = {
       typeof e.payload === "string" ? cb(null, e.payload) : cb(e.payload.server ?? null, e.payload.error ?? "offline")),
 };
 
-export function accountLabel(a: CswapAccount): string {
+export function accountLabel(a: Account): string {
   const alias = (a.alias ?? "").trim();
   if (alias) return alias.toUpperCase();
   const [user, domain = ""] = a.email.split("@");
@@ -342,7 +361,7 @@ export function accountLabel(a: CswapAccount): string {
   return (/gmail|proton|outlook|hotmail|yahoo/i.test(org) ? user : org).toUpperCase();
 }
 
-export function usageOf(a: CswapAccount) {
+export function usageOf(a: Account) {
   const u = a.usage ?? a.lastGoodUsage ?? {};
   const pct = (x?: number) => (typeof x === "number" && isFinite(x) ? Math.max(0, Math.min(100, Math.round(x))) : null);
   return {
@@ -353,7 +372,7 @@ export function usageOf(a: CswapAccount) {
 }
 
 export type Zone = "safe" | "public" | "restricted" | "danger";
-export function zoneOf(a?: CswapAccount): Zone {
+export function zoneOf(a?: Account): Zone {
   if (!a) return "danger";
   if (a.usageStatus && /relogin|expired|error/i.test(a.usageStatus)) return "danger";
   const { five, week } = usageOf(a);

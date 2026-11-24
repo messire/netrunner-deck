@@ -166,26 +166,24 @@ fn agent_ready(screen: &str) -> bool {
     })
 }
 
-/// What starts Claude Code without a terminal in a deck-server pane
-/// (docs/adr/0003-headless-claude.md).
-pub const HEADLESS_CLAUDE: &str = "deck-server agent";
-
-/// `deck.agent.send` the prompt once the pane's host is up (until then the
-/// server does not know the pane: "no headless agent in pane …").
-fn send_when_ready(
+/// `deck.agent.<method>` once the pane's headless agent is up (a new
+/// deck-server pane starts it at once, but until it connects the server
+/// does not know the pane: "no headless agent in pane …").
+pub fn agent_call_when_ready(
     rt: &dyn Runtime,
     pane: &str,
-    prompt: &str,
+    method: &str,
+    params: Value,
     limit: Duration,
 ) -> Result<(), String> {
     let t0 = Instant::now();
     loop {
-        match rt.agent_call("send", json!({ "pane_id": pane, "text": prompt })) {
+        match rt.agent_call(method, params.clone()) {
             Ok(_) => return Ok(()),
             Err(e) if t0.elapsed() < limit && e.to_string().contains("no headless agent") => {
                 std::thread::sleep(Duration::from_millis(400));
             }
-            Err(e) => return Err(format!("the headless agent did not start: {e}")),
+            Err(e) => return Err(format!("the headless agent did not start in {pane}: {e}")),
         }
     }
 }
@@ -214,6 +212,21 @@ pub fn launch(
     let pane = pane_id.clone();
     std::thread::spawn(move || {
         let result = (|| -> Result<(), String> {
+            // deck-server: the new pane already runs Claude headless; hand
+            // it the prompt (any agent other than Claude needs a shell).
+            if rt.agent_call("list", json!({})).is_ok() {
+                emit(&app, &run, "shell", Value::Null);
+                agent_call_when_ready(
+                    &*rt,
+                    &pane,
+                    "send",
+                    json!({ "pane_id": pane, "text": l.prompt }),
+                    Duration::from_secs(60),
+                )?;
+                emit(&app, &run, "agent", Value::Null);
+                emit(&app, &run, "prompt", Value::Null);
+                return Ok(());
+            }
             if !wait_for(
                 &*rt,
                 &pane,
@@ -224,14 +237,6 @@ pub fn launch(
                 tracing::warn!(pane, "shell prompt not seen; typing anyway");
             }
             emit(&app, &run, "shell", Value::Null);
-            // deck-server runs Claude headless: start the host, hand it the prompt.
-            if l.agent.trim() == "claude" && rt.agent_call("list", json!({})).is_ok() {
-                type_line(&*rt, &pane, HEADLESS_CLAUDE)?;
-                send_when_ready(&*rt, &pane, &l.prompt, Duration::from_secs(60))?;
-                emit(&app, &run, "agent", Value::Null);
-                emit(&app, &run, "prompt", Value::Null);
-                return Ok(());
-            }
             type_line(&*rt, &pane, &l.agent)?;
             if !wait_for(
                 &*rt,

@@ -1037,23 +1037,35 @@ pub fn restore(app: &AppHandle, server: Option<&str>, id: &str) -> Result<Value,
         targets.push((pane, sid.to_string()));
     }
     let resumed = targets.len();
-    // deck-server runs Claude headless (only ever a chat, docs/adr/0003-headless-claude.md).
+    // deck-server: every pane already runs Claude headless (only ever a
+    // chat, docs/adr/0003-headless-claude.md); it is told which
+    // conversation to open. A stock Herdr pane is a shell: type the resume.
     let headless = rt.agent_call("list", json!({})).is_ok();
     std::thread::spawn(move || {
-        std::thread::sleep(RESUME_SETTLE);
+        if !headless {
+            std::thread::sleep(RESUME_SETTLE);
+        }
         for (pane, sid) in targets {
-            let cmd = if headless {
-                format!("{} --resume {sid}", crate::quickhacks::HEADLESS_CLAUDE)
+            let delivered = if headless {
+                crate::quickhacks::agent_call_when_ready(
+                    &*rt,
+                    &pane,
+                    "resume",
+                    json!({ "pane_id": pane, "session_id": sid }),
+                    Duration::from_secs(30),
+                )
             } else {
-                format!("claude --resume {sid}")
+                rt.pane_send_text(&pane, &format!("claude --resume {sid}"))
+                    .and_then(|_| rt.pane_send_keys(&pane, &["enter"]))
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
             };
-            if let Err(e) = rt
-                .pane_send_text(&pane, &cmd)
-                .and_then(|_| rt.pane_send_keys(&pane, &["enter"]))
-            {
-                tracing::warn!(%e, pane, "resume command not delivered");
+            if let Err(e) = delivered {
+                tracing::warn!(%e, pane, "resume not delivered");
             }
-            std::thread::sleep(Duration::from_millis(300));
+            if !headless {
+                std::thread::sleep(Duration::from_millis(300));
+            }
         }
     });
     app.state::<Store>().record(id, |r| {

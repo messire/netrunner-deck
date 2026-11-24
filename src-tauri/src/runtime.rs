@@ -94,6 +94,10 @@ pub trait Runtime: Send + Sync {
     /// then `deck.agent.event` / `deck.agent.reset`) to `on_line` until it
     /// returns `false` (then `Ok`) or the stream ends (`Err`).
     fn agent_subscribe(&self, params: Value, on_line: &mut dyn FnMut(Value) -> bool) -> Result<()>;
+
+    /// deck-server's accounts of its machine (`deck.accounts.<method>`:
+    /// list, switch, remove, login.start, login.finish).
+    fn accounts_call(&self, method: &str, params: Value) -> Result<Value>;
 }
 
 // ---- params ---------------------------------------------------------------------
@@ -609,6 +613,10 @@ impl Runtime for HerdrRuntime {
     fn agent_subscribe(&self, params: Value, on_line: &mut dyn FnMut(Value) -> bool) -> Result<()> {
         herdr::stream("deck.agent.subscribe", &self.endpoint, params, on_line)
     }
+
+    fn accounts_call(&self, method: &str, params: Value) -> Result<Value> {
+        herdr::call(&self.endpoint, &format!("deck.accounts.{method}"), params)
+    }
 }
 
 #[cfg(test)]
@@ -879,6 +887,9 @@ mod tests {
         }
         fn agent_subscribe(&self, _: Value, _: &mut dyn FnMut(Value) -> bool) -> Result<()> {
             Ok(())
+        }
+        fn accounts_call(&self, _: &str, _: Value) -> Result<Value> {
+            Ok(Value::Null)
         }
     }
 

@@ -56,13 +56,16 @@ const fake = (() => {
     { pane_id: "w3:p1", terminal_id: "t4", workspace_id: "w3", tab_id: "w3:t1", focused: true, cwd: "C:\\Workspace\\Atlas-search", agent: null, title: "pwsh", agent_status: "unknown" },
   ];
   const agents = () => panes.filter((p) => p.agent).map((p) => ({ terminal_id: p.terminal_id, agent: p.agent, display_agent: p.display_agent, agent_status: p.agent_status, tokens: p.tokens, workspace_id: p.workspace_id, tab_id: p.tab_id, pane_id: p.pane_id, focused: p.focused }));
-  const accounts = {
-    activeAccountNumber: 1,
-    accounts: [
-      { number: 1, email: "one@example.com", alias: "MAIN", active: true, usage: { fiveHour: { pct: 7, countdown: "14m" }, sevenDay: { pct: 4, countdown: "6d 5h" } } },
-      { number: 2, email: "two@example.com", alias: "SPARE", active: false, usage: { fiveHour: { pct: 4 }, sevenDay: { pct: 24 } } },
-    ],
-  };
+  const noLogin = new URLSearchParams(location.search).has("signin");
+  const accounts: { activeAccountNumber: number | null; accounts: { number: number; email: string; alias?: string; active: boolean; usageStatus?: string; usage?: Record<string, unknown> }[] } = noLogin
+    ? { activeAccountNumber: null, accounts: [] }
+    : {
+      activeAccountNumber: 1,
+      accounts: [
+        { number: 1, email: "one@example.com", alias: "MAIN", active: true, usage: { fiveHour: { pct: 7, countdown: "14m" }, sevenDay: { pct: 4, countdown: "6d 5h" } } },
+        { number: 2, email: "two@example.com", alias: "SPARE", active: false, usage: { fiveHour: { pct: 4 }, sevenDay: { pct: 24 } } },
+      ],
+    };
 
   // A Claude Code-like transcript that grows a line every few seconds.
   const DIM = "\x1b[2m", RST = "\x1b[0m", BAND = "\x1b[48;2;40;40;40m";
@@ -280,11 +283,29 @@ const fake = (() => {
         return new URLSearchParams(location.search).has("update")
           ? { version: "9.9.9", current: "0.1.0", notes: "browser stand-in", date: null } : null;
       case "update_install": await new Promise((r) => setTimeout(r, 1500)); return null;
-      case "cswap_list": return accounts;
-      case "cswap_switch": {
-        const n = Number(args.number); accounts.activeAccountNumber = n;
-        for (const a of accounts.accounts) a.active = a.number === n;
-        return accounts;
+      // deck-server's `deck.accounts.*`; `?signin=1` starts with a machine that has no login.
+      case "accounts_call": {
+        const p = (args.params ?? {}) as Record<string, unknown>;
+        const list = () => ({ ...accounts, managed: true, signedIn: accounts.activeAccountNumber !== null });
+        switch (String(args.method)) {
+          case "list": return list();
+          case "switch": {
+            const n = Number(p.number); accounts.activeAccountNumber = n;
+            for (const a of accounts.accounts) a.active = a.number === n;
+            return list();
+          }
+          case "remove": accounts.accounts = accounts.accounts.filter((a) => a.number !== Number(p.number)); return list();
+          case "login.start": return { login_id: "stand-in", url: "https://claude.com/cai/oauth/authorize?code=true&state=stand-in" };
+          case "login.finish": {
+            if (!String(p.code ?? "").trim() || String(p.code).includes("bad")) throw new Error("the code was not accepted (it is single-use and expires quickly): start the sign-in again");
+            const n = Math.max(0, ...accounts.accounts.map((a) => a.number)) + 1;
+            const first = accounts.activeAccountNumber === null || p.activate === true;
+            accounts.accounts.push({ number: n, email: `new${n}@example.com`, active: first, usageStatus: "ok", usage: { fiveHour: { pct: 0 }, sevenDay: { pct: 0 } } });
+            if (first) { accounts.activeAccountNumber = n; for (const a of accounts.accounts) a.active = a.number === n; }
+            return { ...list(), added: n };
+          }
+          default: throw new Error(`unknown accounts method ${args.method}`);
+        }
       }
       default: throw new Error(`browser stand-in: unknown command ${cmd}`);
     }

@@ -438,6 +438,11 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .ask-plan{max-height:46vh;overflow:auto;border-left:2px solid var(--cy);padding-left:10px}
 .ask-own{background:rgba(0,0,0,.3);border:1px solid var(--line);color:var(--txt);font:13.5px var(--ft);padding:5px 8px;outline:none}
 .ask-own:focus{border-color:var(--org)}
+.chat-menu.signin{border-color:var(--cy)}
+.signin-link{font:12px var(--fm);color:var(--mut);word-break:break-all;max-height:3.6em;overflow:hidden}
+.signin-link a{color:var(--cy)}
+.dlgbox.signin-box{width:min(620px,92vw)}
+.dlgbox.signin-box .chat-menu.signin{max-width:none;margin:0}
 .chat-menu .cm-foot .abtn{margin-left:0}
 .abtn.hot{border-color:var(--org);color:var(--org)}
 .abtn.hot:hover{background:rgba(255,166,43,.12)}
@@ -745,3 +750,4 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .addhost .dlga .sp{flex:1}
 @media (max-width:700px){.prefs{grid-template-columns:1fr}.prefs .pnav{flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:6px 0}.prefs .pnav .h{display:none}}
 .first-run .row .kind{display:none}
+.acc-where{color:var(--mut);margin:-4px 0 8px 2px;letter-spacing:1px;font-size:11px}

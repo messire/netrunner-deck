@@ -1,6 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { serverOf } from "../servers";
-import { accountLabel, usageOf, type AgentStatus, type CswapAccount, type CswapList, type GitSync, type Pane, type Tab, type Tree, type Workspace } from "../api";
+import { accountLabel, usageOf, type AgentStatus, type Account, type AccountList, type GitSync, type Pane, type Tab, type Tree, type Workspace } from "../api";
 import {
   buildTree, ctxPct, defaultOpen, firstPane, loadOpen, saveOpen, waiting,
   type RepoNode, type RootNode, type SessionNode, type SpaceNode, type TabNode,
@@ -20,10 +20,14 @@ export interface SidebarSection {
 
 interface Props {
   tree?: Tree;
-  accounts?: CswapList;
-  /** Why `cswap list` failed; shown in the Accounts block, the rest of the UI stays alive. */
+  accounts?: AccountList;
+  /** Why the server's account list failed; shown in the Accounts block, the rest of the UI stays alive. */
   accountsError?: string | null;
-  /** Account number of the `cswap switch` in flight, null/undefined when idle. */
+  /** Name of the server (machine) whose accounts these are. */
+  accountsServer?: string;
+  /** "+": sign in to another account on that machine. */
+  onAddAccount?: () => void;
+  /** Account number of the switch in flight, null/undefined when idle. */
   switching?: number | null;
   switchError?: SwitchError | null;
   selectedPane: string | null;
@@ -40,7 +44,7 @@ interface Props {
   onWorkspaceMenu: (e: MouseEvent, w: Workspace) => void;
   onTabMenu: (e: MouseEvent, t: Tab) => void;
   onPaneMenu: (e: MouseEvent, pane: Pane) => void;
-  onAccountMenu: (e: MouseEvent, a: CswapAccount) => void;
+  onAccountMenu: (e: MouseEvent, a: Account) => void;
   /** Create at any level, like Herdr: space (optionally cloned from one), tab, split. */
   /** "+" next to SESSIONS (or on a server section): open a repository as a new space. */
   onNewRepo: (server?: string) => void;
@@ -258,7 +262,15 @@ export default function Sidebar(p: Props) {
       </Show>
       </Show>
 
-      <div class="plate click" style="margin-top:14px" title="click to fold / unfold" onClick={() => setAccountsFolded(!accountsFolded())}>Accounts {accountsFolded() ? "▸" : "▾"}</div>
+      <div class="plate-row" style="margin-top:14px">
+        <div class="plate click" title={`Claude accounts of ${p.accountsServer || "this server"} · click to fold / unfold`} onClick={() => setAccountsFolded(!accountsFolded())}>
+          Accounts {accountsFolded() ? "▸" : "▾"}
+        </div>
+        <Show when={p.onAddAccount && p.accounts?.managed !== false}>
+          <button class="plus" title="add account: sign in to Claude on this machine" onClick={() => p.onAddAccount?.()}>+</button>
+        </Show>
+      </div>
+      <Show when={p.accountsServer}>{(name) => <div class="micro acc-where" title="the machine of the selected session">ON {name().toUpperCase()}</div>}</Show>
       <Show when={accountsFolded() && p.accounts}>
         {(acc) => {
           const active = () => acc().accounts.find((a) => a.active);
@@ -273,9 +285,15 @@ export default function Sidebar(p: Props) {
       </Show>
       <Show when={!accountsFolded()}>
       <Show when={p.accountsError}>
-        {(e) => <div class="row micro" style="color:var(--red)" title={e()}>cswap недоступен: {e()}</div>}
+        {(e) => <div class="row micro" style="color:var(--red)" title={e()}>accounts unavailable: {e()}</div>}
       </Show>
-      <Show when={p.accounts} fallback={<Show when={!p.accountsError}><div class="row micro">cswap…</div></Show>}>
+      <Show when={p.accounts?.managed === false}>
+        <div class="row micro" title="a stock Herdr server keeps no accounts; deck-server does">accounts are not managed on this server</div>
+      </Show>
+      <Show when={p.accounts?.managed !== false && p.accounts && !p.accounts.accounts.length}>
+        <div class="row micro click" onClick={() => p.onAddAccount?.()}>no account on this machine · + SIGN IN</div>
+      </Show>
+      <Show when={p.accounts?.managed !== false ? p.accounts : undefined} fallback={<Show when={!p.accountsError && !p.accounts}><div class="row micro">accounts…</div></Show>}>
         {(acc) => (
           <For each={acc().accounts}>
             {(a, i) => {
