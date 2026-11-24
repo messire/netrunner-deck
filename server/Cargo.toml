@@ -1,6 +1,6 @@
 [package]
 name = "deck-server"
-version = "0.9.5"
+version = "0.10.0"
 edition = "2021"
 build = "build.rs"
 description = "Headless terminal/agent server for Netrunner Deck, derived from Herdr"
@@ -18,11 +18,12 @@ test = false
 bench = false
 
 [workspace]
-members = ["crates/ghostty-vt"]
-default-members = [".", "crates/ghostty-vt"]
+members = ["crates/ghostty-vt", "crates/deck-agent"]
+default-members = [".", "crates/ghostty-vt", "crates/deck-agent"]
 
 [dependencies]
 ghostty-vt = { path = "crates/ghostty-vt" }
+deck-agent = { path = "crates/deck-agent" }
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"

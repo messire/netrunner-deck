@@ -368,8 +368,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deck-agent"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "deck-server"
-version = "0.9.5"
+version = "0.10.0"
 dependencies = [
  "base64",
  "bincode",
@@ -378,6 +385,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "ctrlc",
+ "deck-agent",
  "futures-util",
  "ghostty-vt",
  "interprocess",

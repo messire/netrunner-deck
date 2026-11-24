@@ -2,6 +2,9 @@
 
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
+## Unreleased
+- deck-server runs Claude Code headless: `deck-server agent` in a pane starts Claude on the stream-json control protocol, without a terminal, and serves it as `deck.agent.*` (subscribe with replay, send, permission answers, interrupt, model and mode). See docs/adr/0003-headless-claude.md.
+
 ## [0.4.0] — 2026-11-24
 - Several servers in one Deck: SERVERS preferences with discovery, connect/disconnect, rename; panes of all servers in one tree.
 - Remote servers over SSH: type `user@host` in SERVERS to add a machine. Every server, local or remote, is reached the same way, through a bridge on its machine (inside Deck for this one, `deck-server bridge` over ssh for another); addresses read `machine:socket`.

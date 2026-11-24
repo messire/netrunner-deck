@@ -28,8 +28,26 @@ pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
     if let Ok(executable) = crate::platform::launch_executable() {
+        // `deck-server agent` is typed into pane shells (by Deck, and by
+        // restore as a resume command, which must be a bare name), so the
+        // server's own directory comes first on the pane's PATH.
+        if let Some(path) = executable.parent().and_then(path_with_dir_first) {
+            cmd.env("PATH", path);
+        }
         cmd.env("HERDR_BIN_PATH", executable);
     }
+}
+
+/// `PATH` with `dir` in front (unchanged if it already is first).
+fn path_with_dir_first(dir: &std::path::Path) -> Option<std::ffi::OsString> {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(&current).collect();
+    if dirs.first().is_some_and(|first| first == dir) {
+        return None;
+    }
+    dirs.retain(|d| d != dir);
+    dirs.insert(0, dir.to_path_buf());
+    std::env::join_paths(dirs).ok()
 }
 
 pub(crate) fn pi_extension_dir() -> io::Result<PathBuf> {

@@ -14,6 +14,8 @@
 //! * `deck-server status [--session NAME]` says whether it runs;
 //! * `deck-server --foreground [--session NAME]` runs it in this console
 //!   (debugging; this is also what the detached process runs);
+//! * `deck-server agent [--resume ID]` runs Claude Code headless in a pane
+//!   (Deck shows it as a chat, see `deck_server/agent_host.rs`);
 //! * `deck-server bridge` carries Deck's API connections over stdin/stdout
 //!   (Deck runs it through `ssh` to reach a server on this machine).
 
@@ -29,6 +31,8 @@ mod agent_resume;
 mod agent_view_eval;
 mod api;
 mod app;
+#[path = "deck_server/agent_host.rs"]
+mod agent_host;
 #[path = "deck_server/bridge.rs"]
 mod bridge;
 mod build_info;
@@ -100,7 +104,7 @@ const INHERITED_HERDR_VARS: &[&str] = &[
 ];
 
 const USAGE: &str =
-    "usage: deck-server [start|stop|status|update|bridge] [--session NAME] [--foreground]";
+    "usage: deck-server [start|stop|status|update|bridge|agent] [--session NAME] [--foreground]";
 
 /// What the command line asks for, after `--session` was taken out.
 #[derive(Debug, PartialEq, Eq)]
@@ -284,6 +288,11 @@ fn main() -> io::Result<()> {
     let raw: Vec<String> = std::env::args().collect();
     if let Some(code) = hook_call(&raw) {
         std::process::exit(code);
+    }
+    // `deck-server agent` in a pane: Claude Code without a terminal. Before
+    // the env is cleaned, it talks to the server in HERDR_SOCKET_PATH.
+    if raw.get(1).map(String::as_str) == Some("agent") {
+        std::process::exit(agent_host::run(&raw[2..]));
     }
     // `ssh host deck-server bridge` (Deck): no server state, only sockets.
     if raw.get(1).map(String::as_str) == Some("bridge") && raw.len() == 2 {

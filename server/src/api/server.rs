@@ -31,7 +31,8 @@ pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100)
 pub(super) const APP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_INITIAL_REQUEST_BYTES: usize = 1024 * 1024;
+// Large enough for a chat message with pasted images (`deck.agent.send`).
+const MAX_INITIAL_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 pub struct ServerHandle {
@@ -347,7 +348,10 @@ fn handle_connection_with_stop(
         return Ok(());
     }
 
-    // Deck's transcript methods are answered here, before Herdr's typed parse.
+    // Deck's headless agents and transcripts are answered here, before Herdr's typed parse.
+    if let Some(result) = crate::api::agent::handle(line, &mut stream, running) {
+        return result;
+    }
     if let Some(response) = crate::api::transcript::handle(line) {
         return write_text_line_allow_disconnect(&mut stream, &response);
     }
