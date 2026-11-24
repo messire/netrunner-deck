@@ -153,7 +153,6 @@ export default function Prefs(p: {
             <button ref={addBtn} class="btn pri" onClick={() => setAdding(true)}>+ ADD</button>
             <span class="micro">a machine by user, address and port</span>
           </div>
-          <p class="micro">Found servers are only offered: nothing connects until you switch it on. + ADD opens a dialog with user, host or address and port (22 by default); CHECK signs in over your own SSH setup, lists that machine's servers and pings each one, and only the ones that answer are offered. Every server, here or on another machine, is reached the same way: through deck-server's bridge on its machine. ✕ removes a machine with all its servers. Addresses stay in Deck's local preferences.</p>
         </div>
       </div>
       <Show when={adding()}>

@@ -230,9 +230,21 @@ export function foldAgentLine(prev: AgentLive | undefined, line: unknown): Agent
 export const HEADLESS_AGENT = "deck-claude";
 export const isHeadlessAgent = (agent: string | null | undefined) => (agent ?? "").toLowerCase() === HEADLESS_AGENT;
 
-export const PERMISSION_MODES = ["default", "acceptEdits", "plan", "bypassPermissions"] as const;
+/** Claude Code's permission modes (`claude --permission-mode`); `manual` is reported back as `default`. */
+export const PERMISSION_MODES = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
-export const MODE_TITLE: Record<string, string> = { default: "DEFAULT", acceptEdits: "ACCEPT EDITS", plan: "PLAN", bypassPermissions: "BYPASS" };
+export const MODE_TITLE: Record<string, string> = {
+  default: "MANUAL", manual: "MANUAL", acceptEdits: "ACCEPT EDITS", plan: "PLAN", auto: "AUTO", dontAsk: "DON'T ASK", bypassPermissions: "BYPASS",
+};
+/** What each mode does, for the mode menu. */
+export const MODE_HINT: Record<string, string> = {
+  default: "asks before edits and commands",
+  acceptEdits: "edits files without asking, asks for commands",
+  plan: "plans only, changes nothing",
+  auto: "decides by itself what needs asking",
+  dontAsk: "never asks; what would need a yes is refused",
+  bypassPermissions: "runs everything without asking",
+};
 /** The next mode in the CLI's own Shift+Tab order. */
 export function nextMode(mode: string | null): PermissionMode {
   const order: PermissionMode[] = ["default", "acceptEdits", "plan"];

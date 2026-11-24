@@ -160,7 +160,17 @@ pub mod proto {
         )
     }
 
-    pub const PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "plan", "bypassPermissions"];
+    /// Claude Code's permission modes (`claude --permission-mode`; `default`
+    /// is the older name of `manual`).
+    pub const PERMISSION_MODES: &[&str] = &[
+        "default",
+        "manual",
+        "acceptEdits",
+        "plan",
+        "auto",
+        "dontAsk",
+        "bypassPermissions",
+    ];
 
     pub fn set_permission_mode(request_id: &str, mode: &str) -> Result<String, String> {
         if !PERMISSION_MODES.contains(&mode) {

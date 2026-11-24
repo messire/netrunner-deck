@@ -10,7 +10,7 @@ import { IMAGE_PASTE_KEY } from "../keys";
 import { debounceTrailing } from "../events";
 import { serverOf } from "../servers";
 import AskCard from "./AskCard";
-import { MODE_TITLE, agentStatus, nextMode, type AgentLive } from "../agent";
+import { MODE_HINT, MODE_TITLE, PERMISSION_MODES, agentStatus, type AgentLive } from "../agent";
 
 /**
  * Deck's own chat for a pane that runs Claude Code: the conversation is read
@@ -327,6 +327,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   const setAgent = (params: Record<string, unknown>) => api.agentCall(p.paneId, "set", params).catch((e) => setError(String(e)));
   const agentMode = () => live()?.permissionMode ?? "default";
   const [modelMenu, setModelMenu] = createSignal(false);
+  const [modeMenu, setModeMenu] = createSignal(false);
   const interrupt = () => api.agentCall(p.paneId, "interrupt").catch((e) => setError(String(e)));
   const answer = async (requestId: string, response: Record<string, unknown>, then?: "acceptEdits") => {
     try {
@@ -379,13 +380,22 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
         <span class={`micro right stat-${status()}`}>{status().toUpperCase()}{chat().pendingTools ? ` · ${chat().pendingTools} TOOL${chat().pendingTools > 1 ? "S" : ""} RUNNING` : ""}</span>
         <Show when={!headless() && hint().status}><button class={`mode mode-${mode().mode}`} onClick={cycleMode} title="Claude Code permission mode · click = Shift+Tab (cycle)">⏵⏵ {MODE_LABEL[mode().mode]}</button></Show>
         <Show when={headless()}>
-          <button class={`mode mode-${({ default: "default", acceptEdits: "accept-edits", plan: "plan", bypassPermissions: "bypass" } as Record<string, string>)[agentMode()] ?? "default"}`}
-            onClick={() => setAgent({ permission_mode: nextMode(agentMode()) })} title="permission mode · click to cycle (default → accept edits → plan)">⏵⏵ {MODE_TITLE[agentMode()] ?? agentMode().toUpperCase()}</button>
-          <button class="abtn model-pick" onClick={() => setModelMenu(!modelMenu())} title="model of this session">{(live()?.model ?? "MODEL").toUpperCase()} ▾</button>
+          <button class={`mode mode-${({ default: "default", acceptEdits: "accept-edits", plan: "plan", auto: "accept-edits", dontAsk: "plan", bypassPermissions: "bypass" } as Record<string, string>)[agentMode()] ?? "default"}`}
+            onClick={() => { setModelMenu(false); setModeMenu(!modeMenu()); }} title="permission mode of this session">⏵⏵ {MODE_TITLE[agentMode()] ?? agentMode().toUpperCase()} ▾</button>
+          <button class="abtn model-pick" onClick={() => { setModeMenu(false); setModelMenu(!modelMenu()); }} title="model of this session">{(live()?.model ?? "MODEL").toUpperCase()} ▾</button>
           <Show when={status() !== "idle"}><button class="abtn" onClick={interrupt} title="stop the agent (Esc)">■ STOP</button></Show>
         </Show>
         <Show when={p.onTerminal}>{(t) => <button class="abtn" title="raw terminal (prompts, menus, the CLI itself)" onClick={t()}>TERM</button>}</Show>
       </div>
+      <Show when={headless() && modeMenu()}>
+        <div class="model-pop mode-pop" onMouseLeave={() => setModeMenu(false)}>
+          <For each={PERMISSION_MODES}>{(m) => (
+            <div class={`slash-it ${m === agentMode() ? "cur" : ""}`} onClick={() => { setModeMenu(false); void setAgent({ permission_mode: m }); }}>
+              <span class="sn">{MODE_TITLE[m]}</span><span class="sd">{MODE_HINT[m]}</span>
+            </div>
+          )}</For>
+        </div>
+      </Show>
       <Show when={headless() && modelMenu()}>
         <div class="model-pop" onMouseLeave={() => setModelMenu(false)}>
           <For each={live()?.models ?? []} fallback={<div class="micro">the session has not listed its models yet</div>}>{(m) => (
