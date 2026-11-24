@@ -133,9 +133,9 @@ const fake = (() => {
     tabs: [{ tab_id: "w1:t1", workspace_id: "w1", number: 1, label: "scratch", focused: true, pane_count: 2, agent_status: "idle" }],
     panes: [
       { pane_id: "w1:p1", terminal_id: "t1", workspace_id: "w1", tab_id: "w1:t1", focused: true, cwd: "C:\\Temp\\scratch", agent: null, title: "pwsh", agent_status: "unknown" },
-      { pane_id: "w1:p2", terminal_id: "t2", workspace_id: "w1", tab_id: "w1:t1", focused: false, cwd: "C:\\Temp\\scratch", agent: "claude", agent_status: "idle" },
+      { pane_id: "w1:p2", terminal_id: "t2", workspace_id: "w1", tab_id: "w1:t1", focused: false, cwd: "C:\\Temp\\scratch", agent: "deck-claude", agent_status: "blocked" },
     ],
-    agents: [{ terminal_id: "t2", agent: "claude", agent_status: "idle", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p2", focused: false }],
+    agents: [{ terminal_id: "t2", agent: "deck-claude", agent_status: "blocked", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p2", focused: false }],
   };
   const treeOf = (server: unknown) => {
     const s = srv(server ?? "herdr");
@@ -143,9 +143,59 @@ const fake = (() => {
     if (s.status.state === "offline") throw new Error(s.status.error ?? "offline");
     return s.id === "herdr" ? tree() : s.id === "deck-server/try" ? trial : { workspaces: [], tabs: [], panes: [], agents: [] };
   };
+  // A headless Claude session (deck-server's `deck-server agent`) on the trial
+  // server's w1:p2: it asks a question, then wants to write a file, and
+  // answers each message with streamed text.
+  const agentLine = (msg: Record<string, unknown>) => ({ event: "deck.agent.event", data: { pane_id: "w1:p2", epoch: "fake", seq: ++agentSeq, msg } });
+  let agentSeq = 0;
+  const agentEmit = (msg: Record<string, unknown>) => emit("deck://agent", { server: "deck-server/try", pane_id: "w1:p2", line: agentLine(msg) });
+  const agentAsk = (id: string, tool: string, input: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    agentEmit({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: tool, input, tool_use_id: `tu-${id}`, ...extra } });
+  const agentSay = async (text: string) => {
+    agentEmit({ type: "stream_event", event: { type: "message_start" } });
+    agentEmit({ type: "stream_event", event: { type: "content_block_start", content_block: { type: "text" } } });
+    for (const word of text.split(/(?<= )/)) { await new Promise((r) => setTimeout(r, 60)); agentEmit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: word } } }); }
+  };
+  const agentStart = () => {
+    emit("deck://agent", { server: "deck-server/try", pane_id: "w1:p2", line: { id: "s", result: { pane_id: "w1:p2", epoch: "fake", connected: true, status: "blocked", session_id: "fake-session" } } });
+    agentEmit({ type: "control_response", response: { subtype: "success", request_id: "deck-init", response: {
+      commands: [{ name: "compact", description: "Clear history but keep a summary", argumentHint: "" }, { name: "review", description: "Review a pull request", argumentHint: "<pr>" }, { name: "init", description: "Create a CLAUDE.md", argumentHint: "" }],
+      models: [{ value: "default", displayName: "Default (recommended)", description: "Opus for complex tasks" }, { value: "sonnet", displayName: "Sonnet", description: "Fast for everyday work" }, { value: "haiku", displayName: "Haiku", description: "Fastest" }] } } });
+    agentEmit({ type: "system", subtype: "init", session_id: "fake-session", model: "claude-opus-5-5", permissionMode: "default" });
+    agentEmit({ type: "user", message: { role: "user", content: "pick a file and write hi into it" } });
+    void agentSay("I'll ask which file you want first. ").then(() => agentAsk("q1", "AskUserQuestion", { questions: [{ question: "Which file should I write into?", header: "File", multiSelect: false, options: [{ label: "a.txt", description: "next to the README" }, { label: "b.txt", description: "in the scratch folder" }] }] }));
+  };
+  const agentCall = async (method: string, params: Record<string, unknown>) => {
+    console.debug("[stand-in] agent", method, JSON.stringify(params).slice(0, 200));
+    if (method === "respond") {
+      const id = String(params.request_id);
+      agentEmit({ type: "deck_resolved", request_id: id });
+      if (id === "q1") {
+        await agentSay("Writing it now. ");
+        agentAsk("w1", "Write", { file_path: "C:\\Temp\\scratch\\a.txt", content: "hi\n" }, { description: "a.txt", permission_suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }] });
+      } else {
+        await agentSay("Done: the file has **hi** in it.");
+        agentEmit({ type: "result", subtype: "success", is_error: false, result: "Done" });
+      }
+    } else if (method === "send") {
+      agentEmit({ type: "user", message: { role: "user", content: String(params.text) } });
+      await agentSay("Here is a streamed answer to your message, word by word, the way the headless session writes it. ");
+      agentEmit({ type: "result", subtype: "success", is_error: false, result: "ok" });
+    } else if (method === "set") {
+      agentEmit({ type: "deck_settings", ...(params.permission_mode ? { permission_mode: params.permission_mode } : {}), ...("model" in params ? { model: params.model } : {}) });
+    } else if (method === "interrupt") {
+      agentEmit({ type: "result", subtype: "error_during_execution", is_error: true, result: "Interrupted by the user" });
+    }
+    return { queued: false };
+  };
   const invoke = async (cmd: string, args: Record<string, unknown>): Promise<unknown> => {
     await new Promise((r) => setTimeout(r, 30));
     switch (cmd) {
+      case "agent_watch": if (args.server === "deck-server/try" && args.paneId === "w1:p2") setTimeout(agentStart, 200); return null;
+      case "agent_unwatch": return null;
+      case "agent_call": return agentCall(String(args.method), (args.params ?? {}) as Record<string, unknown>);
+      case "transcript_read": return { session_id: args.sessionId, path: "", start: 0, end: 0, len: 0, lines: [] };
+      case "transcript_watch": case "transcript_mtimes": return cmd === "transcript_mtimes" ? {} : null;
       case "herdr_ping": return { version: "browser-fake", protocol: 0 };
       case "herdr_tree": return treeOf(legacy ? null : args.server);
       case "servers_list": case "servers_seen":

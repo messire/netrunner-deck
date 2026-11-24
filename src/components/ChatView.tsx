@@ -9,6 +9,8 @@ import { MODE_LABEL, cliMode, inputHint, menuOf, type CliMenu, type InputHint } 
 import { IMAGE_PASTE_KEY } from "../keys";
 import { debounceTrailing } from "../events";
 import { serverOf } from "../servers";
+import AskCard from "./AskCard";
+import { MODE_TITLE, agentStatus, nextMode, type AgentLive } from "../agent";
 
 /**
  * Deck's own chat for a pane that runs Claude Code: the conversation is read
@@ -17,6 +19,11 @@ import { serverOf } from "../servers";
  * terminal. Input goes to the pane through Herdr (`pane.send_text` + Enter).
  * The terminal view stays one click away for everything the transcript does
  * not carry (permission prompts, slash-command menus, the CLI's own UI).
+ *
+ * A headless pane (`agent`: Claude Code run by `deck-server agent`, see
+ * docs/adr/0003-headless-claude.md) has no terminal at all: input, images,
+ * interrupt, model and mode go through `deck.agent.*`, and its event stream
+ * adds the reply being written and the questions waiting for an answer.
  */
 const TAIL_BYTES = 2 * 1024 * 1024;
 
@@ -43,7 +50,9 @@ const clock = (ts: number) => {
   return d.toDateString() === new Date().toDateString() ? t : `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")} ${t}`;
 };
 
-export default function ChatView(p: { paneId: string; sessionId: string; tree?: Tree; outputTick?: number; harness?: HarnessRepo[]; onTerminal: () => void }) {
+export default function ChatView(p: { paneId: string; sessionId: string; tree?: Tree; outputTick?: number; harness?: HarnessRepo[]; onTerminal?: () => void; agent?: () => AgentLive | undefined }) {
+  const headless = () => !!p.agent;
+  const live = () => p.agent?.();
   // The chat is folded incrementally: only new transcript blocks are pushed,
   // and only touched items come back as new objects (the keyed <For> below
   // re-renders just those). Nothing keeps the raw blocks around.
@@ -84,11 +93,15 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   // `✻ 13s · done 23:54` after each answered turn; the open turn gets its footer once the agent stops.
   const footers = createMemo(() => turnFooters(chat().items));
   const pane = () => p.tree?.panes.find((x) => x.pane_id === p.paneId);
-  const status = () => p.tree?.agents.find((a) => a.pane_id === p.paneId)?.agent_status ?? pane()?.agent_status ?? "unknown";
+  const status = () => {
+    const a = live();
+    if (a) return agentStatus(a);
+    return p.tree?.agents.find((a) => a.pane_id === p.paneId)?.agent_status ?? pane()?.agent_status ?? "unknown";
+  };
   const header = () => {
     const x = pane();
     if (!x) return { title: p.paneId, where: "" };
-    const who = `${(x.display_agent ?? x.agent ?? "CLAUDE").toUpperCase()} · ${chat().title ?? x.label ?? x.title ?? ""}`;
+    const who = `${headless() ? "CLAUDE" : (x.display_agent ?? x.agent ?? "CLAUDE").toUpperCase()} · ${chat().title ?? x.label ?? x.title ?? ""}`;
     const ws = p.tree?.workspaces.find((w) => w.workspace_id === x.workspace_id)?.label ?? x.workspace_id;
     return { title: who, where: `${ws} · ${x.cwd ?? ""}` };
   };
@@ -96,6 +109,8 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   /** Read what the transcript has past `offset` (or its tail on first load). */
   const pull = (): Promise<void> => {
     if (loading) return loading;
+    // A headless session that has not said anything yet has no id or transcript.
+    if (!p.sessionId) return Promise.resolve();
     loading = (async () => {
       try {
         const first = offset === 0;
@@ -124,7 +139,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   });
   createEffect(on(() => p.sessionId, (id) => {
     offset = 0; dropBlobs(); builder = new ChatBuilder(); setChat(builder.state()); setTruncated(false); setError(null);
-    api.transcriptWatch(id, serverOf(p.paneId)).catch((e) => setError(String(e)));
+    if (id) api.transcriptWatch(id, serverOf(p.paneId)).catch((e) => setError(String(e)));
     void pull();
   }));
 
@@ -135,6 +150,16 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   const send = async () => {
     const text = draft().trim();
     if (!text && !pasted().length) return;
+    if (headless()) {
+      const images = pasted().map((src) => /^data:([^;,]+);base64,(.*)$/s.exec(src)).filter((m): m is RegExpExecArray => !!m).map((m) => ({ media_type: m[1], data: m[2] }));
+      try {
+        await api.agentCall(p.paneId, "send", { text, images });
+        lastSent = text;
+        setDraft(""); setPasted([]); histAt = -1; histDraft = "";
+        input.style.height = "";
+      } catch (e) { setError(String(e)); }
+      return;
+    }
     try {
       if (text) await api.sendText(p.paneId, text);
       await api.sendKeys(p.paneId, ["enter"]);
@@ -150,6 +175,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   // so only the last pasted image can be dropped — like in the terminal.
   const dropLastImage = () => {
     if (!pasted().length) return;
+    if (headless()) { setPasted((l) => l.slice(0, -1)); return; }
     api.sendKeys(p.paneId, ["backspace"]).then(() => setPasted((l) => l.slice(0, -1)), (err) => setError(String(err)));
   };
   // ↑/↓ walk the session's own prompts (newest first) when the caret is on the
@@ -178,7 +204,13 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   // `/…` at the start of the draft: a popup over the harness (skills and
   // commands of this pane's repository and the personal ones) and the CLI's
   // built-ins; ↑/↓ pick, Tab/Enter complete to `/name `, Esc closes.
-  const slashAll = createMemo(() => slashItems(p.harness ?? [], pane()?.cwd));
+  const slashAll = createMemo(() => {
+    const own = live()?.commands ?? [];
+    if (!headless() || !own.length) return slashItems(p.harness ?? [], pane()?.cwd);
+    // Headless: the session lists what it takes (its skills, commands and the built-ins that work without a terminal).
+    const known = new Map(slashItems(p.harness ?? [], pane()?.cwd).filter((x) => x.kind !== "builtin").map((x) => [x.name, x]));
+    return own.map((c) => known.get(c.name) ?? { name: c.name, kind: "builtin" as const, description: c.description, source: "claude code", args: c.argumentHint || undefined });
+  });
   const slashQ = () => slashQuery(draft());
   const slash = createMemo(() => { const q = slashQ(); return q === null ? [] : slashMatches(slashAll(), q); });
   const [slashAt, setSlashAt] = createSignal(0);
@@ -202,7 +234,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
     if (e.key === "Tab" && !e.shiftKey && takeGhost()) { e.preventDefault(); return; }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
     else if (e.key === "Backspace" && !draft() && pasted().length) { e.preventDefault(); dropLastImage(); }
-    else if (e.key === "Escape") { void api.sendKeys(p.paneId, ["escape"]).catch(() => {}); }
+    else if (e.key === "Escape") { void (headless() ? api.agentCall(p.paneId, "interrupt") : api.sendKeys(p.paneId, ["escape"])).catch(() => {}); }
   };
   // An image on the clipboard cannot travel as text: forward the CLI's own
   // image-paste key (Alt+V on Windows, Ctrl+V elsewhere) to the pane and
@@ -229,7 +261,8 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
     if (e.clipboardData?.getData("text/plain")) return; // text wins; the image is a preview of it
     e.preventDefault();
     const file = files[0];
-    api.sendKeys(p.paneId, [IMAGE_PASTE_KEY]).then(() => {
+    const keep = (): Promise<unknown> => (headless() ? Promise.resolve() : api.sendKeys(p.paneId, [IMAGE_PASTE_KEY]));
+    keep().then(() => {
       const reader = new FileReader();
       reader.onload = () => setPasted((l) => l.concat(String(reader.result)));
       reader.readAsDataURL(file);
@@ -259,6 +292,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   const [menu, setMenu] = createSignal<CliMenu | null>(null);
   const [choosing, setChoosing] = createSignal(false);
   const readHint = debounceTrailing(() => {
+    if (headless()) return; // no terminal to read
     const id = p.paneId;
     api.paneRead(id, 40).then(({ read }) => {
       if (disposed || id !== p.paneId) return;
@@ -287,6 +321,32 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   // Permission mode from the CLI's status line; the chip in the header cycles it (Shift+Tab in the CLI).
   const mode = createMemo(() => cliMode(hint().status));
   const cycleMode = () => api.sendKeys(p.paneId, ["shift+tab"]).then(() => setTimeout(readHint, 400), (e) => setError(String(e)));
+  // Headless: the session's own mode and model, changed through `deck.agent.set`.
+  const setAgent = (params: Record<string, unknown>) => api.agentCall(p.paneId, "set", params).catch((e) => setError(String(e)));
+  const agentMode = () => live()?.permissionMode ?? "default";
+  const [modelMenu, setModelMenu] = createSignal(false);
+  const interrupt = () => api.agentCall(p.paneId, "interrupt").catch((e) => setError(String(e)));
+  const answer = async (requestId: string, response: Record<string, unknown>, then?: "acceptEdits") => {
+    try {
+      await api.agentCall(p.paneId, "respond", { request_id: requestId, response });
+      if (then) await setAgent({ permission_mode: then });
+    } catch (e) {
+      if (!String(e).includes("already_answered") && !String(e).includes("is not open")) setError(String(e));
+    }
+  };
+  // The reply being written, until the transcript has it.
+  const streaming = createMemo(() => {
+    const text = (live()?.streaming ?? "").trim();
+    if (!text) return "";
+    const items = chat().items;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === "user") break;
+      if (it.kind === "assistant" && it.text.trim().startsWith(text.slice(0, 200))) return "";
+    }
+    return text;
+  });
+  const notes = createMemo(() => (live()?.notes ?? []).slice(-3));
   const takeGhost = () => { const g = ghost(); if (!g) return false; setDraft(g); queueMicrotask(grow); return true; };
 
   // Background panel: the transcript's full list of running agents/shells
@@ -315,13 +375,28 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
       <div class="th">
         <span>◆ {header().title}</span><span class="micro">{header().where}</span>
         <span class={`micro right stat-${status()}`}>{status().toUpperCase()}{chat().pendingTools ? ` · ${chat().pendingTools} TOOL${chat().pendingTools > 1 ? "S" : ""} RUNNING` : ""}</span>
-        <Show when={hint().status}><button class={`mode mode-${mode().mode}`} onClick={cycleMode} title="Claude Code permission mode · click = Shift+Tab (cycle)">⏵⏵ {MODE_LABEL[mode().mode]}</button></Show>
-        <button class="abtn" title="raw terminal (prompts, menus, the CLI itself)" onClick={p.onTerminal}>TERM</button>
+        <Show when={!headless() && hint().status}><button class={`mode mode-${mode().mode}`} onClick={cycleMode} title="Claude Code permission mode · click = Shift+Tab (cycle)">⏵⏵ {MODE_LABEL[mode().mode]}</button></Show>
+        <Show when={headless()}>
+          <button class={`mode mode-${({ default: "default", acceptEdits: "accept-edits", plan: "plan", bypassPermissions: "bypass" } as Record<string, string>)[agentMode()] ?? "default"}`}
+            onClick={() => setAgent({ permission_mode: nextMode(agentMode()) })} title="permission mode · click to cycle (default → accept edits → plan)">⏵⏵ {MODE_TITLE[agentMode()] ?? agentMode().toUpperCase()}</button>
+          <button class="abtn model-pick" onClick={() => setModelMenu(!modelMenu())} title="model of this session">{(live()?.model ?? "MODEL").toUpperCase()} ▾</button>
+          <Show when={status() !== "idle"}><button class="abtn" onClick={interrupt} title="stop the agent (Esc)">■ STOP</button></Show>
+        </Show>
+        <Show when={p.onTerminal}>{(t) => <button class="abtn" title="raw terminal (prompts, menus, the CLI itself)" onClick={t()}>TERM</button>}</Show>
       </div>
+      <Show when={headless() && modelMenu()}>
+        <div class="model-pop" onMouseLeave={() => setModelMenu(false)}>
+          <For each={live()?.models ?? []} fallback={<div class="micro">the session has not listed its models yet</div>}>{(m) => (
+            <div class="slash-it" onClick={() => { setModelMenu(false); void setAgent({ model: m.value === "default" ? null : m.value }); }}>
+              <span class="sn">{m.displayName}</span><span class="sd">{m.description}</span>
+            </div>
+          )}</For>
+        </div>
+      </Show>
       <div class="pane-body">
         <div class="chat-log" ref={scroller} onScroll={onScroll}>
           <Show when={truncated()}><div class="chat-note">· older messages are in the transcript, not loaded ·</div></Show>
-          <Show when={!chat().items.length && !error()}><div class="chat-note">· new session — nothing said yet ·</div></Show>
+          <Show when={!chat().items.length && !error() && !streaming() && !live()?.asks.length}><div class="chat-note">· new session — nothing said yet ·</div></Show>
           <For each={chat().items}>{(it, i) => (
             <>
               <Item it={it} />
@@ -332,12 +407,27 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
               )}</Show>
             </>
           )}</For>
+          <Show when={streaming()}>{(text) => (
+            <div class="msg agent live"><div class="bub">
+              <div class="who">CLAUDE <span class="when">{status() === "idle" ? "" : "writing…"}</span></div>
+              <div class="mdtext" innerHTML={md(text())} />
+            </div></div>
+          )}</Show>
           <Show when={since() !== null}>
             <div class="chat-working"><Think size={28} /> {hint().activity || `${verb()}…`} <span class="mono">({elapsed()}{chat().pendingTools ? ` · ${chat().pendingTools} tool${chat().pendingTools > 1 ? "s" : ""} running` : ""})</span></div>
           </Show>
-          <Show when={menu()} fallback={
-            <Show when={status() === "blocked"}>
-              <div class="chat-blocked" onClick={p.onTerminal}>▲ THE AGENT IS WAITING FOR YOU — a prompt or a question is on the terminal · click to open TERM</div>
+          <Show when={headless()}>
+            <For each={live()?.asks ?? []}>{(a) => <AskCard ask={a} md={md} answer={(r, then) => answer(a.requestId, r, then)} />}</For>
+            <Show when={live()?.host.state === "exited"}>
+              <div class="chat-note err">· Claude stopped ({live()?.host.detail ?? "exited"}) · starting it again ·</div>
+            </Show>
+            <For each={notes()}>{(n) => <div class={`chat-note ${n.kind === "error" ? "err" : ""}`}>{n.text}</div>}</For>
+            <Show when={live()?.linkError}>{(e) => <div class="chat-note err">· no live link to the session: {e()} · reconnecting ·</div>}</Show>
+            <Show when={!live()}><div class="chat-note">· connecting to the session ·</div></Show>
+          </Show>
+          <Show when={!headless() && menu()} fallback={
+            <Show when={!headless() && status() === "blocked"}>
+              <div class="chat-blocked" onClick={() => p.onTerminal?.()}>▲ THE AGENT IS WAITING FOR YOU — a prompt or a question is on the terminal · click to open TERM</div>
             </Show>
           }>
             {(m) => (
@@ -348,7 +438,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
                     <span class="n">{o.n}</span><span class="lb">{o.label}</span>
                   </button>
                 )}</For>
-                <div class="cm-foot"><span>click an option · it is chosen in the CLI</span><span class="sp" /><button class="abtn" onClick={p.onTerminal}>TERM</button></div>
+                <div class="cm-foot"><span>click an option · it is chosen in the CLI</span><span class="sp" /><button class="abtn" onClick={() => p.onTerminal?.()}>TERM</button></div>
               </div>
             )}
           </Show>
@@ -366,7 +456,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
         </Show>
         <div class="chat-input">
           <span class="chat-prompt">❯</span>
-          <Show when={pasted().length}><span class="chat-chip" title="in the agent's input; Enter sends">{pasted().map((_, i) => `[Image #${i + 1}]`).join(" ")}</span></Show>
+          <Show when={pasted().length}><span class="chat-chip" title={headless() ? "sent with the message" : "in the agent's input; Enter sends"}>{pasted().map((_, i) => `[Image #${i + 1}]`).join(" ")}</span></Show>
           <div class="chat-field">
             <Show when={slashOpen()}>
               <div class="slash-pop">
@@ -393,7 +483,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
           </div>
         </div>
         <div class="chat-hints">
-          <span><b>Enter</b> send · <b>Shift+Enter</b> newline · <b>↑↓</b> history · <b>Tab</b> take suggestion · <b>Esc</b> interrupt · <b>Ctrl+V</b> image</span>
+          <span><b>Enter</b> send · <b>Shift+Enter</b> newline · <b>↑↓</b> history · <Show when={!headless()}><b>Tab</b> take suggestion · </Show><b>Esc</b> {headless() ? "stop" : "interrupt"} · <b>Ctrl+V</b> image</span>
           <span class="sp" />
           <Show when={mode().rest}>{(st) => <span class="cli-status" title="the CLI's status line">{st()}</span>}</Show>
         </div>
@@ -425,8 +515,8 @@ function Item(p: { it: ChatItem }) {
       );
     case "assistant":
       return (
-        <div class="msg agent"><div class="bub">
-          <div class="who">CLAUDE <span class="when">{clock(it.ts)}</span></div>
+        <div class={`msg agent${it.summary ? " summary" : ""}`}><div class="bub">
+          <div class="who">CLAUDE <span class="when">{clock(it.ts)}</span><Show when={it.summary}><span class="tag">· summary</span></Show></div>
           <div class="mdtext" innerHTML={md(it.text)} />
         </div></div>
       );

@@ -325,6 +325,8 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .msg.user .bub{--bubb:var(--yel);--bub:#1a1808}
 .msg .who{font-size:11.5px;letter-spacing:1.5px;font-weight:700;color:var(--bubb);margin-bottom:2px}
 .msg .who .when{color:var(--mut);font:11px var(--fm);margin-left:8px;letter-spacing:0}
+.msg .who .tag{color:var(--mut);font:11px var(--fm);margin-left:6px;letter-spacing:0;font-weight:400}
+.msg.agent.summary .mdtext{color:var(--mut)}
 .utext{margin:0;white-space:pre-wrap;font:inherit}
 .mdtext>:first-child{margin-top:0}.mdtext>:last-child{margin-bottom:0}
 .mdtext p,.mdtext li{white-space:pre-wrap}
@@ -425,6 +427,26 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .dlgbox.newtab .cm-opt .hint{display:block;color:var(--mut);font-size:12px}
 .dlgbox.newtab .arc-q{margin-top:6px}
 .dlgbox.newtab .dlga{align-items:center}
+/* Headless Claude: questions as cards (AskCard), the reply being written, model menu. */
+.chat-menu.ask{max-width:min(860px,92%)}
+.chat-menu.ask .cm-opt .hint{display:block;color:var(--mut);font-size:12.5px}
+.ask-q{display:flex;flex-direction:column;gap:5px;margin-bottom:6px}
+.ask-qt{font:14.5px/1.4 var(--ft);color:var(--txt);margin-bottom:2px}
+.ask-tag{font:600 11px var(--fh);letter-spacing:1px;color:var(--yel);border:1px solid var(--yel);padding:0 6px;margin-right:8px}
+.ask-head{font:14px var(--ft);color:var(--txt)}
+.ask-body{max-height:260px;overflow:auto;margin:0}
+.ask-plan{max-height:46vh;overflow:auto;border-left:2px solid var(--cy);padding-left:10px}
+.ask-own{background:rgba(0,0,0,.3);border:1px solid var(--line);color:var(--txt);font:13.5px var(--ft);padding:5px 8px;outline:none}
+.ask-own:focus{border-color:var(--org)}
+.chat-menu .cm-foot .abtn{margin-left:0}
+.abtn.hot{border-color:var(--org);color:var(--org)}
+.abtn.hot:hover{background:rgba(255,166,43,.12)}
+.msg.agent.live .bub{opacity:.85}
+.msg.agent.live .when{color:var(--grn)}
+
+.model-pop{position:absolute;right:12px;top:34px;min-width:320px;max-height:50vh;overflow:auto;background:var(--pan);border:1px solid var(--cy);box-shadow:0 0 24px rgba(0,0,0,.6);z-index:30}
+.model-pop .slash-it{grid-template-columns:auto 1fr}
+.model-pop .micro{padding:8px 12px}
 .chat-blocked{margin:4px 0;padding:6px 10px;border:1px solid var(--org);color:var(--org);font-size:14px;letter-spacing:1px;cursor:pointer;background:rgba(255,166,43,.08)}
 .chat-input{display:flex;gap:8px;align-items:flex-start;padding:6px 12px 8px 14px;border-top:1px solid var(--line)}
 .chat-prompt{color:var(--red);font-weight:700;padding-top:4px}

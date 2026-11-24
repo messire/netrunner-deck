@@ -3,7 +3,9 @@
  * items. Pure: the Rust side hands over raw lines, this module decides what
  * they mean. One line per event; the ones that matter for a conversation:
  *   user      message.content: string | [{text}|{image}|{tool_result}]
- *   assistant message.content: [{text}|{thinking}|{tool_use}]  (one block per line)
+ *   assistant message.content: [{text}|{thinking}|{tool_use}]  (one block per line;
+ *             `thinking` carries the API's thinking summary, which the CLI
+ *             shows inline as a message marked "· summary")
  *   system    subtype + content (away_summary, …)
  *   ai-title  the session's title
  * Everything else (api-request blobs, bookkeeping) is ignored. Sidechain
@@ -12,7 +14,7 @@
 export type Block =
   | { kind: "user"; uuid: string; ts: number; text: string; images: string[] }
   | { kind: "compact"; uuid: string; ts: number; text: string }
-  | { kind: "assistant"; uuid: string; ts: number; msgId: string; text: string }
+  | { kind: "assistant"; uuid: string; ts: number; msgId: string; text: string; summary?: boolean }
   | { kind: "tool_use"; uuid: string; ts: number; msgId: string; id: string; name: string; input: unknown }
   | { kind: "tool_result"; uuid: string; ts: number; toolUseId: string; text: string; isError: boolean }
   | { kind: "system"; uuid: string; ts: number; subtype: string; text: string }
@@ -113,6 +115,7 @@ export function parseLine(line: string): Block[] {
       const p = rec(part);
       if (!p) continue;
       if (p.type === "text") { const text = str(p.text); if (text.trim()) out.push({ kind: "assistant", uuid, ts, msgId, text }); }
+      else if (p.type === "thinking") { const text = str(p.thinking).trim(); if (text) out.push({ kind: "assistant", uuid, ts, msgId, text, summary: true }); }
       else if (p.type === "tool_use") out.push({ kind: "tool_use", uuid, ts, msgId, id: str(p.id), name: str(p.name), input: p.input });
     }
     return out;
@@ -126,7 +129,7 @@ export interface ToolCall { id: string; name: string; summary: string; input: un
 export type ChatItem =
   | { kind: "user"; key: string; ts: number; text: string; images: string[] }
   | { kind: "compact"; key: string; ts: number; text: string }
-  | { kind: "assistant"; key: string; ts: number; text: string }
+  | { kind: "assistant"; key: string; ts: number; text: string; msgId: string; summary: boolean }
   | { kind: "tools"; key: string; ts: number; calls: ToolCall[] }
   | { kind: "system"; key: string; ts: number; subtype: string; text: string };
 
@@ -180,9 +183,12 @@ export class ChatBuilder {
         case "compact": this.items.push({ kind: "compact", key: b.uuid || `c${b.ts}`, ts: b.ts, text: b.text }); break;
         case "system": this.items.push({ kind: "system", key: b.uuid || `s${b.ts}`, ts: b.ts, subtype: b.subtype, text: b.text }); break;
         case "assistant":
-          if (last?.kind === "assistant" && last.key === b.msgId) { last.text += (last.text.endsWith("\n") ? "" : "\n\n") + b.text; this.dirty.add(lastIdx); }
-          else this.items.push({ kind: "assistant", key: b.msgId || b.uuid, ts: b.ts, text: b.text });
+        {
+          const summary = b.summary === true;
+          if (last?.kind === "assistant" && b.msgId && last.msgId === b.msgId && last.summary === summary) { last.text += (last.text.endsWith("\n") ? "" : "\n\n") + b.text; this.dirty.add(lastIdx); }
+          else this.items.push({ kind: "assistant", key: summary ? `th:${b.uuid || b.msgId}` : b.msgId || b.uuid, ts: b.ts, text: b.text, msgId: b.msgId, summary });
           break;
+        }
         case "tool_use": {
           const call: ToolCall = { id: b.id, name: b.name, summary: toolSummary(b.name, b.input), input: b.input, ts: b.ts };
           this.byTool.set(b.id, call);
