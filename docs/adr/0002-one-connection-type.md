@@ -15,10 +15,14 @@ There is no direct pipe/socket connection and no second transport.
 * Deck (`src-tauri/src/endpoint.rs`, `bridge.rs`) keeps one bridge per
   machine. The address says which machine and which socket:
 
-| address | bridge |
+| address (`machine:socket`) | bridge |
 |---|---|
-| `C:\…\herdr.sock` (shown as `\\.\pipe\…`), `/…/herdr.sock` | the bridge code running inside Deck (two in-memory pipes in place of stdio) |
-| `ssh://[user@]host[:port]/abs/path/herdr.sock` | `ssh host deck-server bridge` |
+| `local:<socket path>` | the bridge code running inside Deck (two in-memory pipes in place of stdio) |
+| `user@host[:port]:/abs/path/herdr.sock` | `ssh host deck-server bridge` |
+
+Every address is shown in that one shape. Typing just `user@host` lists the
+servers there; older forms (a bare path, `\\.\pipe\…`, `ssh://…`) are still
+read.
 
 Above `endpoint.rs` nothing differs: the same runtime, connection slots,
 deadlines, event pump, server registry, SERVERS row and chat view.

@@ -120,7 +120,7 @@ pub fn place_of_remote(host: &SshHost, socket: &str) -> Place {
     let id = match (&app, &session) {
         (Some(a), Some(s)) => format!("{key}/{a}/{s}"),
         (Some(a), None) => format!("{key}/{a}"),
-        _ => format!("ssh://{key}{socket}"),
+        _ => format!("{key}:{socket}"),
     };
     Place {
         id,
@@ -999,7 +999,7 @@ mod tests {
         assert_eq!(q.id, "dev@build-box.example.com/herdr/try");
         assert_eq!(default_name(&q), "herdr · try @ dev@build-box.example.com");
         let r = place_of_remote(&host, "/tmp/odd.sock");
-        assert_eq!(r.id, "ssh://dev@build-box.example.com/tmp/odd.sock");
+        assert_eq!(r.id, "dev@build-box.example.com:/tmp/odd.sock");
         assert_eq!(r.app, None);
     }
 
@@ -1039,7 +1039,7 @@ mod tests {
         assert_eq!(p.servers[0].endpoint(), Some(local));
         assert_eq!(
             p.servers[1].socket,
-            "ssh://u@h/home/u/.config/deck-server/herdr.sock"
+            "u@h:/home/u/.config/deck-server/herdr.sock"
         );
         assert_eq!(p.servers[1].endpoint(), Some(remote));
         assert_eq!(p.remote_hosts(), vec![Endpoint::parse_host("u@h").unwrap()]);

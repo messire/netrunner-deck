@@ -36,6 +36,9 @@ const BRIDGE_RETRY: Duration = Duration::from_secs(10);
 /// One remote listing of server sockets (discovery).
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// The machine part of a local address.
+const LOCAL: &str = "local:";
+
 /// A connection to a server: a channel of its machine's bridge.
 pub type Stream = crate::bridge::Channel;
 
@@ -110,6 +113,21 @@ impl Endpoint {
             let socket = path.filter(|p| p.len() > 1)?;
             return Some(Endpoint::Ssh { host, socket });
         }
+        if let Some(path) = t.strip_prefix(LOCAL) {
+            return (!path.is_empty()).then(|| Endpoint::Local(PathBuf::from(path)));
+        }
+        // `user@host[:port]:/abs/path`, as [`Endpoint::address`] writes it. A
+        // one-letter machine is a Windows drive (`C:/…`), not a host.
+        if let Some(i) = t.find(":/") {
+            let (machine, socket) = (&t[..i], &t[i + 1..]);
+            if machine.len() > 1 && !machine.contains(['\\', '/']) && socket.len() > 1 {
+                let (host, _) = split_host_path(machine)?;
+                return Some(Endpoint::Ssh {
+                    host,
+                    socket: socket.to_string(),
+                });
+            }
+        }
         let t = t
             .strip_prefix(r"\\.\pipe\")
             .or_else(|| t.strip_prefix(r"\\?\pipe\"))
@@ -134,19 +152,14 @@ impl Endpoint {
         }
     }
 
-    /// The address as shown and stored: the pipe name / socket path, or the
-    /// `ssh://` URL.
+    /// The address as shown: `<machine>:<socket path>`, the same shape for
+    /// every server (`local:C:\\…\\herdr.sock`, `user@host:/…/herdr.sock`),
+    /// since every server is reached the same way, through its machine's
+    /// bridge. [`Endpoint::parse`] reads it back.
     pub fn address(&self) -> String {
         match self {
-            Endpoint::Local(path) => {
-                let display = path.to_string_lossy();
-                if cfg!(windows) {
-                    format!(r"\\.\pipe\{display}")
-                } else {
-                    display.into_owned()
-                }
-            }
-            Endpoint::Ssh { host, socket } => format!("ssh://{}{}", host.key(), socket),
+            Endpoint::Local(path) => format!("{LOCAL}{}", path.to_string_lossy()),
+            Endpoint::Ssh { host, socket } => format!("{}:{socket}", host.key()),
         }
     }
 
@@ -479,8 +492,9 @@ mod tests {
         );
         assert_eq!(
             e.address(),
-            "ssh://dev@build-box.example.com/home/dev/.config/deck-server/herdr.sock"
+            "dev@build-box.example.com:/home/dev/.config/deck-server/herdr.sock"
         );
+        assert_eq!(Endpoint::parse(&e.address()), Some(e.clone()));
         assert!(e.is_remote());
         assert_eq!(e.local_path(), None);
         let p = Endpoint::parse("ssh://box:2222/s.sock").unwrap();
@@ -491,9 +505,19 @@ mod tests {
                 socket: "/s.sock".into()
             }
         );
-        assert_eq!(p.address(), "ssh://box:2222/s.sock");
+        assert_eq!(p.address(), "box:2222:/s.sock");
+        assert_eq!(Endpoint::parse(&p.address()), Some(p.clone()));
         let v6 = Endpoint::parse("ssh://u@[fe80::1]:22/s").unwrap();
-        assert_eq!(v6.address(), "ssh://u@[fe80::1]:22/s");
+        assert_eq!(v6.address(), "u@[fe80::1]:22:/s");
+        assert_eq!(Endpoint::parse(&v6.address()), Some(v6.clone()));
+        // A local address has the same shape; a drive letter is no host.
+        let l = Endpoint::Local(PathBuf::from(r"C:\x\herdr.sock"));
+        assert_eq!(l.address(), r"local:C:\x\herdr.sock");
+        assert_eq!(Endpoint::parse(&l.address()), Some(l.clone()));
+        assert_eq!(
+            Endpoint::parse("C:/x/herdr.sock"),
+            Some(Endpoint::Local(PathBuf::from("C:/x/herdr.sock")))
+        );
     }
 
     #[test]
