@@ -2,6 +2,12 @@
 
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
+## [0.7.0] — 2026-11-25
+- A new deck-server tab opens as a chat at once (it showed the agent's terminal until the tree caught up).
+- Permission modes: bypass can be switched on; a mode or model change Claude refuses shows in the chat; modes are no longer checked against a built-in list, and after a server update a tab's agent replaces itself with the new binary on the same conversation.
+- OPEN REPOSITORY on a server machine: lists the folders Claude Code knows there (not this PC's); a typed folder is always inside the server user's home (`repos`, `/repos`, `~/repos` → `<home>/repos`), the resolved path shows as you type, a missing folder is offered to be created ("Create folder …? CREATE · OPEN"); errors stay in the dialog.
+- An empty chat says which machine and folder Claude works in. Errors name the server instead of "herdr".
+
 ## [0.6.0] — 2026-11-24
 - deck-server: every pane is a Claude chat from the start. The server spawns each pane (default space, new space, tab, split, opened repository or worktree, restore after a restart) as its own `deck-server agent`, with no shell and nothing typed; Deck's typing path for deck-server is gone. See docs/adr/0004-chat-only-panes-and-accounts.md.
 - ARCHIVE sees headless sessions: their Claude session id is in the tree (`agent_session`) and in the server's session snapshot; restore opens a tab and resumes the conversation in it (`deck.agent.resume`).
