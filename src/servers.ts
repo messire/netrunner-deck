@@ -111,7 +111,11 @@ export function hintOf(error: string | null | undefined): string | null {
     return "The server runs as administrator. Start it with --allow-unelevated-clients or set [server] allow_unelevated_clients.";
   if (/not reachable|os error 2|cannot find|no such file|is `herdr server` running/i.test(error))
     return "Nothing answers at this address. Start the server, or check the path.";
-  if (/^ssh |ssh bridge|publickey/i.test(error)) return "SSH could not reach the machine. Check that `ssh user@host` works without a password prompt (key or agent).";
+  if (/deck-server is not installed/i.test(error))
+    return "Deck reaches every server through deck-server bridge, and no deck-server was found next to Deck, in ~/.local/bin or on PATH.";
+  if (/virus or potentially unwanted/i.test(error))
+    return "Windows Defender blocks deck-server.exe, which Deck needs to reach servers. Allow it in Defender.";
+  if (/bridge on |^ssh |publickey/i.test(error)) return "SSH could not reach the machine. Check that `ssh user@host` works without a password prompt (key or agent).";
   if (/timed out/i.test(error)) return "The server did not answer in time. It may be busy or hung.";
   return null;
 }
