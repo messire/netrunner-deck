@@ -504,7 +504,6 @@ pub(crate) fn run(args: &[String]) -> i32 {
     });
     println!("Claude Code runs here without a terminal; Netrunner Deck shows this pane as a chat.");
     println!("session {session_id}");
-    let _ = session_id;
     for task in [keep_events_linked, keep_inbox_linked] {
         let host = Arc::clone(&host);
         std::thread::spawn(move || task(host));
