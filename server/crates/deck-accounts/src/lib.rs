@@ -1001,6 +1001,50 @@ pub fn known_folders(paths: &Paths) -> Vec<Value> {
         .collect()
 }
 
+/// `~` and `~/…` against the user's home folder.
+pub fn expand_home(path: &str) -> PathBuf {
+    let home = || {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from)
+    };
+    match path.strip_prefix('~') {
+        Some("") => home().unwrap_or_else(|| PathBuf::from(path)),
+        Some(rest) if rest.starts_with(['/', '\\']) => home()
+            .map(|h| h.join(&rest[1..]))
+            .unwrap_or_else(|| PathBuf::from(path)),
+        _ => PathBuf::from(path),
+    }
+}
+
+/// What is at `path` on this machine: `{path, exists, dir}` (`path` with
+/// `~` expanded), for Deck's OPEN REPOSITORY before it opens a space there.
+pub fn folder_state(path: &str) -> Result<Value> {
+    if path.trim().is_empty() {
+        return Err("a path is needed".into());
+    }
+    let p = expand_home(path.trim());
+    let meta = std::fs::metadata(&p).ok();
+    Ok(json!({
+        "path": p.to_string_lossy(),
+        "exists": meta.is_some(),
+        "dir": meta.is_some_and(|m| m.is_dir()),
+    }))
+}
+
+/// Creates the folder (and its parents) on this machine; its state after.
+pub fn make_folder(path: &str) -> Result<Value> {
+    if path.trim().is_empty() {
+        return Err("a path is needed".into());
+    }
+    let p = expand_home(path.trim());
+    if !p.is_absolute() {
+        return Err(format!("{} is not an absolute path", p.display()));
+    }
+    std::fs::create_dir_all(&p).map_err(|e| format!("cannot create {}: {e}", p.display()))?;
+    folder_state(&p.to_string_lossy())
+}
+
 /// The authorize URL for a pasted-code sign-in with a Claude subscription.
 pub fn authorize_url(challenge: &str, state: &str) -> String {
     let params = [

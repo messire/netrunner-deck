@@ -283,6 +283,13 @@ const fake = (() => {
         return new URLSearchParams(location.search).has("update")
           ? { version: "9.9.9", current: "0.1.0", notes: "browser stand-in", date: null } : null;
       case "update_install": await new Promise((r) => setTimeout(r, 1500)); return null;
+      case "fs_call": {
+        const path = String(args.path);
+        const made = ((window as any).__deckMade ??= new Set<string>()) as Set<string>;
+        if (args.method === "mkdir") made.add(path);
+        const exists = made.has(path) || !/missing|repos$/.test(path);
+        return { path, exists, dir: exists };
+      }
       case "repos_list": return { folders: [{ name: "atlas", root: "/home/me/work/atlas", git: true }, { name: "notes", root: "/home/me/notes", git: false }] };
       // deck-server's `deck.accounts.*`; `?signin=1` starts with a machine that has no login.
       case "accounts_call": {

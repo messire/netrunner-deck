@@ -38,6 +38,21 @@ pub fn repos(app: &AppHandle, server: Option<&str>) -> Result<Value, String> {
     rt.repos_list().map_err(|e| e.to_string())
 }
 
+/// `deck.fs.stat` / `deck.fs.mkdir {path}` on `server`'s machine.
+pub fn fs(
+    app: &AppHandle,
+    server: Option<&str>,
+    method: &str,
+    path: &str,
+) -> Result<Value, String> {
+    if !matches!(method, "stat" | "mkdir") {
+        return Err(format!("unknown fs method {method}"));
+    }
+    let rt = crate::servers::runtime_for(app, server)?;
+    rt.fs_call(method, serde_json::json!({ "path": path }))
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

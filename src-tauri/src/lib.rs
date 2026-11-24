@@ -400,6 +400,17 @@ async fn repos_list(app: AppHandle, server: Option<String>) -> Result<Value, Str
     blocking(move || accounts::repos(&app, server.as_deref())).await
 }
 
+/// `deck.fs.stat` / `deck.fs.mkdir` for a path on `server`'s machine.
+#[tauri::command]
+async fn fs_call(
+    app: AppHandle,
+    server: Option<String>,
+    method: String,
+    path: String,
+) -> Result<Value, String> {
+    blocking(move || accounts::fs(&app, server.as_deref(), &method, &path)).await
+}
+
 // ---- headless Claude sessions (deck-server) ---------------------------------
 
 /// `deck.agent.<method>` (send, respond, interrupt, set, resume, restart, list) on `server`.
@@ -906,6 +917,7 @@ pub fn run() {
             update_install,
             accounts_call,
             repos_list,
+            fs_call,
             archive_list,
             archive_close,
             archive_restore,

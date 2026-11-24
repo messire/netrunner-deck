@@ -15,7 +15,10 @@
 //! * `deck.accounts.login.finish {login_id, code, activate?}` → the list
 //!   with `added` (the account's number);
 //! * `deck.repos.list` → `{folders: [{name, root, git}]}`: the folders
-//!   Claude Code knows on this machine, for Deck's OPEN REPOSITORY.
+//!   Claude Code knows on this machine, for Deck's OPEN REPOSITORY;
+//! * `deck.fs.stat {path}` → `{path, exists, dir}` and `deck.fs.mkdir {path}`
+//!   (creates it with its parents): OPEN REPOSITORY checks a typed path on
+//!   the server's machine and offers to create it.
 //!
 //! A switch or a sign-in that changed the machine's login asks every
 //! headless agent to start `claude` again at its next idle moment, so it
@@ -46,6 +49,27 @@ pub(crate) fn handle(line: &str) -> Option<String> {
             let folders = deck_accounts::known_folders(accounts().paths());
             return Some(json!({ "id": id, "result": { "folders": folders } }).to_string());
         }
+    }
+    if line.contains("deck.fs.") {
+        let request: Value = serde_json::from_str(line).ok()?;
+        let method = request.get("method")?.as_str()?.strip_prefix("deck.fs.")?;
+        let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let path = request
+            .pointer("/params/path")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let result = match method {
+            "stat" => deck_accounts::folder_state(path),
+            "mkdir" => deck_accounts::make_folder(path),
+            other => Err(format!("unknown method deck.fs.{other}")),
+        };
+        return Some(
+            match result {
+                Ok(r) => json!({ "id": id, "result": r }),
+                Err(m) => json!({ "id": id, "error": { "code": "fs_error", "message": m } }),
+            }
+            .to_string(),
+        );
     }
     if !line.contains(PREFIX) {
         return None;

@@ -354,6 +354,34 @@ fn a_second_sign_in_is_added_without_taking_over() {
 }
 
 #[test]
+fn folders_are_checked_and_created() {
+    let base = temp_dir();
+    let missing = base.join("a").join("b");
+    let state = folder_state(&missing.to_string_lossy()).unwrap();
+    assert_eq!(
+        (state["exists"].as_bool(), state["dir"].as_bool()),
+        (Some(false), Some(false))
+    );
+    let made = make_folder(&missing.to_string_lossy()).unwrap();
+    assert_eq!(
+        (made["exists"].as_bool(), made["dir"].as_bool()),
+        (Some(true), Some(true))
+    );
+    assert!(missing.is_dir());
+    let file = base.join("f.txt");
+    std::fs::write(&file, "x").unwrap();
+    let state = folder_state(&file.to_string_lossy()).unwrap();
+    assert_eq!(
+        (state["exists"].as_bool(), state["dir"].as_bool()),
+        (Some(true), Some(false))
+    );
+    assert!(make_folder("relative/path").is_err());
+    assert!(folder_state("  ").is_err());
+    assert_eq!(expand_home("/x"), PathBuf::from("/x"));
+    assert_ne!(expand_home("~/x"), PathBuf::from("~/x"));
+}
+
+#[test]
 fn known_folders_are_claudes_projects_that_exist() {
     let p = paths();
     let root = p.store.parent().unwrap().to_path_buf();

@@ -433,15 +433,17 @@ export default function App() {
     if (isRemote(target)) return (remoteFolders() ?? []).map((f) => ({ name: f.name, root: f.root, open: open.has(norm(f.root)) }));
     return (harness() ?? []).filter((r) => !r.personal && r.exists).map((r) => ({ name: r.name, root: r.root, open: open.has(norm(r.root)) }));
   };
+  /** Opens `root` on the box's server; a failure is thrown for the box to show. */
   const openRepo = async (root: string) => {
-    try {
-      const server = repoServer() ?? targetServer();
-      if (server === null) { showError("no server connected — ⚙ PREFERENCES"); return; }
-      const r = await api.repoOpen(root, undefined, server);
-      refetchTree();
-      newTabOrPick(r.workspace_id, r.pane_id);
-    } catch (e) { showError(`open repository: ${String(e)}`); }
+    const server = repoTarget();
+    if (server === null) throw new Error("no server connected — ⚙ PREFERENCES");
+    const r = await api.repoOpen(root, undefined, server);
+    refetchTree();
+    newTabOrPick(r.workspace_id, r.pane_id);
   };
+  /** A typed path on the box's server (deck-server only; a stock Herdr cannot say). */
+  const checkFolder = (path: string) => { const t = repoTarget(); return onDeckServer(t) ? api.folderState(t, path) : Promise.resolve(null); };
+  const createFolder = (path: string) => api.folderCreate(repoTarget(), path);
   // "+" on a repository row: a new linked worktree, then ask what to run in it.
   const [wtBox, setWtBox] = createSignal<{ repo: string; root: string; server: string | null } | null>(null);
   const createWorktree = async (root: string, branch: string, base: string, server: string | null) => {
@@ -852,7 +854,7 @@ export default function App() {
           onClose={closePrefs} />
       </Show>
       <Show when={newTabFor()}>{(t) => { const target = t(); return <NewTabBox initial={remembered("deck.newTabKind") ?? "claude"} onPick={(k) => openTab(target, k)} onClose={() => setNewTabFor(null)} />; }}</Show>
-      <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)}
+      <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} check={checkFolder} create={createFolder}
         where={repoServerName()} remote={isRemote(repoTarget())} loading={isRemote(repoTarget()) && remoteFolders() === null} /></Show>
       <Show when={wtBox()}>{(w) => { const t = w(); return <NewWorktreeBox repo={t.repo} onCreate={(b, base) => createWorktree(t.root, b, base, t.server)} onClose={() => setWtBox(null)} />; }}</Show>
       <Show when={ask()}>{(q) => <PromptBox title={q().title} value={q().value} placeholder="name" ok={q().ok} onClose={() => setAsk(null)} />}</Show>

@@ -332,6 +332,10 @@ export const api = {
   transcriptWatch: (sessionId: string | null, server?: string | null) => invoke<void>("transcript_watch", { server: srv(server), sessionId }),
   onTranscript: (cb: (e: { session_id: string; len: number }) => void): Promise<UnlistenFn> =>
     listen<{ session_id: string; len: number }>("deck://transcript", (e) => cb(e.payload)),
+  /** What is at `path` on `server`'s machine (`~` expanded there). */
+  folderState: (server: string | null, path: string) => invoke<{ path: string; exists: boolean; dir: boolean }>("fs_call", { server: srv(server), method: "stat", path }),
+  /** Create the folder (with parents) on `server`'s machine. */
+  folderCreate: (server: string | null, path: string) => invoke<{ path: string; exists: boolean; dir: boolean }>("fs_call", { server: srv(server), method: "mkdir", path }),
   /** Folders Claude Code knows on `server`'s machine (deck-server's `deck.repos.list`). */
   reposList: (server: string | null) => invoke<{ folders: { name: string; root: string; git: boolean }[] }>("repos_list", { server: srv(server) }),
   /** The accounts of `server`'s machine (deck-server keeps them; Deck only asks). */
