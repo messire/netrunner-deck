@@ -187,6 +187,12 @@ export default function App() {
   /** The server ACCOUNTS and the badge show: the selected session's, else where a new space would go. */
   const accountsServer = (): string | null => { const p = currentPane(); return p !== null ? serverOf(p) : targetServer(); };
   const accountsServerName = () => { const id = accountsServer(); return connected().find((s) => s.id === id)?.name ?? id ?? ""; };
+  /** The pane's machine has no login (its accounts say so), or Claude refused the one it has. */
+  const signInNeeded = (paneId: string) => {
+    const l = accounts();
+    const noLogin = !!l && l.managed !== false && l.signedIn === false && serverOf(paneId) === accountsServer();
+    return noLogin || !!agentOf(paneId)?.authRequired;
+  };
   const accountsKey = () => (servers() ? JSON.stringify([accountsServer(), onDeckServer(accountsServer())]) : false);
   const [accounts, { refetch: refetchAccounts, mutate: setAccounts }] = createResource<AccountList | undefined, string | false>(accountsKey, async (key, { value }) => {
     const [server, managed] = JSON.parse(String(key)) as [string | null, boolean];
@@ -779,13 +785,14 @@ export default function App() {
               </Show>
             }>
               <ChatView paneId={id()} sessionId={claudeSession(id()) ?? ""} tree={tree()} outputTick={outputTick()} harness={harness()} agent={() => agentOf(id())}
-                signIn={() => {
-                  // The machine has no login (its accounts say so), or Claude refused the one it has.
-                  const l = accounts();
-                  const noLogin = !!l && l.managed !== false && l.signedIn === false && serverOf(id()) === accountsServer();
-                  if (!noLogin && !agentOf(id())?.authRequired) return null;
-                  return <SignInCard server={serverOf(id()) || null} where={accountsServerName()} activate onDone={(list) => { setAccounts(list); refetchAccounts(); }} />;
-                }} />
+                signIn={() => (
+                  // Shown while `signInNeeded` holds; the card itself is created once,
+                  // so polling (accounts every 15 s, agent events) cannot reset a
+                  // sign-in that waits for its code.
+                  <Show when={signInNeeded(id())}>
+                    <SignInCard server={serverOf(id()) || null} where={accountsServerName()} activate onDone={(list) => { setAccounts(list); refetchAccounts(); }} />
+                  </Show>
+                )} />
             </Show>
           )}
         </Show>
