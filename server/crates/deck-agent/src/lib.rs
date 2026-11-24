@@ -163,8 +163,9 @@ pub mod proto {
         )
     }
 
-    /// Claude Code's permission modes (`claude --permission-mode`; `default`
-    /// is the older name of `manual`).
+    /// Claude Code's permission modes known today (`claude --permission-mode`;
+    /// `default` is the older name of `manual`). Not a gate: `claude` itself
+    /// decides, so a host built before a new mode still passes it on.
     pub const PERMISSION_MODES: &[&str] = &[
         "default",
         "manual",
@@ -176,8 +177,8 @@ pub mod proto {
     ];
 
     pub fn set_permission_mode(request_id: &str, mode: &str) -> Result<String, String> {
-        if !PERMISSION_MODES.contains(&mode) {
-            return Err(format!("unknown permission mode {mode}"));
+        if mode.is_empty() || mode.len() > 40 || !mode.bytes().all(|b| b.is_ascii_alphabetic()) {
+            return Err(format!("not a permission mode: {mode}"));
         }
         Ok(control_request(
             request_id,
@@ -244,6 +245,17 @@ pub enum Op {
     /// reads the account's credentials only when it starts; the server asks
     /// for this after an account switch or a sign-in).
     Restart,
+    /// The server was updated: once idle, the host replaces itself with the
+    /// server's current binary, on the same conversation (Unix: exec, so the
+    /// pane keeps its process and terminal).
+    Upgrade,
+}
+
+/// The build a host or server was made from: the commit CI builds, else the
+/// crate version (local builds). A host whose build differs from its
+/// server's is upgraded (see [`Op::Upgrade`]).
+pub fn build_id() -> &'static str {
+    option_env!("HERDR_BUILD_COMMIT").unwrap_or(concat!("local-", env!("CARGO_PKG_VERSION")))
 }
 
 /// A session id the host may pass to `claude --resume`: a uuid-like token.
@@ -320,6 +332,7 @@ impl Op {
                 Ok(Op::Resume { session_id })
             }
             "restart" => Ok(Op::Restart),
+            "upgrade" => Ok(Op::Upgrade),
             other => Err(format!("unknown agent operation {other}")),
         }
     }
@@ -345,6 +358,7 @@ impl Op {
             }
             Op::Resume { session_id } => json!({ "op": "resume", "session_id": session_id }),
             Op::Restart => json!({ "op": "restart" }),
+            Op::Upgrade => json!({ "op": "upgrade" }),
         }
         .to_string()
     }
@@ -408,7 +422,7 @@ impl Op {
                 lines
             }
             // The host handles these itself; nothing goes to `claude`.
-            Op::Resume { .. } | Op::Restart => Vec::new(),
+            Op::Resume { .. } | Op::Restart | Op::Upgrade => Vec::new(),
         })
     }
 }

@@ -99,7 +99,9 @@ fn ops_round_trip_through_the_inbox() {
         assert!(!op.stdin_lines(1).unwrap().is_empty());
     }
     assert!(Op::from_request("set", &json!({})).is_err());
-    assert!(Op::from_request("set", &json!({"permission_mode":"yolo"})).is_err());
+    assert!(Op::from_request("set", &json!({"permission_mode":"no such"})).is_err());
+    // A mode this build does not know yet is still passed on: claude decides.
+    assert!(Op::from_request("set", &json!({"permission_mode":"futureMode"})).is_ok());
     assert!(Op::from_request("respond", &json!({"request_id":"r"})).is_err());
     assert!(Op::from_request("send", &json!({"text":""})).is_err());
     assert!(Op::from_request("rm", &json!({})).is_err());
@@ -119,7 +121,8 @@ fn resume_and_restart_are_host_operations() {
         }
     );
     let restart = Op::from_request("restart", &json!({})).unwrap();
-    for op in [resume, restart] {
+    let upgrade = Op::from_request("upgrade", &json!({})).unwrap();
+    for op in [resume, restart, upgrade] {
         assert_eq!(Op::from_line(&op.to_line()).unwrap(), op);
         assert!(op.stdin_lines(1).unwrap().is_empty());
     }

@@ -36,7 +36,7 @@ use crate::ipc::{connect_local_stream, LocalStream};
 const USAGE: &str =
     "usage: deck-server agent [--resume SESSION_ID] [--model MODEL] [--permission-mode MODE]";
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Options {
     resume: Option<String>,
     model: Option<String>,
@@ -116,6 +116,10 @@ struct Host {
     restart_pending: AtomicBool,
     /// The current `claude` was stopped on purpose: start the next at once.
     restarting: AtomicBool,
+    /// The server was updated while a turn ran: upgrade at the next idle.
+    upgrade_pending: AtomicBool,
+    /// What this host was started with (kept across an upgrade).
+    options: Options,
 }
 
 impl Host {
@@ -142,6 +146,9 @@ impl Host {
         drop(s);
         if let Some(status) = changed {
             let _ = self.reports.send(status);
+            if status == Status::Idle && self.upgrade_pending.swap(false, Ordering::Relaxed) {
+                self.upgrade();
+            }
             if status == Status::Idle && self.restart_pending.swap(false, Ordering::Relaxed) {
                 self.stop_claude();
             }
@@ -159,6 +166,83 @@ impl Host {
 
     fn idle(&self) -> bool {
         self.lock().tracker.status() == Status::Idle
+    }
+
+    /// The arguments after `agent` that continue this host as it is now:
+    /// the conversation (once it exists), model and permission mode.
+    fn continue_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if self.used.load(Ordering::Relaxed) {
+            let session = self
+                .session_id
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            args.extend(["--resume".to_string(), session]);
+        }
+        let s = self.lock();
+        let model = s
+            .tracker
+            .model
+            .clone()
+            .or_else(|| self.options.model.clone());
+        let mode = s
+            .tracker
+            .permission_mode
+            .clone()
+            .or_else(|| self.options.permission_mode.clone());
+        drop(s);
+        if let Some(model) = model.filter(|m| !m.is_empty()) {
+            args.extend(["--model".to_string(), model]);
+        }
+        if let Some(mode) = mode.filter(|m| proto::set_permission_mode("check", m).is_ok()) {
+            args.extend(["--permission-mode".to_string(), mode]);
+        }
+        args
+    }
+
+    /// Replaces this host with the server's current binary, on the same
+    /// conversation: `claude` is stopped, then the process execs the new
+    /// `deck-server agent` (same pid, same pane terminal and environment).
+    fn upgrade(&self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // A replaced binary reads as "<path> (deleted)": the new one is at
+            // <path>. If this host's binary is still the file on disk there is
+            // nothing newer to move to (and no loop of upgrades).
+            let exe = match std::env::current_exe() {
+                Ok(p) => match p.to_string_lossy().strip_suffix(" (deleted)") {
+                    Some(path) => std::path::PathBuf::from(path),
+                    None => return,
+                },
+                Err(_) => return,
+            };
+            let args = self.continue_args();
+            self.restarting.store(true, Ordering::Relaxed);
+            if let Some(mut child) = self
+                .child
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let err = std::process::Command::new(&exe)
+                .arg("agent")
+                .args(&args)
+                .exec();
+            self.emit(proto::host_state(
+                "log",
+                Some(&format!("upgrade to {} failed: {err}", exe.display())),
+            ));
+        }
+        #[cfg(not(unix))]
+        self.emit(proto::host_state(
+            "log",
+            Some("this server was updated; reopen the tab to use the new version"),
+        ));
     }
 
     fn write_stdin(&self, lines: &[String]) -> io::Result<()> {
@@ -194,6 +278,14 @@ impl Host {
                     self.stop_claude();
                 } else {
                     self.restart_pending.store(true, Ordering::Relaxed);
+                }
+                return;
+            }
+            Op::Upgrade => {
+                if self.idle() {
+                    self.upgrade();
+                } else {
+                    self.upgrade_pending.store(true, Ordering::Relaxed);
                 }
                 return;
             }
@@ -233,7 +325,7 @@ impl Host {
         json!({
             "id": format!("deck-agent:{method}"),
             "method": method,
-            "params": { "pane_id": self.pane_id, "epoch": self.epoch },
+            "params": { "pane_id": self.pane_id, "epoch": self.epoch, "build": deck_agent::build_id() },
         })
         .to_string()
     }
@@ -511,6 +603,8 @@ pub(crate) fn run(args: &[String]) -> i32 {
         child: Mutex::new(None),
         restart_pending: AtomicBool::new(false),
         restarting: AtomicBool::new(false),
+        upgrade_pending: AtomicBool::new(false),
+        options: options.clone(),
     });
     println!("Claude Code runs here without a terminal; Netrunner Deck shows this pane as a chat.");
     println!("session {session_id}");
@@ -579,7 +673,7 @@ mod tests {
         assert_eq!(o.resume.as_deref(), Some("abc"));
         assert_eq!(o.model.as_deref(), Some("opus"));
         assert!(parse_options(&args(&["--resume"])).is_err());
-        assert!(parse_options(&args(&["--permission-mode", "yolo"])).is_err());
+        assert!(parse_options(&args(&["--permission-mode", "no such"])).is_err());
         assert!(parse_options(&args(&["--nope"])).is_err());
     }
 }

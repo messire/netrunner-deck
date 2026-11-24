@@ -184,7 +184,13 @@ pub(crate) fn handle(
             None => missing("epoch"),
         },
         ("inbox", Some(pane)) => match epoch {
-            Some(epoch) => return Some(inbox(&id, &pane, &epoch, stream, running)),
+            Some(epoch) => {
+                // A host built before this server's last update (or one too
+                // old to say) replaces itself with the current binary.
+                let current =
+                    params.get("build").and_then(Value::as_str) == Some(deck_agent::build_id());
+                return Some(inbox(&id, &pane, &epoch, !current, stream, running));
+            }
             None => missing("epoch"),
         },
         ("subscribe", Some(pane)) => {
@@ -358,11 +364,15 @@ fn inbox(
     id: &str,
     pane_id: &str,
     epoch: &str,
+    outdated: bool,
     stream: &mut LocalStream,
     running: &AtomicBool,
 ) -> io::Result<()> {
     let token = INBOX_TOKENS.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
+    if outdated {
+        let _ = tx.send(Op::Upgrade.to_line());
+    }
     {
         let mut reg = registry();
         let agent = reg.entry(pane_id.to_string()).or_default();
