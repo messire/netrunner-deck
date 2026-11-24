@@ -17,9 +17,14 @@
 //! dirs is its own id.
 //!
 //! A remote server is the same kind of row with an `ssh://` address
-//! (`endpoint.rs`): the same runtime, event pump and calls. Typing just a
-//! host (`user@host`) lists the servers on it over SSH, connects the
-//! preferred one, and from then on that host is scanned like the local dirs.
+//! (`endpoint.rs`): the same runtime, event pump and calls. A machine is
+//! added from the ADD dialog (user, host, port): CHECK lists its sockets over
+//! SSH and pings each through that machine's bridge ([`Registry::probe`]),
+//! then the checked ones are saved and connected ([`Registry::add_host`]).
+//! From then on the host is scanned like the local dirs: listed and pinged
+//! through its bridge, and only servers that answer are offered. A host that
+//! cannot be reached shows as one row with the reason; removing it
+//! ([`Registry::remove_host`]) drops all its servers and closes its bridge.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,6 +45,8 @@ pub const APP_DIRS: &[&str] = &["herdr", "herdr-dev", "deck-server", "deck-serve
 
 const PREFS_FILE: &str = "preferences.json";
 const PING_TIMEOUT: Duration = Duration::from_millis(1500);
+/// A remote ping may first start that machine's bridge (SSH login included).
+const REMOTE_PING_TIMEOUT: Duration = Duration::from_secs(25);
 const SCAN_EVERY: Duration = Duration::from_secs(60);
 pub const EVENT: &str = "deck://servers";
 
@@ -201,6 +208,66 @@ fn is_absent(err: &herdr::HerdrError) -> bool {
         if matches!(source.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused))
 }
 
+type Pinged = Vec<(String, herdr::Result<Value>)>;
+
+/// Ping each of `host`'s listed sockets through that machine's bridge, in
+/// parallel (the same [`Endpoint::connect`] path every call takes).
+fn ping_remote(host: &SshHost, sockets: Vec<String>) -> Pinged {
+    let pings: Vec<_> = sockets
+        .into_iter()
+        .map(|socket| {
+            let e = Endpoint::Ssh {
+                host: host.clone(),
+                socket: socket.clone(),
+            };
+            std::thread::spawn(move || {
+                let r = herdr::call_within(&e, "ping", json!({}), REMOTE_PING_TIMEOUT);
+                (socket, r)
+            })
+        })
+        .collect();
+    pings.into_iter().filter_map(|h| h.join().ok()).collect()
+}
+
+/// List `host`'s sockets over SSH and ping each through its bridge.
+fn list_and_ping(host: &SshHost) -> Result<Pinged, String> {
+    let sockets = endpoint::list_remote(host)?;
+    Ok(ping_remote(host, sockets))
+}
+
+/// What one remote host shows: the servers that answered, or (`Err`) why
+/// the machine cannot be used. Sockets with nothing behind them are left
+/// out; when every listed socket failed otherwise (no bridge there, SSH
+/// refused), the machine is unreachable with the first reason.
+fn host_found(host: &SshHost, pinged: Result<Pinged, String>) -> Result<Vec<Found>, String> {
+    let mut found = Vec::new();
+    let mut why: Option<String> = None;
+    for (socket, result) in pinged? {
+        match &result {
+            Ok(_) => {
+                let endpoint = Endpoint::Ssh {
+                    host: host.clone(),
+                    socket,
+                };
+                found.push(Found {
+                    place: place_of_endpoint(Path::new(""), &endpoint),
+                    status: Status::from_ping(&result),
+                    endpoint,
+                });
+            }
+            // The bridge's own failure (ssh refused) is not "nothing there".
+            Err(e) if is_absent(e) && !e.to_string().contains("bridge on ") => {}
+            Err(e) => {
+                why.get_or_insert_with(|| e.to_string());
+            }
+        }
+    }
+    match why {
+        Some(why) if found.is_empty() => Err(why),
+        _ => Ok(found),
+    }
+}
+
 // ---- preferences ------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -297,6 +364,19 @@ impl Prefs {
         self.servers.last_mut().expect("just pushed")
     }
 
+    /// Drop every saved server on `host`; returns their ids.
+    pub fn remove_host(&mut self, host: &SshHost) -> Vec<String> {
+        let on_host = |s: &SavedServer| matches!(s.endpoint(), Some(Endpoint::Ssh { host: h, .. }) if &h == host);
+        let ids = self
+            .servers
+            .iter()
+            .filter(|s| on_host(s))
+            .map(|s| s.id.clone())
+            .collect();
+        self.servers.retain(|s| !on_host(s));
+        ids
+    }
+
     /// The SSH hosts of the saved servers: each is scanned for more servers.
     pub fn remote_hosts(&self) -> Vec<SshHost> {
         let mut hosts: Vec<SshHost> = Vec::new();
@@ -370,6 +450,8 @@ struct State {
     found: Vec<Found>,
     scanned: bool,
     live: HashMap<String, Live>,
+    /// Saved SSH hosts the last scan could not use, with the reason.
+    unreachable: Vec<(SshHost, String)>,
 }
 
 /// One row of the SERVERS list, as the webview shows it.
@@ -387,13 +469,45 @@ pub struct ServerView {
     pub new: bool,
     /// On another machine (SSH).
     pub remote: bool,
+    /// That machine (`user@host[:port]`), the key REMOVE takes.
+    pub machine: Option<String>,
     pub status: Status,
+}
+
+/// A saved machine the last scan could not reach (one grey row).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MachineDown {
+    pub machine: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ServersView {
     pub servers: Vec<ServerView>,
     pub scanned: bool,
+    pub unreachable: Vec<MachineDown>,
+}
+
+/// One server CHECK found on a machine, answering through its bridge.
+#[derive(Debug, Clone, Serialize)]
+pub struct Probed {
+    pub id: String,
+    pub name: String,
+    pub kind: &'static str,
+    pub socket: String,
+    pub version: Option<String>,
+    pub protocol: Option<u64>,
+    /// Pre-checked in the dialog: deck-server's root session, else Herdr's.
+    pub preferred: bool,
+    /// Already connected in this Deck.
+    pub connected: bool,
+}
+
+fn machine_of(endpoint: &Endpoint) -> Option<String> {
+    match endpoint {
+        Endpoint::Ssh { host, .. } => Some(host.key()),
+        Endpoint::Local(_) => None,
+    }
 }
 
 pub struct Registry {
@@ -528,8 +642,9 @@ impl Registry {
                 Some(l) => l.status.clone(),
                 None => found.map(|f| f.status.clone()).unwrap_or_default(),
             };
-            // A server that is neither connected nor found any more is not offered.
-            if !s.connected && found.is_none() && !s.manual {
+            // A server that is neither connected nor found any more is not
+            // offered; on another machine only the ones that answered are.
+            if !s.connected && found.is_none() && (!s.manual || endpoint.is_remote()) {
                 continue;
             }
             rows.push(ServerView {
@@ -542,6 +657,7 @@ impl Registry {
                 found: found.is_some(),
                 new: false,
                 remote: endpoint.is_remote(),
+                machine: machine_of(&endpoint),
                 status,
             });
         }
@@ -559,12 +675,21 @@ impl Registry {
                 found: true,
                 new: true,
                 remote: f.endpoint.is_remote(),
+                machine: machine_of(&f.endpoint),
                 status: f.status.clone(),
             });
         }
         ServersView {
             servers: rows,
             scanned: st.scanned,
+            unreachable: st
+                .unreachable
+                .iter()
+                .map(|(h, error)| MachineDown {
+                    machine: h.key(),
+                    error: error.clone(),
+                })
+                .collect(),
         }
     }
 
@@ -599,7 +724,7 @@ impl Registry {
             .collect();
         let listings: Vec<_> = hosts
             .into_iter()
-            .map(|host| std::thread::spawn(move || (endpoint::list_remote(&host), host)))
+            .map(|host| std::thread::spawn(move || (host_found(&host, list_and_ping(&host)), host)))
             .collect();
         let mut found = Vec::new();
         for h in pings {
@@ -615,56 +740,46 @@ impl Registry {
                 endpoint,
             });
         }
-        let mut unreachable: Vec<SshHost> = Vec::new();
+        let mut unreachable: Vec<(SshHost, String)> = Vec::new();
         for h in listings {
-            let Ok((listing, host)) = h.join() else {
+            let Ok((result, host)) = h.join() else {
                 continue;
             };
-            match listing {
-                Ok(remote) => {
-                    for socket in remote {
-                        let endpoint = Endpoint::Ssh {
-                            host: host.clone(),
-                            socket,
-                        };
-                        found.push(Found {
-                            place: place_of_endpoint(&self.root, &endpoint),
-                            status: Status::default(),
-                            endpoint,
-                        });
-                    }
-                }
+            match result {
+                Ok(remote) => found.extend(remote),
                 Err(err) => {
                     tracing::info!(host = %host.key(), %err, "remote scan failed");
-                    unreachable.push(host);
+                    unreachable.push((host, err));
                 }
             }
         }
-        let changed = {
-            let mut st = self.lock();
-            // An unreachable host keeps the servers the last scan listed.
-            let kept: Vec<Found> = st
-                .found
-                .iter()
-                .filter(|f| matches!(&f.endpoint, Endpoint::Ssh { host, .. } if unreachable.contains(host)))
-                .cloned()
-                .collect();
-            found.extend(kept);
-            let ids = |v: &[Found]| -> Vec<(String, Status)> {
-                v.iter()
-                    .map(|f| (f.place.id.clone(), f.status.clone()))
-                    .collect()
-            };
-            let before = ids(&st.found);
-            let after = ids(&found);
-            st.found = found;
-            let first = !st.scanned;
-            st.scanned = true;
-            first || before != after
-        };
-        if changed {
+        if self.apply_scan(found, unreachable) {
             let _ = app.emit(EVENT, "changed");
         }
+    }
+
+    /// Replace the last scan's result (nothing of an earlier scan is kept);
+    /// `true` when the list changed. A host removed while the scan ran
+    /// stays removed.
+    fn apply_scan(&self, mut found: Vec<Found>, mut unreachable: Vec<(SshHost, String)>) -> bool {
+        let mut st = self.lock();
+        let hosts = st.prefs.remote_hosts();
+        found.retain(|f| match &f.endpoint {
+            Endpoint::Ssh { host, .. } => hosts.contains(host),
+            Endpoint::Local(_) => true,
+        });
+        unreachable.retain(|(h, _)| hosts.contains(h));
+        let ids = |v: &[Found]| -> Vec<(String, Status)> {
+            v.iter()
+                .map(|f| (f.place.id.clone(), f.status.clone()))
+                .collect()
+        };
+        let changed = ids(&st.found) != ids(&found) || st.unreachable != unreachable;
+        st.found = found;
+        st.unreachable = unreachable;
+        let first = !st.scanned;
+        st.scanned = true;
+        first || changed
     }
 
     fn save(&self, st: &State) -> Result<(), String> {
@@ -788,6 +903,144 @@ impl Registry {
         Ok(())
     }
 
+    /// CHECK in the ADD dialog: list `host`'s sockets over SSH and ping each
+    /// through that machine's bridge. Only servers that answer come back.
+    /// Blocking (one SSH session, then the bridge).
+    pub fn probe(&self, host: &SshHost) -> Result<Vec<Probed>, String> {
+        let found = host_found(host, list_and_ping(host))?;
+        self.probed(host, found)
+    }
+
+    fn probed(&self, host: &SshHost, found: Vec<Found>) -> Result<Vec<Probed>, String> {
+        let socket_of = |f: &Found| match &f.endpoint {
+            Endpoint::Ssh { socket, .. } => socket.clone(),
+            Endpoint::Local(p) => p.to_string_lossy().into_owned(),
+        };
+        let sockets: Vec<String> = found.iter().map(socket_of).collect();
+        let preferred = preferred_remote(&sockets)
+            .cloned()
+            .ok_or_else(|| format!("no Herdr or deck-server is running on {}", host.key()))?;
+        let st = self.lock();
+        Ok(found
+            .into_iter()
+            .map(|f| {
+                let socket = socket_of(&f);
+                Probed {
+                    name: st
+                        .prefs
+                        .get(&f.place.id)
+                        .and_then(|s| s.name.clone())
+                        .unwrap_or_else(|| {
+                            // The dialog names the machine already.
+                            default_name(&Place {
+                                host: None,
+                                ..f.place.clone()
+                            })
+                        }),
+                    kind: kind_of(&f.place),
+                    preferred: socket == preferred,
+                    connected: st.live.contains_key(&f.place.id),
+                    version: f.status.version.clone(),
+                    protocol: f.status.protocol,
+                    id: f.place.id,
+                    socket,
+                }
+            })
+            .collect())
+    }
+
+    /// Save `host` and mark the servers at `sockets` on it connected (no
+    /// runtime yet); returns their ids and endpoints.
+    fn save_host(
+        &self,
+        host: &SshHost,
+        sockets: &[String],
+    ) -> Result<Vec<(String, Endpoint)>, String> {
+        if sockets.is_empty() {
+            return Err("no server is checked".into());
+        }
+        if let Some(bad) = sockets.iter().find(|s| !s.starts_with('/')) {
+            return Err(format!("{bad:?} is not a socket path"));
+        }
+        let mut st = self.lock();
+        let mut added = Vec::new();
+        for socket in sockets {
+            let endpoint = Endpoint::Ssh {
+                host: host.clone(),
+                socket: socket.clone(),
+            };
+            let place = place_of_endpoint(&self.root, &endpoint);
+            st.prefs.entry(&place.id, &endpoint, true).connected = true;
+            added.push((place.id, endpoint));
+        }
+        st.unreachable.retain(|(h, _)| h != host);
+        self.save(&st)?;
+        Ok(added)
+    }
+
+    /// ADD in the dialog: save `host` and connect the servers at `sockets`
+    /// on it. From now on the host is scanned too. Returns their ids.
+    pub fn add_host(
+        &self,
+        app: &AppHandle,
+        host: &SshHost,
+        sockets: &[String],
+    ) -> Result<Vec<String>, String> {
+        let added = self.save_host(host, sockets)?;
+        for (id, endpoint) in &added {
+            self.attach(app, id, endpoint.clone());
+        }
+        // Offer the host's other servers right away.
+        let app2 = app.clone();
+        std::thread::spawn(move || app2.state::<Registry>().scan(&app2));
+        Ok(added.into_iter().map(|(id, _)| id).collect())
+    }
+
+    /// Forget `machine` (`user@host[:port]`) in the registry: its saved
+    /// servers, found rows and unreachable row go; returns the host and the
+    /// runtimes that were connected to it.
+    fn drop_host(&self, machine: &str) -> Result<(SshHost, Vec<Live>), String> {
+        let mut st = self.lock();
+        let host = st
+            .prefs
+            .remote_hosts()
+            .into_iter()
+            .chain(st.unreachable.iter().map(|(h, _)| h.clone()))
+            .chain(st.found.iter().filter_map(|f| match &f.endpoint {
+                Endpoint::Ssh { host, .. } => Some(host.clone()),
+                Endpoint::Local(_) => None,
+            }))
+            .find(|h| h.key() == machine)
+            .ok_or_else(|| format!("unknown machine {machine}"))?;
+        st.prefs.remove_host(&host);
+        st.found
+            .retain(|f| !matches!(&f.endpoint, Endpoint::Ssh { host: h, .. } if h == &host));
+        st.unreachable.retain(|(h, _)| h != &host);
+        let on_host = endpoint::Machine::Ssh(host.clone());
+        let ids: Vec<String> = st
+            .live
+            .iter()
+            .filter(|(_, l)| l.endpoint.machine() == on_host)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let lives = ids.iter().filter_map(|id| st.live.remove(id)).collect();
+        self.save(&st)?;
+        Ok((host, lives))
+    }
+
+    /// REMOVE a machine: every server on it leaves preferences and the
+    /// list, connected ones are disconnected and its bridge is closed; the
+    /// host is not scanned any more.
+    pub fn remove_host(&self, app: &AppHandle, machine: &str) -> Result<(), String> {
+        let (host, lives) = self.drop_host(machine)?;
+        for l in lives {
+            l.stop.store(true, Ordering::SeqCst);
+        }
+        endpoint::close(&endpoint::Machine::Ssh(host));
+        let _ = app.emit(EVENT, "changed");
+        Ok(())
+    }
+
     /// The user saw the found servers: they stop being "new".
     pub fn mark_seen(&self, app: &AppHandle) -> Result<(), String> {
         let mut st = self.lock();
@@ -905,6 +1158,37 @@ pub async fn server_add(app: AppHandle, address: String) -> Result<ServersView, 
         Ok(view_of(&app))
     })
     .await
+}
+
+/// CHECK in the ADD dialog. Async: an SSH listing, then pings through the bridge.
+#[tauri::command]
+pub async fn server_probe(
+    app: AppHandle,
+    user: String,
+    host: String,
+    port: u32,
+) -> Result<Vec<Probed>, String> {
+    let host = SshHost::from_fields(&user, &host, port)?;
+    crate::blocking(move || app.state::<Registry>().probe(&host)).await
+}
+
+#[tauri::command]
+pub fn server_add_host(
+    app: AppHandle,
+    user: String,
+    host: String,
+    port: u32,
+    sockets: Vec<String>,
+) -> Result<ServersView, String> {
+    let host = SshHost::from_fields(&user, &host, port)?;
+    app.state::<Registry>().add_host(&app, &host, &sockets)?;
+    Ok(view_of(&app))
+}
+
+#[tauri::command]
+pub fn server_remove_host(app: AppHandle, machine: String) -> Result<ServersView, String> {
+    app.state::<Registry>().remove_host(&app, &machine)?;
+    Ok(view_of(&app))
 }
 
 #[tauri::command]
@@ -1138,6 +1422,199 @@ mod tests {
             }
         }
         assert!(answered >= 1, "no server answered");
+    }
+
+    fn registry(tag: &str) -> (Registry, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("deck-reg-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let reg = Registry {
+            prefs_path: dir.join(PREFS_FILE),
+            root: root(),
+            state: Mutex::new(State::default()),
+        };
+        (reg, dir)
+    }
+
+    fn absent() -> herdr::HerdrError {
+        herdr::HerdrError::Connect {
+            path: "x".into(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            hint: "",
+        }
+    }
+
+    fn no_bridge() -> herdr::HerdrError {
+        herdr::HerdrError::Io(std::io::Error::other(
+            "bridge on dev@build-box.example.com:2222: no deck-server with a bridge there",
+        ))
+    }
+
+    const DS: &str = "/home/dev/.config/deck-server/herdr.sock";
+    const HD: &str = "/home/dev/.config/herdr/herdr.sock";
+
+    #[test]
+    fn a_host_shows_only_the_servers_that_answer() {
+        let host = SshHost::from_fields("dev", "build-box.example.com", 2222).unwrap();
+        let ok = || Ok(json!({"version":"0.4.0","protocol":22}));
+        let got = host_found(
+            &host,
+            Ok(vec![(DS.into(), ok()), (HD.into(), Err(absent()))]),
+        )
+        .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(
+            got[0].place.id,
+            "dev@build-box.example.com:2222/deck-server"
+        );
+        assert_eq!(got[0].status.version.as_deref(), Some("0.4.0"));
+        // One answers, another fails otherwise: the machine is usable.
+        let mixed = host_found(
+            &host,
+            Ok(vec![(DS.into(), ok()), (HD.into(), Err(no_bridge()))]),
+        );
+        assert_eq!(mixed.unwrap().len(), 1);
+        // Stale sockets only: reachable, nothing running.
+        assert!(host_found(&host, Ok(vec![(DS.into(), Err(absent()))]))
+            .unwrap()
+            .is_empty());
+        let ssh_refused = herdr::HerdrError::Connect {
+            path: "x".into(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "bridge on dev@build-box.example.com:2222: Permission denied (publickey).",
+            ),
+            hint: "",
+        };
+        let err = host_found(&host, Ok(vec![(DS.into(), Err(ssh_refused))])).unwrap_err();
+        assert!(err.contains("publickey"), "{err}");
+        // No bridge there / SSH refused: unreachable, with the reason.
+        let err = host_found(&host, Ok(vec![(DS.into(), Err(no_bridge()))])).unwrap_err();
+        assert!(err.contains("no deck-server with a bridge"), "{err}");
+        let err = host_found(
+            &host,
+            Err("ssh dev@build-box.example.com:2222: no answer within 20s".into()),
+        )
+        .unwrap_err();
+        assert!(err.contains("no answer"), "{err}");
+    }
+
+    #[test]
+    fn removing_a_host_prunes_all_its_saved_servers() {
+        let a = SshHost::from_fields("dev", "build-box.example.com", 2222).unwrap();
+        let b = SshHost::from_fields("dev", "old-box.example.com", 22).unwrap();
+        let on = |h: &SshHost, s: &str| Endpoint::Ssh {
+            host: h.clone(),
+            socket: s.into(),
+        };
+        let mut p = Prefs::default();
+        p.entry("local", &Endpoint::Local("/x/herdr.sock".into()), true);
+        p.entry("a1", &on(&a, DS), true).connected = true;
+        p.entry("a2", &on(&a, HD), false);
+        p.entry("b1", &on(&b, DS), true);
+        assert_eq!(p.remove_host(&a), ["a1", "a2"]);
+        let ids: Vec<&str> = p.servers.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["local", "b1"]);
+        assert_eq!(p.remote_hosts(), vec![b]);
+    }
+
+    #[test]
+    fn an_unreachable_host_keeps_no_rows_but_one_machine_row() {
+        let (reg, dir) = registry("unreach");
+        let host = SshHost::from_fields("dev", "old-box.example.com", 2222).unwrap();
+        let added = reg.save_host(&host, &[DS.to_string()]).unwrap();
+        assert_eq!(added[0].0, "dev@old-box.example.com:2222/deck-server");
+        // The first scan finds both servers, the user leaves one unconnected.
+        let ok = || Ok(json!({"version":"0.4.0"}));
+        let found = host_found(&host, Ok(vec![(DS.into(), ok()), (HD.into(), ok())])).unwrap();
+        assert!(reg.apply_scan(found, vec![]));
+        let v = reg.view();
+        assert_eq!(v.servers.len(), 2);
+        assert!(v.unreachable.is_empty());
+        assert_eq!(
+            v.servers[0].machine.as_deref(),
+            Some("dev@old-box.example.com:2222")
+        );
+        // The machine goes away: its found rows are not kept.
+        assert!(reg.apply_scan(vec![], vec![(host.clone(), "ssh: no answer".into())]));
+        let v = reg.view();
+        let ids: Vec<&str> = v.servers.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["dev@old-box.example.com:2222/deck-server"],
+            "only the connected one stays"
+        );
+        assert_eq!(
+            v.unreachable,
+            vec![MachineDown {
+                machine: "dev@old-box.example.com:2222".into(),
+                error: "ssh: no answer".into()
+            }]
+        );
+        assert!(!reg.apply_scan(vec![], vec![(host.clone(), "ssh: no answer".into())]));
+        // REMOVE: every trace of the machine goes, saved too.
+        let (gone, lives) = reg.drop_host("dev@old-box.example.com:2222").unwrap();
+        assert_eq!(gone, host);
+        assert!(lives.is_empty());
+        let v = reg.view();
+        assert!(v.servers.is_empty() && v.unreachable.is_empty());
+        let saved = Prefs::load(&reg.prefs_path).unwrap();
+        assert!(saved.remote_hosts().is_empty());
+        // A scan that was under way when it was removed does not bring it back.
+        reg.apply_scan(vec![], vec![(host, "late".into())]);
+        assert!(reg.view().unreachable.is_empty());
+        assert!(reg.drop_host("dev@old-box.example.com:2222").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_prechecks_the_preferred_server() {
+        let (reg, _dir) = registry("probe");
+        let host = SshHost::from_fields("dev", "build-box.example.com", 22).unwrap();
+        let ok = || Ok(json!({"version":"0.9.5","protocol":22}));
+        let found = host_found(&host, Ok(vec![(HD.into(), ok()), (DS.into(), ok())])).unwrap();
+        let got = reg.probed(&host, found).unwrap();
+        let pre: Vec<(&str, &str, bool)> = got
+            .iter()
+            .map(|p| (p.id.as_str(), p.kind, p.preferred))
+            .collect();
+        assert_eq!(
+            pre,
+            [
+                ("dev@build-box.example.com/herdr", "herdr", false),
+                ("dev@build-box.example.com/deck-server", "deck-server", true)
+            ]
+        );
+        assert!(reg
+            .probed(&host, vec![])
+            .unwrap_err()
+            .contains("no Herdr or deck-server"));
+        assert!(reg.save_host(&host, &[]).is_err());
+        assert!(reg.save_host(&host, &["relative.sock".into()]).is_err());
+    }
+
+    /// CHECK against a real machine: `cargo test live_probe -- --ignored
+    /// --nocapture` with `DECK_TEST_SSH_USER`, `DECK_TEST_SSH_HOST` and
+    /// optionally `DECK_TEST_SSH_PORT` set. Lists and pings through the bridge.
+    #[test]
+    #[ignore]
+    fn live_probe() {
+        let (Ok(user), Ok(host)) = (
+            std::env::var("DECK_TEST_SSH_USER"),
+            std::env::var("DECK_TEST_SSH_HOST"),
+        ) else {
+            return;
+        };
+        let port = std::env::var("DECK_TEST_SSH_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(22);
+        let host = SshHost::from_fields(&user, &host, port).expect("fields");
+        let (reg, _dir) = registry("live");
+        let started = std::time::Instant::now();
+        let got = reg.probe(&host);
+        println!("{:?} in {:?}", got, started.elapsed());
+        assert!(!got.expect("probe").is_empty());
+        endpoint::close_all();
     }
 
     #[test]

@@ -765,8 +765,10 @@ export default function App() {
       <Show when={prefsOpen()}>
         <Prefs view={servers()} panes={panesOf} scanning={scanning()} error={prefsError()} onScan={scanServers}
           onConnect={connectServer} onDisconnect={(id) => serverCall(api.serverDisconnect(id))}
-          onRename={(id, name) => serverCall(api.serverRename(id, name))} onAdd={(a) => serverCall(api.serverAdd(a))}
-          onForget={(id) => serverCall(api.serverForget(id))} onClose={closePrefs} />
+          onRename={(id, name) => serverCall(api.serverRename(id, name))}
+          onForget={(id) => serverCall(api.serverForget(id))} onRemoveHost={(m) => serverCall(api.serverRemoveHost(m))}
+          onProbe={api.serverProbe} onAddHost={(u, h, port, sockets) => api.serverAddHost(u, h, port, sockets).then((v) => { setServers(v); setPrefsError(null); })}
+          onClose={closePrefs} />
       </Show>
       <Show when={newTabFor()}>{(t) => { const target = t(); return <NewTabBox initial={remembered("deck.newTabKind") ?? "claude"} onPick={(k) => openTab(target, k)} onClose={() => setNewTabFor(null)} />; }}</Show>
       <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} /></Show>

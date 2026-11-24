@@ -23,9 +23,51 @@ export interface ServerView {
   new: boolean;
   /** On another machine (an `ssh://` address). */
   remote?: boolean;
+  /** That machine, `user@host[:port]`: what REMOVE takes. */
+  machine?: string | null;
   status: ServerStatus;
 }
-export interface ServersView { servers: ServerView[]; scanned: boolean }
+/** A saved machine the last scan could not reach: one grey row. */
+export interface MachineDown { machine: string; error: string }
+export interface ServersView { servers: ServerView[]; scanned: boolean; unreachable?: MachineDown[] }
+/** One server CHECK found on a machine (Rust `servers::Probed`). */
+export interface Probed { id: string; name: string; kind: "herdr" | "deck-server"; socket: string; version?: string | null; protocol?: number | null; preferred: boolean; connected: boolean }
+
+/** The ADD dialog's fields as typed. */
+export interface HostForm { user: string; host: string; port: string }
+/** Pure. Check the ADD dialog's fields; the error names the field. */
+export function validateHostForm(f: HostForm): { ok: true; user: string; host: string; port: number } | { ok: false; field: keyof HostForm; error: string } {
+  const user = f.user.trim(), host = f.host.trim().replace(/^\[(.*)\]$/, "$1"), port = f.port.trim();
+  if (!user) return { ok: false, field: "user", error: "Enter the user to sign in as." };
+  if (/[\s@/\\:]/.test(user) || user.startsWith("-")) return { ok: false, field: "user", error: "A user name has no spaces, @, : or slashes." };
+  if (!host) return { ok: false, field: "host", error: "Enter the machine's host name or address." };
+  if (/[\s@/\\]/.test(host) || host.startsWith("-")) return { ok: false, field: "host", error: "Only the host name or address goes here (no user, path or spaces)." };
+  if (host.includes(":") && !/^[0-9a-f:.]+$/i.test(host)) return { ok: false, field: "host", error: "The port has its own field." };
+  if (!/^\d+$/.test(port || "22")) return { ok: false, field: "port", error: "The port is a number, 1 to 65535." };
+  const n = Number(port || "22");
+  if (n < 1 || n > 65535) return { ok: false, field: "port", error: "The port is a number, 1 to 65535." };
+  return { ok: true, user, host, port: n };
+}
+
+/** Pure. Why a machine cannot be used, in plain words (the raw error stays the title). */
+export function machineErrorOf(error: string | null | undefined): string {
+  const e = error ?? "";
+  if (/permission denied|publickey|authentication|too many authentication/i.test(e))
+    return "The machine refused the sign-in. Deck signs in with your SSH key or agent and cannot type a password.";
+  if (/no answer within|timed out|connection timed out|operation timed out/i.test(e))
+    return "No answer from the machine in time: it is off, the address or port is wrong, or a firewall blocks it.";
+  if (/could not resolve|name or service not known|no such host|nodename nor servname/i.test(e))
+    return "That host name is not known. Check the address.";
+  if (/connection refused/i.test(e) && /^ssh |port \d+/i.test(e))
+    return "Nothing accepts SSH at that address and port.";
+  if (/host key verification failed|remote host identification has changed/i.test(e))
+    return "The machine's SSH host key changed since the last visit, so Deck does not trust it.";
+  if (/no deck-server with a bridge|deck-server.*not found|command not found/i.test(e))
+    return "deck-server is not installed on that machine (or is too old to have a bridge). Every server there is reached through it.";
+  if (/no herdr or deck-server is running/i.test(e)) return "The machine answers, but no Herdr or deck-server runs there.";
+  if (/cannot start ssh/i.test(e)) return "Deck could not start ssh on this computer (OpenSSH client missing).";
+  return e || "The machine cannot be reached.";
+}
 
 export const tagId = (server: string, id: string) => `${server}${SEP}${id}`;
 

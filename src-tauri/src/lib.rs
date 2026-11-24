@@ -1052,6 +1052,9 @@ pub fn run() {
             servers::server_rename,
             servers::server_add,
             servers::server_forget,
+            servers::server_probe,
+            servers::server_add_host,
+            servers::server_remove_host,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Netrunner Deck")

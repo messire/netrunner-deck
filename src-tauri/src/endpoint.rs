@@ -54,6 +54,47 @@ pub struct SshHost {
 }
 
 impl SshHost {
+    /// The host from the ADD dialog's fields. Port 22 is stored as no port,
+    /// so the machine keeps the id it has when typed as `user@host`.
+    pub fn from_fields(user: &str, host: &str, port: u32) -> Result<SshHost, String> {
+        let (user, host) = (user.trim(), host.trim());
+        if user.is_empty() {
+            return Err("user is empty".into());
+        }
+        if user.contains(['@', '/', '\\', ':'])
+            || user.contains(char::is_whitespace)
+            || user.starts_with('-')
+        {
+            return Err(format!("{user:?} is not a user name"));
+        }
+        if host.is_empty() {
+            return Err("host is empty".into());
+        }
+        let port = u16::try_from(port)
+            .ok()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| format!("port {port} is not 1..65535"))?;
+        let bare = host.trim_start_matches('[').trim_end_matches(']');
+        // A `:` is only part of an IPv6 address; a port goes in its own field.
+        if bare.contains(':') && bare.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(format!(
+                "{host:?} is not a host name or address (the port has its own field)"
+            ));
+        }
+        let typed = if bare.contains(':') {
+            format!("[{bare}]")
+        } else {
+            bare.to_string()
+        };
+        match split_host_path(&format!("{user}@{typed}")) {
+            Some((h, None)) if h.port.is_none() => Ok(SshHost {
+                port: (port != 22).then_some(port),
+                ..h
+            }),
+            _ => Err(format!("{host:?} is not a host name or address")),
+        }
+    }
+
     /// `user@host:port` as typed (port only when given): the host part of ids.
     pub fn key(&self) -> String {
         let mut s = String::new();
@@ -536,6 +577,29 @@ mod tests {
         assert_eq!(Endpoint::parse_host(r"C:\x\herdr.sock"), None);
         assert_eq!(Endpoint::parse_host("/tmp/a@b.sock"), None);
         assert_eq!(Endpoint::parse_host("ssh://-oProxyCommand=x"), None);
+    }
+
+    #[test]
+    fn dialog_fields_make_a_host_with_its_port() {
+        assert_eq!(
+            SshHost::from_fields(" dev ", "build-box.example.com", 22),
+            Ok(h(Some("dev"), "build-box.example.com", None))
+        );
+        let p = SshHost::from_fields("dev", "build-box.example.com", 2222).unwrap();
+        assert_eq!(p, h(Some("dev"), "build-box.example.com", Some(2222)));
+        assert_eq!(p.key(), "dev@build-box.example.com:2222");
+        assert_eq!(p.args(), ["-p", "2222", "dev@build-box.example.com"]);
+        assert_eq!(Endpoint::parse_host(&p.key()), Some(p.clone()));
+        let v6 = SshHost::from_fields("u", "fe80::1", 2200).unwrap();
+        assert_eq!(v6.key(), "u@[fe80::1]:2200");
+        assert!(SshHost::from_fields("dev", "build-box.example.com", 0).is_err());
+        assert!(SshHost::from_fields("dev", "build-box.example.com", 65536).is_err());
+        assert!(SshHost::from_fields("", "build-box.example.com", 22).is_err());
+        assert!(SshHost::from_fields("dev", "", 22).is_err());
+        assert!(SshHost::from_fields("dev", "-oProxyCommand=x", 22).is_err());
+        assert!(SshHost::from_fields("a@b", "build-box.example.com", 22).is_err());
+        assert!(SshHost::from_fields("dev", "box/x", 22).is_err());
+        assert!(SshHost::from_fields("dev", "box:2222", 22).is_err());
     }
 
     #[test]

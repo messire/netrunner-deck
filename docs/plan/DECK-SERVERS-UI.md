@@ -40,8 +40,24 @@ tree.
 - Errors sit in the server's own row with a fix hint (access denied → server
   runs elevated, use `allow_unelevated_clients`; old protocol → what to
   update, switch disabled).
-- Manual add: a field for a pipe/socket path. Remote (SSH) servers later use the
-  same row with another address.
+- **+ ADD** opens a dialog: user, host or address, port (22 by default, 1-65535).
+  CHECK lists that machine's servers over SSH and pings each one through the
+  machine's bridge (the same path every connection takes, ADR 0002); the dialog
+  shows only the servers that answered, with kind and version, each with a
+  checkbox (deck-server's root session pre-checked, else Herdr's). ADD & CONNECT
+  saves the machine and connects the checked ones. SSH timeout, refused key,
+  unknown host or a machine without deck-server are shown in the dialog in plain
+  words, the raw error under them.
+- **Remove**: every row on another machine has ✕; a second click (REMOVE
+  MACHINE?) drops all of that machine's servers from `preferences.json`,
+  disconnects them, closes its bridge, and the machine is no longer scanned. A
+  manually added local address has ✕ too. Local found servers need none: they
+  drop out when they stop answering.
+- **Remote scan**: each saved machine is listed and every socket pinged through
+  its bridge; only servers that answer are offered. A machine that cannot be
+  reached does not keep its old rows: it shows as one grey row under MACHINES
+  NOT REACHABLE with the reason, RETRY and ✕. Connected servers on it keep
+  their own OFFLINE state.
 - Discovery: in the app dirs `herdr`, `herdr-dev`, `deck-server`,
   `deck-server-dev`, ping the root `herdr.sock` and `sessions\*\herdr.sock`.
   Runs when preferences open, on FIND AGAIN and once a minute in the
@@ -115,6 +131,11 @@ The bottom "HERDR OFFLINE" bar remains only for "no connected server online".
   later is only offered.
 - A webview newer than its Rust side (`tauri dev` with an old binary) falls
   back to one unnamed server: the single-server Deck.
+- Machines: `server_probe(user, host, port)` (CHECK), `server_add_host(user,
+  host, port, sockets)` (ADD & CONNECT), `server_remove_host(machine)` (REMOVE
+  MACHINE); `servers_list` carries `unreachable` (machine + reason) and each
+  remote row its `machine`. The old `server_add(address)` still takes a typed
+  or stored address.
 - Not done yet: the protocol check ("incompatible" state) — no minimum
   protocol is defined; the archive still reads the primary server only and
   restores onto the shown server (or the primary).

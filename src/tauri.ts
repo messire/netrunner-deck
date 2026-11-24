@@ -100,15 +100,32 @@ const fake = (() => {
   const q = new URLSearchParams(location.search);
   // `?servers=legacy`: a Rust side from before SERVERS (no servers_* commands, no `server` on events).
   const legacy = q.get("servers") === "legacy";
-  type FakeServer = { id: string; name: string; kind: "herdr" | "deck-server"; address: string; connected: boolean; manual: boolean; found: boolean; new: boolean; status: { state: string; version?: string; protocol?: number; error?: string } };
+  type FakeServer = { id: string; name: string; kind: "herdr" | "deck-server"; address: string; connected: boolean; manual: boolean; found: boolean; new: boolean; remote?: boolean; machine?: string | null; status: { state: string; version?: string; protocol?: number; error?: string } };
   const online = { state: "online", version: "0.9.5", protocol: 22 };
   const servers: FakeServer[] = [
     { id: "herdr", name: "herdr", kind: "herdr", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock", connected: q.get("servers") !== "0", manual: false, found: true, new: false, status: { ...online } },
     { id: "deck-server/try", name: "deck-server · try", kind: "deck-server", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\deck-server\\sessions\\try\\herdr.sock", connected: q.get("servers") !== "0", manual: false, found: true, new: false,
       status: q.get("servers") === "down" ? { state: "offline", error: "herdr server is not reachable at \\\\.\\pipe\\…\\try\\herdr.sock: Access is denied. (os error 5) — Herdr runs elevated" } : { ...online } },
     { id: "herdr-dev/decktest", name: "herdr-dev · decktest", kind: "herdr", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\herdr-dev\\sessions\\decktest\\herdr.sock", connected: false, manual: false, found: true, new: true, status: { ...online } },
+    { id: "dev@build-box.example.com/deck-server", name: "deck-server @ dev@build-box.example.com", kind: "deck-server", address: "dev@build-box.example.com:/home/dev/.config/deck-server/herdr.sock", connected: false, manual: true, found: true, new: false, remote: true, machine: "dev@build-box.example.com", status: { state: "online", version: "0.4.0", protocol: 22 } },
   ];
-  const view = () => ({ servers: servers.filter((s) => s.connected || s.found || s.manual).map((s) => ({ ...s })), scanned: true });
+  // Saved machines the last scan could not reach (`?servers=0` has none).
+  const unreachable: { machine: string; error: string }[] = q.get("servers") === "0" ? [] : [{ machine: "dev@old-box.example.com:2222", error: "ssh dev@old-box.example.com:2222: no answer within 20s" }];
+  const view = () => ({ servers: servers.filter((s) => s.connected || s.found || s.manual).map((s) => ({ ...s })), scanned: true, unreachable: unreachable.map((m) => ({ ...m })) });
+  /** CHECK in the ADD dialog: a host with `down`, `nobridge`, `refused` or `empty` in its name fails that way. */
+  const probe = (user: string, host: string, port: number) => {
+    const key = `${user}@${host.includes(":") ? `[${host}]` : host}${port === 22 ? "" : `:${port}`}`;
+    if (/down/.test(host)) throw new Error(`ssh ${key}: no answer within 20s`);
+    if (/refused/.test(host)) throw new Error(`ssh ${key}: ${user}@${host}: Permission denied (publickey).`);
+    if (/nobridge/.test(host)) throw new Error(`bridge on ${key}: no deck-server with a bridge there`);
+    if (/empty/.test(host)) throw new Error(`no Herdr or deck-server is running on ${key}`);
+    const home = `/home/${user}/.config`;
+    return [
+      { id: `${key}/herdr`, name: "herdr", kind: "herdr" as const, socket: `${home}/herdr/herdr.sock`, version: "0.9.5", protocol: 22, preferred: false },
+      { id: `${key}/deck-server`, name: "deck-server", kind: "deck-server" as const, socket: `${home}/deck-server/herdr.sock`, version: "0.4.0", protocol: 22, preferred: true },
+      { id: `${key}/deck-server/try`, name: "deck-server · try", kind: "deck-server" as const, socket: `${home}/deck-server/sessions/try/herdr.sock`, version: "0.4.0", protocol: 22, preferred: false },
+    ].map((p) => ({ ...p, connected: !!servers.find((s) => s.id === p.id)?.connected, key }));
+  };
   const changed = () => { setTimeout(() => emit("deck://servers", "changed"), 5); return view(); };
   const srv = (id: unknown) => { const s = servers.find((x) => x.id === id); if (!s) throw new Error(`unknown server ${String(id)}`); return s; };
   const trial = {
@@ -139,6 +156,23 @@ const fake = (() => {
       case "server_connect": { const s = srv(args.id); s.connected = true; return changed(); }
       case "server_disconnect": { const s = srv(args.id); s.connected = false; s.new = false; return changed(); }
       case "server_rename": { const s = srv(args.id); s.name = String(args.name).trim() || s.id; return changed(); }
+      case "server_probe": { await new Promise((r) => setTimeout(r, 900)); return probe(String(args.user), String(args.host), Number(args.port)).map(({ key: _k, ...p }) => p); }
+      case "server_add_host": {
+        const found = probe(String(args.user), String(args.host), Number(args.port));
+        const sockets = args.sockets as string[];
+        for (const p of found) {
+          const s = servers.find((x) => x.id === p.id);
+          const on = sockets.includes(p.socket);
+          if (s) { s.connected ||= on; s.found = true; continue; }
+          servers.push({ id: p.id, name: `${p.name} @ ${p.key}`, kind: p.kind, address: `${p.key}:${p.socket}`, connected: on, manual: on, found: true, new: false, remote: true, machine: p.key, status: { state: "online", version: p.version, protocol: p.protocol } });
+        }
+        return changed();
+      }
+      case "server_remove_host": {
+        for (let i = servers.length - 1; i >= 0; i--) if (servers[i].machine === args.machine) servers.splice(i, 1);
+        const i = unreachable.findIndex((m) => m.machine === args.machine); if (i >= 0) unreachable.splice(i, 1);
+        return changed();
+      }
       case "server_forget": { const i = servers.findIndex((x) => x.id === args.id); if (i >= 0) servers.splice(i, 1); return changed(); }
       case "server_add": {
         const path = String(args.address).trim().replace(/^\\\\\.\\pipe\\/, "");

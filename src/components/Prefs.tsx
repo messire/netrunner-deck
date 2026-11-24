@@ -1,10 +1,12 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
-import { dotOf, hintOf, type ServerView, type ServersView } from "../servers";
+import { dotOf, hintOf, machineErrorOf, type Probed, type ServerView, type ServersView } from "../servers";
+import AddHostDialog from "./AddHostDialog";
 
 /**
  * PREFERENCES (Ctrl+,): a modal panel with sections on the left. Only
  * SERVERS for now: what is connected, what discovery found (offered, never
- * connected by itself), a field for an address by hand. Esc closes.
+ * connected by itself), machines that cannot be reached, and + ADD (a
+ * dialog: user, host, port, CHECK). Esc closes.
  */
 export default function Prefs(p: {
   view?: ServersView;
@@ -15,28 +17,43 @@ export default function Prefs(p: {
   onConnect: (id: string) => void;
   onDisconnect: (id: string) => void;
   onRename: (id: string, name: string) => void;
-  onAdd: (address: string) => void;
   onForget: (id: string) => void;
+  onRemoveHost: (machine: string) => void;
+  onProbe: (user: string, host: string, port: number) => Promise<Probed[]>;
+  onAddHost: (user: string, host: string, port: number, sockets: string[]) => Promise<void>;
   onClose: () => void;
 }) {
   let panel!: HTMLDivElement;
-  let addInput!: HTMLInputElement;
+  let addBtn!: HTMLButtonElement;
   const [renaming, setRenaming] = createSignal<string | null>(null);
-  const [address, setAddress] = createSignal("");
+  const [adding, setAdding] = createSignal(false);
+  /** The row whose REMOVE MACHINE waits for a second click. */
+  const [armed, setArmed] = createSignal<string | null>(null);
   const rows = () => p.view?.servers ?? [];
+  const down = () => p.view?.unreachable ?? [];
   const connected = () => rows().filter((s) => s.connected);
   const offered = () => rows().filter((s) => !s.connected);
   const online = () => connected().filter((s) => s.status.state === "online").length;
 
   onMount(() => {
     const prev = document.activeElement as HTMLElement | null;
-    setTimeout(() => (rows().length ? panel.querySelector<HTMLElement>("button")?.focus() : addInput?.focus()), 0);
+    setTimeout(() => (rows().length ? panel.querySelector<HTMLElement>("button")?.focus() : addBtn?.focus()), 0);
     onCleanup(() => prev?.focus?.());
   });
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && !renaming()) { e.preventDefault(); e.stopPropagation(); p.onClose(); }
+    if (e.key === "Escape" && armed()) { e.preventDefault(); e.stopPropagation(); setArmed(null); }
+    else if (e.key === "Escape" && !renaming() && !adding()) { e.preventDefault(); e.stopPropagation(); p.onClose(); }
   };
-  const add = () => { const a = address().trim(); if (a) { p.onAdd(a); setAddress(""); } };
+  const closeAdd = () => { setAdding(false); setTimeout(() => addBtn?.focus(), 0); };
+
+  /** ✕ of a machine (in row `at`): the first click arms it, the second removes the machine and all its servers. */
+  const Remove = (q: { machine: string; at: string }) => (
+    <Show when={armed() === q.at} fallback={
+      <button class="btn" title={`remove ${q.machine} and all its servers`} aria-label={`remove machine ${q.machine}`} onClick={() => setArmed(q.at)}>✕</button>}>
+      <button class="btn danger" title={`disconnect and forget every server on ${q.machine}`} onBlur={() => setArmed(null)}
+              ref={(el) => setTimeout(() => el.focus(), 0)} onClick={() => { setArmed(null); p.onRemoveHost(q.machine); }}>REMOVE MACHINE?</button>
+    </Show>
+  );
 
   const Row = (q: { s: ServerView }) => {
     const s = () => q.s;
@@ -65,17 +82,22 @@ export default function Prefs(p: {
             <span class="hint">not found by the last scan</span>
           </Show>
         </td>
-        <td><span class="kind">{s().kind}</span>{s().new ? <span class="kind new">new</span> : null}{s().manual ? <span class="kind">manual</span> : null}</td>
+        <td><span class="kind">{s().kind}</span>{s().new ? <span class="kind new">new</span> : null}{s().manual && !s().remote ? <span class="kind">manual</span> : null}</td>
         <td class="mono" title={s().status.version ?? undefined}>{s().status.version ? `${s().status.version}${s().status.protocol != null ? ` · p${s().status.protocol}` : ""}` : "—"}</td>
         <td class="mono">{s().connected && s().status.state === "online" ? p.panes(s().id) : "—"}</td>
         <td class="act">
-          <Show when={!s().connected} fallback={
-            <Show when={s().status.state === "offline"} fallback={<button class="btn" onClick={() => setRenaming(s().id)}>RENAME</button>}>
-              <button class="btn" onClick={p.onScan}>RETRY</button>
-            </Show>}>
-            <button class="btn pri" onClick={() => p.onConnect(s().id)}>CONNECT</button>
+          <Show when={armed() !== s().id}>
+            <Show when={!s().connected} fallback={
+              <Show when={s().status.state === "offline"} fallback={<button class="btn" onClick={() => setRenaming(s().id)}>RENAME</button>}>
+                <button class="btn" onClick={p.onScan}>RETRY</button>
+              </Show>}>
+              <button class="btn pri" onClick={() => p.onConnect(s().id)}>CONNECT</button>
+            </Show>
           </Show>
-          <Show when={s().manual && !s().connected}><button class="btn" title="remove from the list" onClick={() => p.onForget(s().id)}>✕</button></Show>
+          <Show when={s().machine} fallback={
+            <Show when={s().manual}><button class="btn" title="remove this address from the list" aria-label={`remove ${s().name}`} onClick={() => p.onForget(s().id)}>✕</button></Show>}>
+            {(m) => <Remove machine={m()} at={s().id} />}
+          </Show>
         </td>
       </tr>
     );
@@ -99,7 +121,7 @@ export default function Prefs(p: {
             <button class="btn" aria-label="close" onClick={p.onClose}>✕</button>
           </div>
           <Show when={p.error}>{(e) => <div class="err" role="alert">{e()}</div>}</Show>
-          <Show when={rows().length} fallback={<div class="micro empty-srv">{p.view?.scanned ? "No servers found. Start Herdr or deck-server, or add an address below." : "Looking for servers…"}</div>}>
+          <Show when={rows().length || down().length} fallback={<div class="micro empty-srv">{p.view?.scanned ? "No servers found. Start Herdr or deck-server here, or + ADD a machine." : "Looking for servers…"}</div>}>
             <table>
               <thead><tr><th>LINK</th><th>SERVER</th><th>KIND</th><th>VERSION</th><th>PANES</th><th /></tr></thead>
               <tbody>
@@ -108,18 +130,35 @@ export default function Prefs(p: {
                   <tr class="grp"><td colspan="6">FOUND, NOT CONNECTED</td></tr>
                   <For each={offered()}>{(s) => <Row s={s} />}</For>
                 </Show>
+                <Show when={down().length}>
+                  <tr class="grp"><td colspan="6">MACHINES NOT REACHABLE</td></tr>
+                  <For each={down()}>{(m) => (
+                    <tr class="gone">
+                      <td><span class="sw off" aria-hidden="true" /></td>
+                      <td class="who">
+                        <span class="nm"><span class="dot off" /> {m.machine}</span>
+                        <span class="err" title={m.error}>unreachable: {machineErrorOf(m.error)}</span>
+                      </td>
+                      <td><span class="kind">machine</span></td>
+                      <td class="mono">—</td>
+                      <td class="mono">—</td>
+                      <td class="act"><Show when={armed() !== `machine:${m.machine}`}><button class="btn" onClick={p.onScan} disabled={p.scanning}>RETRY</button></Show><Remove machine={m.machine} at={`machine:${m.machine}`} /></td>
+                    </tr>
+                  )}</For>
+                </Show>
               </tbody>
             </table>
           </Show>
           <div class="add">
-            <span class="micro">+ ADD</span>
-            <input ref={addInput} value={address()} onInput={(e) => setAddress(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }}
-                   placeholder="user@host, or machine:path to herdr.sock (local:C:\…, user@host:/…)" aria-label="server address" spellcheck={false} />
-            <button class="btn pri" disabled={!address().trim()} onClick={add}>CONNECT</button>
+            <button ref={addBtn} class="btn pri" onClick={() => setAdding(true)}>+ ADD</button>
+            <span class="micro">a machine by user, address and port</span>
           </div>
-          <p class="micro">Found servers are only offered: nothing connects until you switch it on. Every server is reached the same way, through a bridge on its machine; an address is machine:socket. Type user@host to add another machine (over your own SSH setup); addresses stay in Deck's local preferences.</p>
+          <p class="micro">Found servers are only offered: nothing connects until you switch it on. + ADD opens a dialog with user, host or address and port (22 by default); CHECK signs in over your own SSH setup, lists that machine's servers and pings each one, and only the ones that answer are offered. Every server, here or on another machine, is reached the same way: through deck-server's bridge on its machine. ✕ removes a machine with all its servers. Addresses stay in Deck's local preferences.</p>
         </div>
       </div>
+      <Show when={adding()}>
+        <AddHostDialog onProbe={p.onProbe} onAdd={p.onAddHost} onClose={closeAdd} />
+      </Show>
     </div>
   );
 }

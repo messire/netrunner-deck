@@ -1,6 +1,6 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, listen } from "./tauri";
-import { mergeTrees, splitId, tagDeep, type ServersView } from "./servers";
+import { mergeTrees, splitId, tagDeep, type Probed, type ServersView } from "./servers";
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
@@ -214,6 +214,12 @@ export const api = {
   serverRename: (id: string, name: string) => invoke<ServersView>("server_rename", { id, name }),
   serverAdd: (address: string) => invoke<ServersView>("server_add", { address }),
   serverForget: (id: string) => invoke<ServersView>("server_forget", { id }),
+  /** CHECK in the ADD dialog: the servers on that machine that answer through its bridge. */
+  serverProbe: (user: string, host: string, port: number) => invoke<Probed[]>("server_probe", { user, host, port }),
+  /** Save the machine and connect the servers at `sockets` on it. */
+  serverAddHost: (user: string, host: string, port: number, sockets: string[]) => invoke<ServersView>("server_add_host", { user, host, port, sockets }),
+  /** Drop a machine (`user@host[:port]`) and all its servers; its bridge closes. */
+  serverRemoveHost: (machine: string) => invoke<ServersView>("server_remove_host", { machine }),
   onServers: (cb: () => void): Promise<UnlistenFn> => listen("deck://servers", () => cb()),
   /** Clipboard text for ctrl+v / shift+insert; empty when the clipboard holds no text. */
   clipboardReadText: () => invoke<string>("clipboard_read_text"),

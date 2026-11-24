@@ -666,7 +666,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .prefs .phead h3{margin:0;font-family:var(--fh);letter-spacing:2px;font-size:15px;color:var(--cy)}
 .prefs .phead .sp{flex:1}
 .prefs table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
-.prefs th:nth-child(1){width:56px}.prefs th:nth-child(3){width:150px}.prefs th:nth-child(4){width:100px}.prefs th:nth-child(5){width:60px}.prefs th:nth-child(6){width:120px}
+.prefs th:nth-child(1){width:56px}.prefs th:nth-child(3){width:150px}.prefs th:nth-child(4){width:100px}.prefs th:nth-child(5){width:60px}.prefs th:nth-child(6){width:160px}
 .prefs th{text-align:left;font:10.5px var(--fm);color:var(--mut);letter-spacing:1.5px;padding:4px 8px;border-bottom:1px solid var(--line)}
 .prefs td{padding:8px;border-bottom:1px solid rgba(74,16,32,.5);vertical-align:top;color:var(--txt)}
 .prefs td.mono{font:12px var(--fm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -687,5 +687,39 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .prefs .add input:focus{border-color:var(--cy)}
 .prefs .pbody > .err{border:1px solid var(--red);color:var(--red);padding:6px 10px;font:12px var(--fm);margin-bottom:8px}
 .prefs .empty-srv{padding:18px 0}
+.prefs .add .micro{margin-left:2px}
+.prefs .btn.danger{border-color:var(--red);color:var(--red)}
+.prefs .btn.danger:hover:not(:disabled),.prefs .btn.danger:focus-visible{background:var(--red);color:#120A10;border-color:var(--red)}
+.prefs tr.gone td{color:var(--mut)}
+.prefs tr.gone .who .nm{color:var(--mut);cursor:default}
+.prefs tr.gone .who .err{color:var(--mut)}
+.prefs tr.gone .sw{display:inline-block;cursor:default;opacity:.5}
+/* + ADD machine dialog (over PREFERENCES) */
+.veil.addhost-veil{z-index:60}
+.dlgbox.addhost{width:min(640px,92vw);display:flex;flex-direction:column;gap:10px}
+.dlgbox.addhost .crumb{font:12px var(--fm);color:var(--mut);letter-spacing:.5px;margin-left:10px;font-weight:400}
+.addhost .hrow{display:flex;align-items:flex-end;gap:8px}
+.addhost .hf{display:flex;flex-direction:column;gap:4px;min-width:0}
+.addhost .hf.user{flex:0 0 130px}.addhost .hf.host{flex:1}.addhost .hf.port{flex:0 0 80px}
+.addhost .hf input{background:#0B0609;border:1px solid var(--line);color:var(--cy);font:13px var(--fm);padding:7px 8px;outline:none;min-width:0}
+.addhost .hf input:focus{border-color:var(--cy)}
+.addhost .hf.bad input{border-color:var(--red)}
+.addhost .hf.bad .micro{color:var(--red)}
+.addhost .at{font:16px var(--fm);color:var(--mut);padding-bottom:7px}
+.addhost .herr{border:1px solid var(--org);color:var(--org);padding:7px 10px;font:12.5px/1.45 var(--fm);white-space:normal}
+.addhost .herr .raw{display:block;color:var(--mut);font-size:11px;margin-top:3px;word-break:break-word;user-select:text}
+.addhost .hbusy{color:var(--tcy);animation:hpulse 1.2s ease-in-out infinite}
+@keyframes hpulse{50%{opacity:.45}}
+.addhost .hfound{display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--line);padding-top:8px}
+.addhost .hsrv{display:grid;grid-template-columns:20px minmax(0,1fr) max-content 100px max-content;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--line);cursor:pointer}
+.addhost .hsrv:hover{border-color:var(--tcy)}
+.addhost .hsrv.on{opacity:.65;cursor:default}
+.addhost .hsrv input{accent-color:var(--cy);margin:0}
+.addhost .hsrv .nm{display:flex;flex-direction:column;font-family:var(--fh);font-weight:600;letter-spacing:1px;color:var(--txt);min-width:0}
+.addhost .hsrv .addr{font:11px var(--fm);color:var(--mut);font-weight:400;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.addhost .hsrv .kind{font:10.5px var(--fm);border:1px solid var(--line);padding:1px 6px;color:var(--tcy);white-space:nowrap;width:auto;text-align:left;overflow:visible}
+.addhost .hsrv .ver{font:12px var(--fm);color:var(--txt);white-space:nowrap}
+.addhost .dlga{align-items:center;margin-top:4px}
+.addhost .dlga .sp{flex:1}
 @media (max-width:700px){.prefs{grid-template-columns:1fr}.prefs .pnav{flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:6px 0}.prefs .pnav .h{display:none}}
 .first-run .row .kind{display:none}

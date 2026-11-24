@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Tree } from "./api";
 import { buildTree } from "./tree";
-import { connectedServers, hintOf, filterTree, keepDown, localId, mergeTrees, migrateKey, offeredServers, serverOf, splitId, tagDeep, tagId, type ServerView } from "./servers";
+import { connectedServers, hintOf, machineErrorOf, validateHostForm, filterTree, keepDown, localId, mergeTrees, migrateKey, offeredServers, serverOf, splitId, tagDeep, tagId, type ServerView } from "./servers";
 
 const one = (label: string, repo?: string): Tree => ({
   workspaces: [{ workspace_id: "w1", number: 1, label, focused: true, pane_count: 1, tab_count: 1, active_tab_id: "w1:t1", agent_status: "idle",
@@ -87,5 +87,32 @@ describe("server lists", () => {
     expect(hintOf("timed out waiting for herdr to answer ping")).toMatch(/in time/);
     expect(hintOf("something else")).toBeNull();
     expect(hintOf(null)).toBeNull();
+  });
+});
+
+describe("ADD machine dialog", () => {
+  const f = (user: string, host: string, port: string) => validateHostForm({ user, host, port });
+  it("accepts user, host and a port, 22 by default", () => {
+    expect(f(" dev ", " build-box.example.com ", "2222")).toEqual({ ok: true, user: "dev", host: "build-box.example.com", port: 2222 });
+    expect(f("dev", "build-box.example.com", "")).toMatchObject({ ok: true, port: 22 });
+    expect(f("dev", "[fe80::1]", "22")).toMatchObject({ ok: true, host: "fe80::1" });
+    expect(f("dev", "192.0.2.7", "65535")).toMatchObject({ ok: true, port: 65535 });
+  });
+  it("names the field that is wrong", () => {
+    expect(f("", "build-box.example.com", "22")).toMatchObject({ ok: false, field: "user" });
+    expect(f("dev@x", "build-box.example.com", "22")).toMatchObject({ ok: false, field: "user" });
+    expect(f("dev", "", "22")).toMatchObject({ ok: false, field: "host" });
+    expect(f("dev", "dev@build-box.example.com", "22")).toMatchObject({ ok: false, field: "host" });
+    expect(f("dev", "build-box.example.com:2222", "22")).toMatchObject({ ok: false, field: "host" });
+    expect(f("dev", "-oProxyCommand=x", "22")).toMatchObject({ ok: false, field: "host" });
+    for (const port of ["0", "65536", "22a", "-1", "2.5"]) expect(f("dev", "build-box.example.com", port)).toMatchObject({ ok: false, field: "port" });
+  });
+  it("says why a machine cannot be used in plain words", () => {
+    expect(machineErrorOf("ssh dev@build-box.example.com:2222: no answer within 20s")).toMatch(/No answer/);
+    expect(machineErrorOf("ssh dev@build-box.example.com: dev@build-box.example.com: Permission denied (publickey).")).toMatch(/refused the sign-in/);
+    expect(machineErrorOf("bridge on dev@build-box.example.com: no deck-server with a bridge there")).toMatch(/deck-server is not installed/);
+    expect(machineErrorOf("no Herdr or deck-server is running on dev@build-box.example.com")).toMatch(/no Herdr or deck-server runs/);
+    expect(machineErrorOf("ssh: Could not resolve hostname nowhere.example.com")).toMatch(/not known/);
+    expect(machineErrorOf("something odd")).toBe("something odd");
   });
 });
