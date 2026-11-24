@@ -75,16 +75,20 @@ export default function App() {
   const setPaneView = (id: string, view: "chat" | "term") =>
     setTermPanes((s) => { const n = new Set(s); if (view === "term") n.add(id); else n.delete(id); return n; });
   /** The pane runs Claude Code headless (`deck-server agent`): it is only ever a chat. */
-  const headless = (id: string) => isHeadlessAgent(tree()?.panes.find((p) => p.pane_id === id)?.agent);
+  /** `herdr` or `deck-server` for a connected server id. */
+  function serverKind(id: string | null) { return id === null ? undefined : servers()?.servers.find((s) => s.id === id)?.kind; }
+  // Every pane of a deck-server is a headless Claude chat (docs/adr/0004): decided by the
+  // server, not by the agent label, which a fresh pane reports only once its host is up.
+  const headless = (id: string) => isHeadlessAgent(tree()?.panes.find((p) => p.pane_id === id)?.agent) || serverKind(serverOf(id)) === "deck-server";
   /** The Claude session id behind a pane: a headless pane's own stream says it, otherwise Herdr's `agent_session`. */
   const claudeSession = (id: string) => {
     const x = tree()?.panes.find((p) => p.pane_id === id);
-    if (x && isHeadlessAgent(x.agent)) return agentOf(id)?.sessionId ?? null;
+    if (x && headless(id)) return agentOf(id)?.sessionId ?? null;
     const s = x?.agent_session;
     return x && (x.agent ?? "").toLowerCase().includes("claude") && s?.kind === "id" && s.value ? s.value : null;
   };
   // One event stream per headless Claude pane in the tree (status, questions, live text).
-  createEffect(() => { void syncAgents((tree()?.panes ?? []).filter((p) => isHeadlessAgent(p.agent)).map((p) => p.pane_id)); });
+  createEffect(() => { void syncAgents((tree()?.panes ?? []).filter((p) => headless(p.pane_id)).map((p) => p.pane_id)); });
   const [offline, setOffline] = createSignal<string | null>(null);
 
   // ---- servers (docs/plan/DECK-SERVERS-UI.md) --------------------------------
@@ -181,7 +185,7 @@ export default function App() {
 
   // ---- ACCOUNTS: the Claude accounts of the machine that owns the selected
   // session (deck-server keeps them; a stock Herdr has none) -----------------
-  const kindOf = (id: string | null) => (id === null ? undefined : servers()?.servers.find((s) => s.id === id)?.kind);
+  const kindOf = serverKind;
   /** A new pane on this server runs Claude headless by itself (docs/adr/0003-headless-claude.md). */
   const onDeckServer = (id: string | null) => kindOf(id) === "deck-server";
   /** The server ACCOUNTS and the badge show: the selected session's, else where a new space would go. */
