@@ -151,6 +151,11 @@ describe("sign-in needed", () => {
     expect(a.authRequired).toBe(false);
     expect(applyMsg(a, init("none")).authRequired).toBe(true);
   });
+  it("clears when claude starts again signed in (its account has an email, no tokenSource)", () => {
+    const signedIn = { type: "control_response", response: { subtype: "success", request_id: "deck-init", response: { account: { email: "a@example.com", subscriptionType: "Claude Team", apiProvider: "firstParty" } } } };
+    const a = applyMsg(applyMsg(emptyAgent("e"), init("none")), signedIn);
+    expect(a.authRequired).toBe(false);
+  });
   it("the host's running note names the session", () => {
     const a = applyMsg(emptyAgent("e"), { type: "deck_host", state: "running", detail: null, session_id: "s-9" });
     expect([a.sessionId, a.host.state]).toEqual(["s-9", "running"]);

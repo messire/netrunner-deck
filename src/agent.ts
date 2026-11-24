@@ -101,8 +101,9 @@ export function applyMsg(a: AgentLive, msg: Record<string, unknown>): AgentLive 
           .map((c) => ({ name: str(c.name), description: str(c.description), argumentHint: str(c.argumentHint) }))
         : next.commands;
       // Claude Code says which credential it found; "none" = not signed in.
-      const tokenSource = str(rec(body?.account)?.tokenSource);
-      if (tokenSource) next = { ...next, authRequired: tokenSource === "none" && !str(rec(body?.account)?.apiKeySource) };
+      // Signed in, the account carries the email and no tokenSource.
+      const account = rec(body?.account);
+      if (account) next = { ...next, authRequired: str(account.tokenSource) === "none" && !str(account.email) && !str(account.apiKeySource) };
       const models = Array.isArray(body?.models)
         ? body.models.map(rec).filter((m): m is Record<string, unknown> => !!m && !!str(m.value))
           .map((m) => ({ value: str(m.value), displayName: str(m.displayName) || str(m.value), description: str(m.description) }))

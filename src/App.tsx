@@ -796,7 +796,7 @@ export default function App() {
                   // so polling (accounts every 15 s, agent events) cannot reset a
                   // sign-in that waits for its code.
                   <Show when={signInNeeded(id())}>
-                    <SignInCard server={serverOf(id()) || null} where={accountsServerName()} activate onDone={(list) => { markSignedIn(id()); setAccounts(list); refetchAccounts(); }} />
+                    <SignInCard server={serverOf(id()) || null} where={accountsServerName()} activate onDone={(list) => { markSignedIn(id()); setAccounts(list); refetchAccounts(); api.agentCall(id(), "restart").catch(() => {}); }} />
                   </Show>
                 )} />
             </Show>
