@@ -2,6 +2,13 @@
 
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
+## [0.4.0] — 2026-11-24
+- Several servers in one Deck: SERVERS preferences with discovery, connect/disconnect, rename; panes of all servers in one tree.
+- Remote servers over SSH: type `user@host` in SERVERS to add a machine. Every server, local or remote, is reached the same way, through a bridge on its machine (inside Deck for this one, `deck-server bridge` over ssh for another); addresses read `machine:socket`.
+- Chat view for remote panes: deck-server serves Claude Code transcripts (`deck.transcript.read` / `deck.transcript.stat`).
+- deck-server lives in this repo (`server/`), builds for Linux in CI and updates itself from the `deck-server-latest` release with a live handoff.
+- Fixes: the unsent chat draft is kept per tab; crisp tool-step markers; chamfered frames keep their edge.
+
 ## [0.3.0] — 2026-11-20
 - Chat mode built from the Claude Code transcript: dialogue as chat bubbles, browser-style text selection.
 - Session archive: close a space to cold storage, restore with `claude --resume`, delete with its worktree; tree by repo › worktree › session.
