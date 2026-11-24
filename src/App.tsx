@@ -191,8 +191,14 @@ export default function App() {
   const signInNeeded = (paneId: string) => {
     const l = accounts();
     const noLogin = !!l && l.managed !== false && l.signedIn === false && serverOf(paneId) === accountsServer();
-    return noLogin || !!agentOf(paneId)?.authRequired;
+    if (noLogin) return true;
+    const a = agentOf(paneId);
+    // Claude's refusal from before a finished sign-in is stale: only a later event may bring the card back.
+    return !!a?.authRequired && a.seq > (signedInAt().get(paneId) ?? -1);
   };
+  /** Agent event seq per pane at the moment a sign-in in its chat finished. */
+  const [signedInAt, setSignedInAt] = createSignal(new Map<string, number>());
+  const markSignedIn = (paneId: string) => setSignedInAt((m) => new Map(m).set(paneId, agentOf(paneId)?.seq ?? 0));
   const accountsKey = () => (servers() ? JSON.stringify([accountsServer(), onDeckServer(accountsServer())]) : false);
   const [accounts, { refetch: refetchAccounts, mutate: setAccounts }] = createResource<AccountList | undefined, string | false>(accountsKey, async (key, { value }) => {
     const [server, managed] = JSON.parse(String(key)) as [string | null, boolean];
@@ -790,7 +796,7 @@ export default function App() {
                   // so polling (accounts every 15 s, agent events) cannot reset a
                   // sign-in that waits for its code.
                   <Show when={signInNeeded(id())}>
-                    <SignInCard server={serverOf(id()) || null} where={accountsServerName()} activate onDone={(list) => { setAccounts(list); refetchAccounts(); }} />
+                    <SignInCard server={serverOf(id()) || null} where={accountsServerName()} activate onDone={(list) => { markSignedIn(id()); setAccounts(list); refetchAccounts(); }} />
                   </Show>
                 )} />
             </Show>

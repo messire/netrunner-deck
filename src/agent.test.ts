@@ -144,6 +144,13 @@ describe("sign-in needed", () => {
     expect(a.authRequired).toBe(false);
     expect(applyMsg(emptyAgent("e"), init("claude.ai")).authRequired).toBe(false);
   });
+  it("a fresh claude (restarted after a sign-in) clears an old refusal until its init says otherwise", () => {
+    let a = applyMsg(emptyAgent("e"), { type: "assistant", error: "authentication_failed", message: { content: [] } });
+    expect(a.authRequired).toBe(true);
+    a = applyMsg(a, { type: "deck_host", state: "running", detail: null });
+    expect(a.authRequired).toBe(false);
+    expect(applyMsg(a, init("none")).authRequired).toBe(true);
+  });
   it("the host's running note names the session", () => {
     const a = applyMsg(emptyAgent("e"), { type: "deck_host", state: "running", detail: null, session_id: "s-9" });
     expect([a.sessionId, a.host.state]).toEqual(["s-9", "running"]);

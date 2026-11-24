@@ -172,7 +172,8 @@ export function applyMsg(a: AgentLive, msg: Record<string, unknown>): AgentLive 
       const state = str(msg.state);
       const detail = typeof msg.detail === "string" ? msg.detail : null;
       if (state === "log") return detail ? { ...next, notes: note(next, { kind: "log", text: detail }) } : next;
-      if (state === "running") return { ...next, host: { state: "running", detail: null } };
+      // A fresh `claude` (e.g. restarted after a sign-in) has not failed yet; its init says again if it has no login.
+      if (state === "running") return { ...next, host: { state: "running", detail: null }, authRequired: false };
       if (state === "exited") return { ...next, host: { state: "exited", detail }, busy: false, asks: [], streaming: "", thinking: false };
       return next;
     }
