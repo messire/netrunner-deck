@@ -17,7 +17,7 @@ There is no direct pipe/socket connection and no second transport.
 
 | address | bridge |
 |---|---|
-| `C:\…\herdr.sock` (shown as `\\.\pipe\…`), `/…/herdr.sock` | `deck-server bridge`, a child process here |
+| `C:\…\herdr.sock` (shown as `\\.\pipe\…`), `/…/herdr.sock` | the bridge code running inside Deck (two in-memory pipes in place of stdio) |
 | `ssh://[user@]host[:port]/abs/path/herdr.sock` | `ssh host deck-server bridge` |
 
 Above `endpoint.rs` nothing differs: the same runtime, connection slots,
@@ -28,9 +28,12 @@ request costs one round trip to the bridge.
 
 ## Requirements
 
-* deck-server on every machine with servers Deck uses. Deck finds the local
-  one next to its own executable, then in `~/.local/bin`, then on PATH; on an
-  SSH host, on PATH or in `~/.local/bin`.
+* Deck compiles the bridge's own source (`#[path]` include), so its own
+  machine needs no extra binary and works with a stock Herdr. Running a
+  separately built `deck-server.exe` as the local bridge was tried and
+  dropped: Windows Defender's ML heuristic flags unsigned, never-seen
+  binaries that relay stdio to a pipe.
+* deck-server on every other machine Deck uses, on PATH or in `~/.local/bin`.
 * SSH is the user's own OpenSSH (keys, agent, `~/.ssh/config`,
   `known_hosts`; first-seen keys accepted, changed keys refused). Deck never
   prompts.

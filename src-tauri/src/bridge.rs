@@ -1,8 +1,9 @@
-//! Deck's side of `deck-server bridge` (see `server/src/deck_server/bridge.rs`):
-//! one bridge process per machine (`deck-server bridge` here, or
-//! `ssh host deck-server bridge`), and every connection to any server socket
-//! on that machine is a channel inside it. This is the only way Deck
-//! connects to a server (`endpoint.rs`).
+//! Deck's side of the bridge (`server/src/deck_server/bridge.rs`): one bridge
+//! per machine, and every connection to any server socket on that machine is
+//! a channel inside it. This is the only way Deck connects to a server
+//! (`endpoint.rs`). For Deck's own machine the bridge is that same code
+//! running in a thread here ([`start_local`]); for another machine it is
+//! `ssh host deck-server bridge` ([`start_process`]). Both are a [`Link`].
 //!
 //! A channel is opened by sending its `open` frame and the request right
 //! after it, without waiting: one request costs one network round trip.
@@ -10,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -32,9 +33,16 @@ pub enum StartError {
     Failed(io::Error),
 }
 
+/// The bridge itself, the same source as `deck-server bridge`.
+#[allow(dead_code)]
+#[path = "../../server/src/deck_server/bridge.rs"]
+mod server;
+
 pub struct Link {
-    child: Mutex<Child>,
-    stdin: Mutex<ChildStdin>,
+    /// The bridge process (`None`: the in-process bridge of this machine).
+    child: Option<Mutex<Child>>,
+    /// Frames to the bridge; `None` once killed (ends an in-process bridge).
+    input: Mutex<Option<Box<dyn Write + Send>>>,
     channels: Mutex<HashMap<u64, Sender<Msg>>>,
     next: AtomicU64,
     alive: AtomicBool,
@@ -43,23 +51,22 @@ pub struct Link {
 impl Link {
     pub fn alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
-            && matches!(
-                self.child
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .try_wait(),
-                Ok(None)
-            )
+            && self.child.as_ref().is_none_or(|c| {
+                matches!(
+                    c.lock().unwrap_or_else(PoisonError::into_inner).try_wait(),
+                    Ok(None)
+                )
+            })
     }
 
     fn send(&self, frame: &Value) -> io::Result<()> {
         if !self.alive.load(Ordering::SeqCst) {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "ssh bridge closed",
-            ));
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "bridge closed"));
         }
-        let mut w = self.stdin.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut w = self.input.lock().unwrap_or_else(PoisonError::into_inner);
+        let w = w
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "bridge closed"))?;
         writeln!(w, "{frame}")?;
         w.flush()
     }
@@ -96,9 +103,16 @@ impl Link {
 
     pub fn kill(&self) {
         self.alive.store(false, Ordering::SeqCst);
-        let mut child = self.child.lock().unwrap_or_else(PoisonError::into_inner);
-        let _ = child.kill();
-        let _ = child.wait();
+        // Closing the input ends the bridge loop (and with it every channel).
+        self.input
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(child) = &self.child {
+            let mut child = child.lock().unwrap_or_else(PoisonError::into_inner);
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -117,8 +131,54 @@ fn kind_of(name: &str) -> io::ErrorKind {
     }
 }
 
+fn link(child: Option<Child>, input: Box<dyn Write + Send>) -> Arc<Link> {
+    Arc::new(Link {
+        child: child.map(Mutex::new),
+        input: Mutex::new(Some(input)),
+        channels: Mutex::new(HashMap::new()),
+        next: AtomicU64::new(1),
+        alive: AtomicBool::new(true),
+    })
+}
+
+/// Read `output` (frames from the bridge) and wait for the hello.
+fn greet(
+    link: &Arc<Link>,
+    output: impl Read + Send + 'static,
+    name: &str,
+    timeout: Duration,
+) -> io::Result<bool> {
+    let (hello_tx, hello_rx) = mpsc::channel::<bool>();
+    let weak = Arc::downgrade(link);
+    std::thread::Builder::new()
+        .name(format!("deck-bridge:{name}"))
+        .spawn(move || read_frames(output, weak, hello_tx))?;
+    Ok(matches!(hello_rx.recv_timeout(timeout), Ok(true)))
+}
+
+/// The bridge of Deck's own machine: the bridge code on a thread, talking
+/// over two in-memory pipes exactly as it does over a process's stdio.
+pub fn start_local(timeout: Duration) -> io::Result<Arc<Link>> {
+    let (to_bridge_r, to_bridge_w) = io::pipe()?;
+    let (from_bridge_r, from_bridge_w) = io::pipe()?;
+    std::thread::Builder::new()
+        .name("deck-bridge-local".into())
+        .spawn(move || {
+            if let Err(err) = server::serve(BufReader::new(to_bridge_r), Box::new(from_bridge_w)) {
+                tracing::warn!(%err, "local bridge ended");
+            }
+        })?;
+    let link = link(None, Box::new(to_bridge_w));
+    if greet(&link, from_bridge_r, "this machine", timeout)? {
+        Ok(link)
+    } else {
+        link.kill();
+        Err(io::Error::other("the local bridge did not start"))
+    }
+}
+
 /// Run `cmd` (a bridge on machine `name`) and wait for its hello.
-pub fn start(
+pub fn start_process(
     mut cmd: std::process::Command,
     name: &str,
     timeout: Duration,
@@ -144,33 +204,22 @@ pub fn start(
             })
             .ok();
     }
-    let link = Arc::new(Link {
-        child: Mutex::new(child),
-        stdin: Mutex::new(stdin),
-        channels: Mutex::new(HashMap::new()),
-        next: AtomicU64::new(1),
-        alive: AtomicBool::new(true),
-    });
-    let (hello_tx, hello_rx) = mpsc::channel::<bool>();
-    let weak = Arc::downgrade(&link);
-    std::thread::Builder::new()
-        .name(format!("deck-bridge:{name}"))
-        .spawn(move || read_frames(stdout, weak, hello_tx))
-        .map_err(StartError::Failed)?;
-    let hello = hello_rx.recv_timeout(timeout);
-    if matches!(hello, Ok(true)) {
+    let link = link(Some(child), Box::new(stdin));
+    if greet(&link, stdout, name, timeout).map_err(StartError::Failed)? {
         return Ok(link);
     }
     // No hello: why? Give the process a moment to exit and say so.
     let status = {
         let mut waited = None;
         for _ in 0..20 {
-            if let Ok(Some(s)) = link
-                .child
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .try_wait()
-            {
+            let exited = link.child.as_ref().and_then(|c| {
+                c.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .try_wait()
+                    .ok()
+                    .flatten()
+            });
+            if let Some(s) = exited {
                 waited = Some(s);
                 break;
             }

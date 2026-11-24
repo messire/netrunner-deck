@@ -1,8 +1,9 @@
 //! `deck-server bridge`: many API connections over one stdin/stdout pair.
 //!
 //! This is the one way Netrunner Deck connects to any server, on its own
-//! machine or another one. Deck runs a bridge per machine (locally as a
-//! child process, remotely as `ssh host deck-server bridge`) and opens every
+//! machine or another one. Deck runs a bridge per machine (for its own
+//! machine this code inside Deck, see [`serve`]; for another one
+//! `ssh host deck-server bridge`) and opens every
 //! API connection as a channel inside it. Each channel is a plain connection
 //! to an API socket on the bridge's machine (deck-server's, or any Herdr's),
 //! so what flows through it is the server's own JSON-lines protocol,
@@ -110,7 +111,11 @@ fn connect(path: &str) -> io::Result<Conn> {
     let name = format!(r"\\.\pipe\{path}");
     let mut tries = 0;
     let pipe = loop {
-        match std::fs::OpenOptions::new().read(true).write(true).open(&name) {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&name)
+        {
             // ERROR_PIPE_BUSY: the server has not put up its next instance yet.
             Err(err) if err.raw_os_error() == Some(231) && tries < 40 => {
                 tries += 1;
@@ -136,13 +141,19 @@ fn connect(path: &str) -> io::Result<Conn> {
 /// there the pump starts once a whole line (the request) has been written.
 const READ_AFTER_REQUEST: bool = cfg!(windows);
 
-/// Run until stdin closes.
+/// `deck-server bridge`: serve stdin/stdout until stdin closes.
 pub(crate) fn run() -> io::Result<()> {
-    let out: Out = Arc::new(Mutex::new(Box::new(io::stdout())));
+    let stdin = io::stdin();
+    serve(stdin.lock(), Box::new(io::stdout()))
+}
+
+/// The bridge over any pair of streams, until `input` ends. Deck runs this
+/// same code in its own process for the servers on its machine (it includes
+/// this file), and as `deck-server bridge` through ssh for another machine.
+pub fn serve(mut input: impl BufRead, output: Box<dyn Write + Send>) -> io::Result<()> {
+    let out: Out = Arc::new(Mutex::new(output));
     send(&out, &json!({ "bridge": 1 }));
     let mut channels: HashMap<u64, Conn> = HashMap::new();
-    let stdin = io::stdin();
-    let mut input = stdin.lock();
     let mut line = String::new();
     loop {
         line.clear();

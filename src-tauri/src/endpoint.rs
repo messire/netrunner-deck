@@ -9,8 +9,8 @@
 //! The address only says which machine's bridge, and which socket on it:
 //!
 //! * a **local** address is the server's socket path (shown on Windows as
-//!   the named pipe `\\.\pipe\<path>`): the bridge is `deck-server bridge`
-//!   started here as a child process;
+//!   the named pipe `\\.\pipe\<path>`): the bridge is the same bridge code
+//!   running inside Deck;
 //! * an **ssh** address, `ssh://[user@]host[:port]/<absolute socket path>`:
 //!   the bridge is `ssh host deck-server bridge`, with the user's own
 //!   OpenSSH setup (keys, agent, `~/.ssh/config`, `known_hosts`).
@@ -272,23 +272,19 @@ impl Machine {
         }
     }
 
-    /// The command that starts this machine's bridge.
-    fn bridge_command(&self) -> io::Result<std::process::Command> {
+    /// Start this machine's bridge: in Deck's own process for this
+    /// machine, `ssh host deck-server bridge` for another one.
+    fn start_bridge(&self) -> io::Result<Arc<Link>> {
         match self {
-            Machine::Local => {
-                let exe = local_deck_server().ok_or_else(|| {
-                    io::Error::other(
-                        "deck-server is not installed on this machine (Deck connects to every server through `deck-server bridge`)",
-                    )
-                })?;
-                let mut cmd = crate::archive::quiet_command(exe);
-                cmd.arg("bridge");
-                Ok(cmd)
-            }
+            Machine::Local => crate::bridge::start_local(BRIDGE_START),
             Machine::Ssh(host) => {
                 let mut cmd = ssh_command(host);
                 cmd.arg(REMOTE_BRIDGE);
-                Ok(cmd)
+                match crate::bridge::start_process(cmd, &host.key(), BRIDGE_START) {
+                    Ok(link) => Ok(link),
+                    Err(StartError::NoBridge(why)) => Err(io::Error::other(why)),
+                    Err(StartError::Failed(err)) => Err(err),
+                }
             }
         }
     }
@@ -298,30 +294,6 @@ impl Machine {
 /// the user (`~/.local/bin`; a non-login shell may not have it on PATH).
 const REMOTE_BRIDGE: &str =
     "exec \"$(command -v deck-server || echo \"$HOME/.local/bin/deck-server\")\" bridge";
-
-/// deck-server on this machine: next to Deck, then `~/.local/bin`, then PATH.
-pub fn local_deck_server() -> Option<PathBuf> {
-    let name = if cfg!(windows) {
-        "deck-server.exe"
-    } else {
-        "deck-server"
-    };
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(|d| d.join(name)));
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .filter(|v| !v.is_empty())
-        .map(|h| PathBuf::from(h).join(".local").join("bin").join(name));
-    let on_path = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .map(|d| d.join(name));
-    beside
-        .into_iter()
-        .chain(home)
-        .chain(on_path)
-        .find(|p| p.is_file())
-}
 
 #[derive(Default)]
 struct Slot {
@@ -358,13 +330,7 @@ fn link(machine: &Machine) -> io::Result<Arc<Link>> {
             return Err(io::Error::new(io::ErrorKind::NotConnected, why.clone()));
         }
     }
-    let started = machine.bridge_command().and_then(|cmd| {
-        match crate::bridge::start(cmd, &machine.name(), BRIDGE_START) {
-            Ok(link) => Ok(link),
-            Err(StartError::NoBridge(why)) => Err(io::Error::other(why)),
-            Err(StartError::Failed(err)) => Err(err),
-        }
-    });
+    let started = machine.start_bridge();
     match started {
         Ok(link) => {
             tracing::info!(machine = %machine.name(), "bridge up");
@@ -555,6 +521,42 @@ mod tests {
             assert!(s.contains(&format!("\"$c/{app}\"")), "{s}");
         }
         assert!(s.contains("sessions/*/herdr.sock"));
+    }
+
+    /// `cargo test live_local -- --ignored --nocapture`: through this
+    /// machine's bridge, many calls at once to the default Herdr and an
+    /// event subscription that gets its acknowledgement.
+    #[test]
+    #[ignore]
+    fn live_local_calls_and_subscription() {
+        use std::io::{BufRead, BufReader, Write};
+        let e = Endpoint::Local(crate::herdr::socket_path());
+        let calls: Vec<_> = (0..12)
+            .map(|_| {
+                let e = e.clone();
+                std::thread::spawn(move || {
+                    crate::herdr::call(&e, "workspace.list", serde_json::json!({})).is_ok()
+                })
+            })
+            .collect();
+        let ok = calls
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .filter(|x| *x)
+            .count();
+        println!("{ok}/12 calls answered");
+        assert_eq!(ok, 12);
+        let mut s = e.connect(Some(Duration::from_secs(5))).unwrap();
+        s.write_all(br#"{"id":"t","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#).unwrap();
+        s.write_all(
+            b"
+",
+        )
+        .unwrap();
+        let mut line = String::new();
+        BufReader::new(s).read_line(&mut line).unwrap();
+        println!("{line}");
+        assert!(line.contains("\"result\""), "{line}");
     }
 
     /// `cargo test live_ssh -- --ignored --nocapture` with
