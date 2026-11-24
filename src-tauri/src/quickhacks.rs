@@ -172,7 +172,12 @@ pub const HEADLESS_CLAUDE: &str = "deck-server agent";
 
 /// `deck.agent.send` the prompt once the pane's host is up (until then the
 /// server does not know the pane: "no headless agent in pane …").
-fn send_when_ready(rt: &dyn Runtime, pane: &str, prompt: &str, limit: Duration) -> Result<(), String> {
+fn send_when_ready(
+    rt: &dyn Runtime,
+    pane: &str,
+    prompt: &str,
+    limit: Duration,
+) -> Result<(), String> {
     let t0 = Instant::now();
     loop {
         match rt.agent_call("send", json!({ "pane_id": pane, "text": prompt })) {

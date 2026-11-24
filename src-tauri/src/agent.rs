@@ -52,7 +52,10 @@ impl Cursor {
                 }
             }
             Some("deck.agent.reset") => {
-                self.epoch = line.pointer("/data/epoch").and_then(Value::as_str).map(str::to_string);
+                self.epoch = line
+                    .pointer("/data/epoch")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 self.seq = None;
             }
             _ => {}
@@ -83,20 +86,25 @@ pub fn watch(app: &AppHandle, server: Option<String>, pane_id: String) {
         let mut cursor = Cursor::default();
         let mut pause = Duration::from_millis(500);
         let emit = |line: Value| {
-            let _ = app.emit("deck://agent", json!({ "server": server, "pane_id": pane_id, "line": line }));
+            let _ = app.emit(
+                "deck://agent",
+                json!({ "server": server, "pane_id": pane_id, "line": line }),
+            );
         };
         while !stop.load(Ordering::Relaxed) {
-            let result = crate::servers::runtime_for(&app, server.as_deref()).map_err(|e| e.to_string()).and_then(|rt| {
-                rt.agent_subscribe(cursor.params(&pane_id), &mut |line| {
-                    if stop.load(Ordering::Relaxed) {
-                        return false;
-                    }
-                    cursor.see(&line);
-                    emit(line);
-                    true
-                })
+            let result = crate::servers::runtime_for(&app, server.as_deref())
                 .map_err(|e| e.to_string())
-            });
+                .and_then(|rt| {
+                    rt.agent_subscribe(cursor.params(&pane_id), &mut |line| {
+                        if stop.load(Ordering::Relaxed) {
+                            return false;
+                        }
+                        cursor.see(&line);
+                        emit(line);
+                        true
+                    })
+                    .map_err(|e| e.to_string())
+                });
             if stop.load(Ordering::Relaxed) {
                 break;
             }
@@ -104,7 +112,9 @@ pub fn watch(app: &AppHandle, server: Option<String>, pane_id: String) {
                 Ok(()) => "stream ended".to_string(),
                 Err(e) => e,
             };
-            emit(json!({ "event": "deck.agent.link", "data": { "pane_id": pane_id, "error": error } }));
+            emit(
+                json!({ "event": "deck.agent.link", "data": { "pane_id": pane_id, "error": error } }),
+            );
             std::thread::sleep(pause);
             pause = (pause * 2).min(Duration::from_secs(10));
         }
@@ -125,7 +135,12 @@ pub fn unwatch(app: &AppHandle, server: Option<&str>, pane_id: &str) {
 }
 
 /// `deck.agent.<method>` on the pane's server.
-pub fn call(app: &AppHandle, server: Option<&str>, method: &str, params: Value) -> Result<Value, String> {
+pub fn call(
+    app: &AppHandle,
+    server: Option<&str>,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
     const METHODS: &[&str] = &["send", "respond", "interrupt", "set", "list"];
     if !METHODS.contains(&method) {
         return Err(format!("unknown agent method {method}"));
@@ -141,14 +156,23 @@ mod tests {
     #[test]
     fn cursor_follows_epoch_and_seq() {
         let mut c = Cursor::default();
-        assert_eq!(c.params("p"), json!({"pane_id":"p","epoch":null,"after_seq":null}));
+        assert_eq!(
+            c.params("p"),
+            json!({"pane_id":"p","epoch":null,"after_seq":null})
+        );
         c.see(&json!({"id":"s","result":{"epoch":"e1"}}));
         c.see(&json!({"event":"deck.agent.event","data":{"epoch":"e1","seq":4,"msg":{}}}));
         c.see(&json!({"event":"deck.agent.event","data":{"epoch":"e1","seq":3,"msg":{}}}));
         assert_eq!(c.params("p")["after_seq"], 4);
         c.see(&json!({"event":"deck.agent.reset","data":{"epoch":"e2"}}));
-        assert_eq!(c.params("p"), json!({"pane_id":"p","epoch":"e2","after_seq":null}));
+        assert_eq!(
+            c.params("p"),
+            json!({"pane_id":"p","epoch":"e2","after_seq":null})
+        );
         c.see(&json!({"event":"deck.agent.event","data":{"epoch":"e3","seq":1,"msg":{}}}));
-        assert_eq!(c.params("p"), json!({"pane_id":"p","epoch":"e3","after_seq":1}));
+        assert_eq!(
+            c.params("p"),
+            json!({"pane_id":"p","epoch":"e3","after_seq":1})
+        );
     }
 }

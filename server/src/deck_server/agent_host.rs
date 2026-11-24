@@ -46,7 +46,11 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut options = Options::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let mut value = || it.next().cloned().ok_or_else(|| format!("{arg} needs a value\n{USAGE}"));
+        let mut value = || {
+            it.next()
+                .cloned()
+                .ok_or_else(|| format!("{arg} needs a value\n{USAGE}"))
+        };
         match arg.as_str() {
             "--resume" => options.resume = Some(value()?),
             "--model" => options.model = Some(value()?),
@@ -149,7 +153,13 @@ impl Host {
     fn apply(&self, op: Op) {
         if let Op::Respond { request_id, .. } = &op {
             // Another client answered first.
-            if !self.lock().tracker.open_requests().iter().any(|r| r == request_id) {
+            if !self
+                .lock()
+                .tracker
+                .open_requests()
+                .iter()
+                .any(|r| r == request_id)
+            {
                 return;
             }
         }
@@ -158,13 +168,16 @@ impl Host {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(op.settings_requests(n));
-        let result = op.stdin_lines(n).and_then(|lines| {
-            self.write_stdin(&lines).map_err(|e| e.to_string())
-        });
+        let result = op
+            .stdin_lines(n)
+            .and_then(|lines| self.write_stdin(&lines).map_err(|e| e.to_string()));
         match (result, &op) {
             (Ok(()), Op::Respond { request_id, .. }) => self.emit(proto::resolved(request_id)),
             (Ok(()), _) => {}
-            (Err(err), _) => self.emit(proto::host_state("log", Some(&format!("not delivered: {err}")))),
+            (Err(err), _) => self.emit(proto::host_state(
+                "log",
+                Some(&format!("not delivered: {err}")),
+            )),
         }
     }
 
@@ -186,7 +199,12 @@ impl Host {
         let mut byte = [0u8; 1];
         loop {
             match stream.read(&mut byte)? {
-                0 => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "server closed")),
+                0 => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "server closed",
+                    ))
+                }
                 _ if byte[0] == b'\n' => break,
                 _ => reply.push(byte[0]),
             }
@@ -196,7 +214,10 @@ impl Host {
         }
         let reply = String::from_utf8_lossy(&reply);
         if !reply.contains("\"result\"") {
-            return Err(io::Error::other(format!("{method} refused: {}", reply.trim())));
+            return Err(io::Error::other(format!(
+                "{method} refused: {}",
+                reply.trim()
+            )));
         }
         Ok(stream)
     }
@@ -243,7 +264,10 @@ fn keep_inbox_linked(host: Arc<Host>) {
                     let Ok(line) = line else { break };
                     match Op::from_line(&line) {
                         Ok(op) => host.apply(op),
-                        Err(err) => host.emit(proto::host_state("log", Some(&format!("bad operation: {err}")))),
+                        Err(err) => host.emit(proto::host_state(
+                            "log",
+                            Some(&format!("bad operation: {err}")),
+                        )),
                     }
                 }
                 host.lock().out = None;
@@ -270,7 +294,11 @@ fn report_states(host: Arc<Host>, states: mpsc::Receiver<Status>) {
         while let Ok(newer) = states.try_recv() {
             status = newer;
         }
-        let session = host.session_id.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let session = host
+            .session_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let request = json!({
             "id": format!("deck-agent:report:{}", now_ns()),
             "method": "pane.report_agent",
@@ -295,8 +323,16 @@ fn report_states(host: Arc<Host>, states: mpsc::Receiver<Status>) {
 
 /// The `claude` program: on Windows an npm install is `claude.cmd`.
 fn spawn_claude(host: &Host, options: &Options, session: proto::Session<'_>) -> io::Result<Child> {
-    let args = proto::claude_args(session, options.model.as_deref(), options.permission_mode.as_deref());
-    let candidates: &[&str] = if cfg!(windows) { &["claude", "claude.cmd"] } else { &["claude"] };
+    let args = proto::claude_args(
+        session,
+        options.model.as_deref(),
+        options.permission_mode.as_deref(),
+    );
+    let candidates: &[&str] = if cfg!(windows) {
+        &["claude", "claude.cmd"]
+    } else {
+        &["claude"]
+    };
     let mut last = None;
     for program in candidates {
         let mut command = crate::noninteractive_process::command(program);
@@ -342,7 +378,10 @@ fn run_claude(host: &Arc<Host>, options: &Options, session: proto::Session<'_>) 
         match serde_json::from_str::<Value>(&line) {
             Ok(msg) if msg.is_object() => {
                 let confirmed = deck_agent::control_success_id(&msg).and_then(|id| {
-                    host.settings.lock().unwrap_or_else(PoisonError::into_inner).remove(id)
+                    host.settings
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove(id)
                 });
                 host.emit(msg);
                 if let Some(note) = confirmed {
@@ -384,7 +423,12 @@ pub(crate) fn run(args: &[String]) -> i32 {
         pane_id,
         socket: socket.into(),
         epoch: format!("{}-{}", std::process::id(), now_ns() / 1_000_000),
-        stream: Mutex::new(Stream { seq: 0, backlog: Backlog::default(), tracker: Tracker::default(), out: None }),
+        stream: Mutex::new(Stream {
+            seq: 0,
+            backlog: Backlog::default(),
+            tracker: Tracker::default(),
+            out: None,
+        }),
         stdin: Mutex::new(None),
         ops: AtomicU64::new(1),
         used: AtomicBool::new(resumed),
@@ -414,7 +458,10 @@ pub(crate) fn run(args: &[String]) -> i32 {
             proto::Session::New(&session_id)
         };
         if let Err(err) = run_claude(&host, &options, session) {
-            host.emit(proto::host_state("exited", Some(&format!("could not run claude: {err}"))));
+            host.emit(proto::host_state(
+                "exited",
+                Some(&format!("could not run claude: {err}")),
+            ));
         }
         if started.elapsed() > Duration::from_secs(60) {
             pause = Duration::from_secs(1);
@@ -435,7 +482,15 @@ mod tests {
     #[test]
     fn options() {
         assert_eq!(parse_options(&[]).unwrap(), Options::default());
-        let o = parse_options(&args(&["--resume", "abc", "--model", "opus", "--permission-mode", "plan"])).unwrap();
+        let o = parse_options(&args(&[
+            "--resume",
+            "abc",
+            "--model",
+            "opus",
+            "--permission-mode",
+            "plan",
+        ]))
+        .unwrap();
         assert_eq!(o.resume.as_deref(), Some("abc"));
         assert_eq!(o.model.as_deref(), Some("opus"));
         assert!(parse_options(&args(&["--resume"])).is_err());

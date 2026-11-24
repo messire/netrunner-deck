@@ -6,7 +6,10 @@ use serde_json::{json, Value};
 const FIXTURE: &str = include_str!("../fixtures/ask-then-write.jsonl");
 
 fn fixture() -> Vec<Value> {
-    FIXTURE.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    FIXTURE
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
 }
 
 /// The fixture as the host relays it: after each permission request the
@@ -28,11 +31,15 @@ fn args_for_new_and_resumed_sessions() {
     let new = proto::claude_args(proto::Session::New("abc"), Some("opus"), None);
     assert!(new.windows(2).any(|w| w == ["--session-id", "abc"]));
     assert!(new.windows(2).any(|w| w == ["--model", "opus"]));
-    assert!(new.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
+    assert!(new
+        .windows(2)
+        .any(|w| w == ["--permission-prompt-tool", "stdio"]));
     assert!(new.contains(&"--replay-user-messages".to_string()));
     let resumed = proto::claude_args(proto::Session::Resume("abc"), None, Some("plan"));
     assert!(resumed.windows(2).any(|w| w == ["--resume", "abc"]));
-    assert!(resumed.windows(2).any(|w| w == ["--permission-mode", "plan"]));
+    assert!(resumed
+        .windows(2)
+        .any(|w| w == ["--permission-mode", "plan"]));
     assert!(!resumed.contains(&"--session-id".to_string()));
 }
 
@@ -41,19 +48,29 @@ fn user_message_text_and_images() {
     let v: Value = serde_json::from_str(&proto::user_message("hi", &[]).unwrap()).unwrap();
     assert_eq!(v["type"], "user");
     assert_eq!(v["message"]["content"], "hi");
-    let img = proto::Image { media_type: "image/png".into(), data: "AAAA".into() };
+    let img = proto::Image {
+        media_type: "image/png".into(),
+        data: "AAAA".into(),
+    };
     let v: Value = serde_json::from_str(&proto::user_message("look", &[img]).unwrap()).unwrap();
-    assert_eq!(v["message"]["content"][0]["source"]["media_type"], "image/png");
+    assert_eq!(
+        v["message"]["content"][0]["source"]["media_type"],
+        "image/png"
+    );
     assert_eq!(v["message"]["content"][1]["text"], "look");
     assert!(proto::user_message("  ", &[]).is_err());
-    let bad = proto::Image { media_type: "text/html".into(), data: "x".into() };
+    let bad = proto::Image {
+        media_type: "text/html".into(),
+        data: "x".into(),
+    };
     assert!(proto::user_message("x", &[bad]).is_err());
 }
 
 #[test]
 fn permission_response_shape() {
     let allow = json!({"behavior":"allow","updatedInput":{"file_path":"/a"}});
-    let v: Value = serde_json::from_str(&proto::permission_response("r1", &allow).unwrap()).unwrap();
+    let v: Value =
+        serde_json::from_str(&proto::permission_response("r1", &allow).unwrap()).unwrap();
     assert_eq!(v["type"], "control_response");
     assert_eq!(v["response"]["request_id"], "r1");
     assert_eq!(v["response"]["response"]["behavior"], "allow");
@@ -66,7 +83,11 @@ fn permission_response_shape() {
 fn ops_round_trip_through_the_inbox() {
     let ops = [
         Op::from_request("send", &json!({"text":"hello"})).unwrap(),
-        Op::from_request("respond", &json!({"request_id":"r","response":{"behavior":"deny","message":"no"}})).unwrap(),
+        Op::from_request(
+            "respond",
+            &json!({"request_id":"r","response":{"behavior":"deny","message":"no"}}),
+        )
+        .unwrap(),
         Op::from_request("interrupt", &json!({})).unwrap(),
         Op::from_request("set", &json!({"model":"sonnet","permission_mode":"plan"})).unwrap(),
         Op::from_request("set", &json!({"model":null})).unwrap(),
@@ -99,9 +120,19 @@ fn tracker_follows_a_real_session() {
     // resumes work, and the result ends the turn.
     assert_eq!(
         seen,
-        [Status::Working, Status::Blocked, Status::Working, Status::Blocked, Status::Working, Status::Idle]
+        [
+            Status::Working,
+            Status::Blocked,
+            Status::Working,
+            Status::Blocked,
+            Status::Working,
+            Status::Idle
+        ]
     );
-    assert_eq!(t.session_id.as_deref(), Some("60eef6dd-b9b4-4735-8aa2-174874c082f1"));
+    assert_eq!(
+        t.session_id.as_deref(),
+        Some("60eef6dd-b9b4-4735-8aa2-174874c082f1")
+    );
     assert!(t.model.is_some());
     assert!(t.open_requests().is_empty());
 }
@@ -109,25 +140,42 @@ fn tracker_follows_a_real_session() {
 #[test]
 fn tracker_user_turn_and_cancel() {
     let mut t = Tracker::default();
-    assert_eq!(t.observe(&json!({"type":"user","message":{"role":"user","content":"hi"}})), Some(Status::Working));
+    assert_eq!(
+        t.observe(&json!({"type":"user","message":{"role":"user","content":"hi"}})),
+        Some(Status::Working)
+    );
     // A tool result is not a new turn.
     let mut idle = Tracker::default();
-    assert_eq!(idle.observe(&json!({"type":"user","message":{"content":[{"type":"tool_result"}]}})), None);
+    assert_eq!(
+        idle.observe(&json!({"type":"user","message":{"content":[{"type":"tool_result"}]}})),
+        None
+    );
     let req = json!({"type":"control_request","request_id":"q","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}});
     assert_eq!(t.observe(&req), Some(Status::Blocked));
-    assert_eq!(t.observe(&json!({"type":"control_cancel_request","request_id":"q"})), Some(Status::Working));
-    assert_eq!(t.observe(&proto::host_state("exited", Some("code 1"))), Some(Status::Idle));
+    assert_eq!(
+        t.observe(&json!({"type":"control_cancel_request","request_id":"q"})),
+        Some(Status::Working)
+    );
+    assert_eq!(
+        t.observe(&proto::host_state("exited", Some("code 1"))),
+        Some(Status::Idle)
+    );
 }
 
 #[test]
 fn backlog_keeps_the_turn_meta_and_open_requests() {
     let mut b = Backlog::default();
     let msgs = fixture();
-    let first_request = msgs.iter().position(|m| permission_request_id(m).is_some()).unwrap();
+    let first_request = msgs
+        .iter()
+        .position(|m| permission_request_id(m).is_some())
+        .unwrap();
     for (i, m) in msgs.iter().enumerate().take(first_request + 1) {
         b.push(i as u64, m);
     }
-    let req_id = permission_request_id(&msgs[first_request]).unwrap().to_string();
+    let req_id = permission_request_id(&msgs[first_request])
+        .unwrap()
+        .to_string();
     assert!(b.is_open(&req_id));
     assert_eq!(b.since(None).len(), first_request + 1);
     assert_eq!(b.since(Some(first_request as u64 - 1)).len(), 1);
@@ -135,7 +183,10 @@ fn backlog_keeps_the_turn_meta_and_open_requests() {
     // Answered: the request leaves, the rest of the turn stays.
     b.push(1000, &proto::resolved(&req_id));
     assert!(!b.is_open(&req_id));
-    assert!(!b.since(None).iter().any(|e| e.msg.contains(&req_id) && e.msg.contains("can_use_tool")));
+    assert!(!b
+        .since(None)
+        .iter()
+        .any(|e| e.msg.contains(&req_id) && e.msg.contains("can_use_tool")));
 
     // Turn end: only meta (init + initialize response) and the result remain.
     for (i, m) in msgs.iter().enumerate().skip(first_request + 1) {
@@ -144,15 +195,29 @@ fn backlog_keeps_the_turn_meta_and_open_requests() {
         }
         b.push(2000 + i as u64, m);
     }
-    let left: Vec<Value> = b.since(None).iter().map(|e| serde_json::from_str(&e.msg).unwrap()).collect();
+    let left: Vec<Value> = b
+        .since(None)
+        .iter()
+        .map(|e| serde_json::from_str(&e.msg).unwrap())
+        .collect();
     let kinds: Vec<(&str, &str)> = left
         .iter()
-        .map(|m| (m["type"].as_str().unwrap(), m.get("subtype").and_then(Value::as_str).unwrap_or("")))
+        .map(|m| {
+            (
+                m["type"].as_str().unwrap(),
+                m.get("subtype").and_then(Value::as_str).unwrap_or(""),
+            )
+        })
         .collect();
     assert!(kinds.contains(&("system", "init")), "{kinds:?}");
     assert!(kinds.contains(&("control_response", "")), "{kinds:?}");
     assert!(kinds.iter().any(|k| k.0 == "result"), "{kinds:?}");
-    assert!(!kinds.iter().any(|k| k.0 == "stream_event" || k.0 == "assistant"), "{kinds:?}");
+    assert!(
+        !kinds
+            .iter()
+            .any(|k| k.0 == "stream_event" || k.0 == "assistant"),
+        "{kinds:?}"
+    );
     assert_eq!(b.last_seq(), Some(2000 + msgs.len() as u64 - 1));
 }
 
@@ -190,7 +255,8 @@ fn settings_are_confirmed_by_claude() {
     assert_eq!(reqs.len(), 2);
     let lines = set.stdin_lines(3).unwrap();
     assert!(lines[0].contains(&reqs[0].0) && lines[1].contains(&reqs[1].0));
-    let ok = json!({"type":"control_response","response":{"subtype":"success","request_id":reqs[1].0}});
+    let ok =
+        json!({"type":"control_response","response":{"subtype":"success","request_id":reqs[1].0}});
     assert_eq!(control_success_id(&ok), Some(reqs[1].0.as_str()));
     let mut t = Tracker::default();
     t.observe(&reqs[1].1);

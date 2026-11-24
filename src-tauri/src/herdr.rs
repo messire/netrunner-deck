@@ -508,7 +508,11 @@ pub fn stream(
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line).map_err(|e| opened(endpoint, e))? == 0 {
+        if reader
+            .read_line(&mut line)
+            .map_err(|e| opened(endpoint, e))?
+            == 0
+        {
             return Err(HerdrError::Io(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "stream closed",
@@ -521,7 +525,10 @@ pub fn stream(
             continue;
         }
         if let LineClass::Error(message) = classify_line(&line) {
-            return Err(HerdrError::Api { method: method.to_owned(), message });
+            return Err(HerdrError::Api {
+                method: method.to_owned(),
+                message,
+            });
         }
         if !on_line(value) {
             return Ok(());

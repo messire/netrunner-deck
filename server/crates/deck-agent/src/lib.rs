@@ -90,7 +90,8 @@ pub mod proto {
     }
 
     pub fn control_request(request_id: &str, request: Value) -> String {
-        json!({ "type": "control_request", "request_id": request_id, "request": request }).to_string()
+        json!({ "type": "control_request", "request_id": request_id, "request": request })
+            .to_string()
     }
 
     /// A user turn: text and pasted images.
@@ -133,7 +134,9 @@ pub mod proto {
         match response.get("behavior").and_then(Value::as_str) {
             Some("allow") => {
                 if !response.get("updatedInput").is_some_and(Value::is_object) {
-                    return Err("allow needs updatedInput (the tool input, possibly changed)".into());
+                    return Err(
+                        "allow needs updatedInput (the tool input, possibly changed)".into(),
+                    );
                 }
             }
             Some("deny") => {}
@@ -151,7 +154,10 @@ pub mod proto {
     }
 
     pub fn set_model(request_id: &str, model: Option<&str>) -> String {
-        control_request(request_id, json!({ "subtype": "set_model", "model": model }))
+        control_request(
+            request_id,
+            json!({ "subtype": "set_model", "model": model }),
+        )
     }
 
     pub const PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "plan", "bypassPermissions"];
@@ -160,7 +166,10 @@ pub mod proto {
         if !PERMISSION_MODES.contains(&mode) {
             return Err(format!("unknown permission mode {mode}"));
         }
-        Ok(control_request(request_id, json!({ "subtype": "set_permission_mode", "mode": mode })))
+        Ok(control_request(
+            request_id,
+            json!({ "subtype": "set_permission_mode", "mode": mode }),
+        ))
     }
 
     /// The host's own note in the event stream that a permission request
@@ -194,10 +203,19 @@ pub mod proto {
 /// these over the host's inbox, one JSON line each).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
-    Send { text: String, images: Vec<proto::Image> },
-    Respond { request_id: String, response: Value },
+    Send {
+        text: String,
+        images: Vec<proto::Image>,
+    },
+    Respond {
+        request_id: String,
+        response: Value,
+    },
     Interrupt,
-    Set { model: Option<Option<String>>, permission_mode: Option<String> },
+    Set {
+        model: Option<Option<String>>,
+        permission_mode: Option<String>,
+    },
 }
 
 impl Op {
@@ -215,7 +233,10 @@ impl Op {
                         ) else {
                             return Err("an image needs media_type and data".into());
                         };
-                        images.push(proto::Image { media_type: media_type.into(), data: data.into() });
+                        images.push(proto::Image {
+                            media_type: media_type.into(),
+                            data: data.into(),
+                        });
                     }
                 }
                 let text = text("text").unwrap_or_default();
@@ -224,9 +245,15 @@ impl Op {
             }
             "respond" => {
                 let request_id = text("request_id").ok_or("request_id is required")?;
-                let response = params.get("response").cloned().ok_or("response is required")?;
+                let response = params
+                    .get("response")
+                    .cloned()
+                    .ok_or("response is required")?;
                 proto::permission_response(&request_id, &response)?;
-                Ok(Op::Respond { request_id, response })
+                Ok(Op::Respond {
+                    request_id,
+                    response,
+                })
             }
             "interrupt" => Ok(Op::Interrupt),
             "set" => {
@@ -243,7 +270,10 @@ impl Op {
                 if model.is_none() && permission_mode.is_none() {
                     return Err("nothing to set (model, permission_mode)".into());
                 }
-                Ok(Op::Set { model, permission_mode })
+                Ok(Op::Set {
+                    model,
+                    permission_mode,
+                })
             }
             other => Err(format!("unknown agent operation {other}")),
         }
@@ -282,12 +312,19 @@ impl Op {
     /// with `n`, each with the [`proto::settings`] note to emit once
     /// `claude` confirms it.
     pub fn settings_requests(&self, n: u64) -> Vec<(String, Value)> {
-        let Op::Set { model, permission_mode } = self else {
+        let Op::Set {
+            model,
+            permission_mode,
+        } = self
+        else {
             return Vec::new();
         };
         let mut out = Vec::new();
         if let Some(model) = model {
-            out.push((format!("deck-model-{n}"), proto::settings(Some(model.as_deref()), None)));
+            out.push((
+                format!("deck-model-{n}"),
+                proto::settings(Some(model.as_deref()), None),
+            ));
         }
         if let Some(mode) = permission_mode {
             out.push((format!("deck-mode-{n}"), proto::settings(None, Some(mode))));
@@ -300,14 +337,23 @@ impl Op {
     pub fn stdin_lines(&self, n: u64) -> Result<Vec<String>, String> {
         Ok(match self {
             Op::Send { text, images } => vec![proto::user_message(text, images)?],
-            Op::Respond { request_id, response } => {
+            Op::Respond {
+                request_id,
+                response,
+            } => {
                 vec![proto::permission_response(request_id, response)?]
             }
             Op::Interrupt => vec![proto::interrupt(&format!("deck-interrupt-{n}"))],
-            Op::Set { model, permission_mode } => {
+            Op::Set {
+                model,
+                permission_mode,
+            } => {
                 let mut lines = Vec::new();
                 if let Some(model) = model {
-                    lines.push(proto::set_model(&format!("deck-model-{n}"), model.as_deref()));
+                    lines.push(proto::set_model(
+                        &format!("deck-model-{n}"),
+                        model.as_deref(),
+                    ));
                 }
                 if let Some(mode) = permission_mode {
                     lines.push(proto::set_permission_mode(&format!("deck-mode-{n}"), mode)?);
@@ -417,7 +463,11 @@ impl Tracker {
     /// Feeds one event; returns the status when it changed.
     pub fn observe(&mut self, msg: &Value) -> Option<Status> {
         let before = self.status();
-        if let Some(id) = msg.get("session_id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        if let Some(id) = msg
+            .get("session_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             self.session_id = Some(id.to_string());
         }
         match (msg_type(msg), subtype(msg)) {
@@ -602,7 +652,14 @@ pub fn uuid_from_seed(seed: [u8; 16]) -> String {
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 #[cfg(test)]

@@ -85,13 +85,15 @@ impl Agent {
         self.tracker = Tracker::default();
         self.last_seq = None;
         self.answered.clear();
-        let reset = json!({ "event": "deck.agent.reset", "data": { "pane_id": pane_id, "epoch": epoch } })
-            .to_string();
+        let reset =
+            json!({ "event": "deck.agent.reset", "data": { "pane_id": pane_id, "epoch": epoch } })
+                .to_string();
         self.broadcast(&reset);
     }
 
     fn broadcast(&mut self, line: &str) {
-        self.subscribers.retain(|tx| tx.send(line.to_string()).is_ok());
+        self.subscribers
+            .retain(|tx| tx.send(line.to_string()).is_ok());
     }
 
     fn summary(&self, pane_id: &str) -> Value {
@@ -150,7 +152,11 @@ pub(crate) fn handle(
         return None;
     }
     let request: Value = serde_json::from_str(line).ok()?;
-    let method = request.get("method")?.as_str()?.strip_prefix(PREFIX)?.to_string();
+    let method = request
+        .get("method")?
+        .as_str()?
+        .strip_prefix(PREFIX)?
+        .to_string();
     let id = request
         .get("id")
         .and_then(Value::as_str)
@@ -180,9 +186,18 @@ pub(crate) fn handle(
         },
         ("subscribe", Some(pane)) => {
             let after = params.get("after_seq").and_then(Value::as_u64);
-            return Some(subscribe(&id, &pane, epoch.as_deref(), after, stream, running));
+            return Some(subscribe(
+                &id,
+                &pane,
+                epoch.as_deref(),
+                after,
+                stream,
+                running,
+            ));
         }
-        ("send" | "respond" | "interrupt" | "set", Some(pane)) => operation(&method, &pane, &params),
+        ("send" | "respond" | "interrupt" | "set", Some(pane)) => {
+            operation(&method, &pane, &params)
+        }
         ("host" | "inbox" | "subscribe" | "send" | "respond" | "interrupt" | "set", None) => {
             missing("pane_id")
         }
@@ -210,10 +225,16 @@ fn operation(method: &str, pane_id: &str, params: &Value) -> Reply {
     let agent = reg
         .get_mut(pane_id)
         .filter(|a| !a.epoch.is_empty())
-        .ok_or(("agent_not_found", format!("no headless agent in pane {pane_id}")))?;
+        .ok_or((
+            "agent_not_found",
+            format!("no headless agent in pane {pane_id}"),
+        ))?;
     if let Op::Respond { request_id, .. } = &op {
         if !agent.backlog.is_open(request_id) || !agent.answered.insert(request_id.clone()) {
-            return Err(("already_answered", format!("request {request_id} is not open")));
+            return Err((
+                "already_answered",
+                format!("request {request_id} is not open"),
+            ));
         }
     }
     let line = op.to_line();
@@ -224,7 +245,10 @@ fn operation(method: &str, pane_id: &str, params: &Value) -> Reply {
         agent.inbox = None;
     }
     if agent.queued.len() >= MAX_QUEUED {
-        return Err(("agent_unavailable", "the agent host is not connected".into()));
+        return Err((
+            "agent_unavailable",
+            "the agent host is not connected".into(),
+        ));
     }
     agent.queued.push_back(line);
     Ok(json!({ "queued": true }))
@@ -261,7 +285,10 @@ fn host(
                         ingest(pane_id, epoch, &String::from_utf8_lossy(&line));
                     }
                     if pending.len() > MAX_EVENT_LINE {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "agent event line is too large"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "agent event line is too large",
+                        ));
                     }
                 }
             }
@@ -340,7 +367,11 @@ fn inbox(
 
 /// Writes lines from `rx` until the peer goes, the sender is dropped or the
 /// server stops.
-fn pump(rx: mpsc::Receiver<String>, stream: &mut LocalStream, running: &AtomicBool) -> io::Result<()> {
+fn pump(
+    rx: mpsc::Receiver<String>,
+    stream: &mut LocalStream,
+    running: &AtomicBool,
+) -> io::Result<()> {
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(line) => write_line(stream, &line)?,
@@ -366,7 +397,11 @@ fn subscribe(
     let (head, replay) = {
         let mut reg = registry();
         let agent = reg.entry(pane_id.to_string()).or_default();
-        let after = if epoch == Some(agent.epoch.as_str()) { after_seq } else { None };
+        let after = if epoch == Some(agent.epoch.as_str()) {
+            after_seq
+        } else {
+            None
+        };
         let replay: Vec<String> = agent
             .backlog
             .since(after)
