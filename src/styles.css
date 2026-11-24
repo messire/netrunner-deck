@@ -753,3 +753,4 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .first-run .row .kind{display:none}
 .acc-where{color:var(--mut);margin:-4px 0 8px 2px;letter-spacing:1px;font-size:11px}
 .mode-pop .slash-it.cur .sn{color:var(--org)}
+.chat-start{display:flex;flex-direction:column;gap:6px;align-items:center}.chat-start .micro{max-width:560px;text-align:center;line-height:1.5}.chat-start b{color:var(--cy);font-weight:600}

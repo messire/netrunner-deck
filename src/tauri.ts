@@ -269,7 +269,7 @@ const fake = (() => {
           }
         } else if (action === "workspace.close" && target) {
           const w = workspaces.find((x) => x.workspace_id === target);
-          if (w && !w.worktree && workspaces.some((x) => x.worktree?.repo_name === w.label) && !(args.options as any)?.close_group) throw new Error("herdr returned an error for workspace.close: workspace_group_close_required");
+          if (w && !w.worktree && workspaces.some((x) => x.worktree?.repo_name === w.label) && !(args.options as any)?.close_group) throw new Error("the server refused workspace.close: workspace_group_close_required");
           for (let i = panes.length - 1; i >= 0; i--) if (panes[i].workspace_id === target) panes.splice(i, 1);
           for (let i = tabs.length - 1; i >= 0; i--) if (tabs[i].workspace_id === target) tabs.splice(i, 1);
           const i = workspaces.findIndex((x) => x.workspace_id === target); if (i >= 0) workspaces.splice(i, 1);
@@ -283,6 +283,7 @@ const fake = (() => {
         return new URLSearchParams(location.search).has("update")
           ? { version: "9.9.9", current: "0.1.0", notes: "browser stand-in", date: null } : null;
       case "update_install": await new Promise((r) => setTimeout(r, 1500)); return null;
+      case "repos_list": return { folders: [{ name: "atlas", root: "/home/me/work/atlas", git: true }, { name: "notes", root: "/home/me/notes", git: false }] };
       // deck-server's `deck.accounts.*`; `?signin=1` starts with a machine that has no login.
       case "accounts_call": {
         const p = (args.params ?? {}) as Record<string, unknown>;

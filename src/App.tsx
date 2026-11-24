@@ -405,10 +405,29 @@ export default function App() {
   const [repoBox, setRepoBox] = createSignal(false);
   /** The server the "+" was pressed for (a section header), else `targetServer()`. */
   const [repoServer, setRepoServer] = createSignal<string | null>(null);
-  const newRepo = (server?: string) => { setRepoServer(server ?? null); setRepoBox(true); };
+  /** A server on another machine: its folders are not this computer's. */
+  const isRemote = (id: string | null) => id !== null && !!servers()?.servers.find((s) => s.id === id)?.remote;
+  /** Folders Claude Code knows on the remote machine the box is open for (null = still asking). */
+  const [remoteFolders, setRemoteFolders] = createSignal<{ name: string; root: string }[] | null>(null);
+  const newRepo = (server?: string) => {
+    setRepoServer(server ?? null);
+    setRemoteFolders(null);
+    const target = server ?? targetServer();
+    if (isRemote(target)) {
+      if (onDeckServer(target)) api.reposList(target).then((r) => setRemoteFolders(r.folders)).catch(() => setRemoteFolders([]));
+      else setRemoteFolders([]);
+    }
+    setRepoBox(true);
+  };
+  const repoTarget = () => repoServer() ?? targetServer();
+  const repoServerName = () => { const id = repoTarget(); return connected().find((s) => s.id === id)?.name ?? ""; };
   const knownRepos = (): KnownRepo[] => {
-    const open = new Set((tree()?.workspaces ?? []).map((w) => (w.worktree?.checkout_path ?? "").replace(/^\\\\\?\\/, "").replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase()).filter(Boolean));
-    return (harness() ?? []).filter((r) => !r.personal && r.exists).map((r) => ({ name: r.name, root: r.root, open: open.has(r.root.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase()) }));
+    const norm = (p: string) => p.replace(/^\\\\\?\\/, "").replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
+    const target = repoTarget();
+    const open = new Set((fullTree()?.workspaces ?? []).filter((w) => target === null || serverOf(w.workspace_id) === target).map((w) => norm(w.worktree?.checkout_path ?? "")).filter(Boolean));
+    // A server on another machine: the folders Claude Code knows there, never this computer's.
+    if (isRemote(target)) return (remoteFolders() ?? []).map((f) => ({ name: f.name, root: f.root, open: open.has(norm(f.root)) }));
+    return (harness() ?? []).filter((r) => !r.personal && r.exists).map((r) => ({ name: r.name, root: r.root, open: open.has(norm(r.root)) }));
   };
   const openRepo = async (root: string) => {
     try {
@@ -791,6 +810,7 @@ export default function App() {
               </Show>
             }>
               <ChatView paneId={id()} sessionId={claudeSession(id()) ?? ""} tree={tree()} outputTick={outputTick()} harness={harness()} agent={() => agentOf(id())}
+                machine={connected().find((s) => s.id === serverOf(id()))?.name}
                 signIn={() => (
                   // Shown while `signInNeeded` holds; the card itself is created once,
                   // so polling (accounts every 15 s, agent events) cannot reset a
@@ -828,7 +848,8 @@ export default function App() {
           onClose={closePrefs} />
       </Show>
       <Show when={newTabFor()}>{(t) => { const target = t(); return <NewTabBox initial={remembered("deck.newTabKind") ?? "claude"} onPick={(k) => openTab(target, k)} onClose={() => setNewTabFor(null)} />; }}</Show>
-      <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} /></Show>
+      <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)}
+        where={repoServerName()} remote={isRemote(repoTarget())} loading={isRemote(repoTarget()) && remoteFolders() === null} /></Show>
       <Show when={wtBox()}>{(w) => { const t = w(); return <NewWorktreeBox repo={t.repo} onCreate={(b, base) => createWorktree(t.root, b, base, t.server)} onClose={() => setWtBox(null)} />; }}</Show>
       <Show when={ask()}>{(q) => <PromptBox title={q().title} value={q().value} placeholder="name" ok={q().ok} onClose={() => setAsk(null)} />}</Show>
       <Show when={overlay() === "palette"}><Palette title="Palette" items={paletteItems()} onClose={() => setOverlay(null)} /></Show>

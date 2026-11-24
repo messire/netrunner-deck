@@ -332,6 +332,8 @@ export const api = {
   transcriptWatch: (sessionId: string | null, server?: string | null) => invoke<void>("transcript_watch", { server: srv(server), sessionId }),
   onTranscript: (cb: (e: { session_id: string; len: number }) => void): Promise<UnlistenFn> =>
     listen<{ session_id: string; len: number }>("deck://transcript", (e) => cb(e.payload)),
+  /** Folders Claude Code knows on `server`'s machine (deck-server's `deck.repos.list`). */
+  reposList: (server: string | null) => invoke<{ folders: { name: string; root: string; git: boolean }[] }>("repos_list", { server: srv(server) }),
   /** The accounts of `server`'s machine (deck-server keeps them; Deck only asks). */
   accountsList: (server: string | null) => { count("accounts_call"); return invoke<AccountList>("accounts_call", { server: srv(server), method: "list", params: {} }); },
   accountsSwitch: (server: string | null, number: number) => invoke<AccountList>("accounts_call", { server: srv(server), method: "switch", params: { number } }),

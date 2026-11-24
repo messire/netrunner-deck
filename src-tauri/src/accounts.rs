@@ -30,6 +30,14 @@ pub fn call(
     rt.accounts_call(method, params).map_err(|e| e.to_string())
 }
 
+/// `deck.repos.list` on `server`: the folders Claude Code knows on that
+/// server's machine (OPEN REPOSITORY offers them for a server on another
+/// machine).
+pub fn repos(app: &AppHandle, server: Option<&str>) -> Result<Value, String> {
+    let rt = crate::servers::runtime_for(app, server)?;
+    rt.repos_list().map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

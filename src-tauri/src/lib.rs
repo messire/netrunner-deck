@@ -394,6 +394,12 @@ async fn transcript_watch(
     blocking(move || transcript::watch(&app, server, session_id)).await
 }
 
+/// Folders Claude Code knows on `server`'s machine (`deck.repos.list`).
+#[tauri::command]
+async fn repos_list(app: AppHandle, server: Option<String>) -> Result<Value, String> {
+    blocking(move || accounts::repos(&app, server.as_deref())).await
+}
+
 // ---- headless Claude sessions (deck-server) ---------------------------------
 
 /// `deck.agent.<method>` (send, respond, interrupt, set, resume, restart, list) on `server`.
@@ -899,6 +905,7 @@ pub fn run() {
             update_check,
             update_install,
             accounts_call,
+            repos_list,
             archive_list,
             archive_close,
             archive_restore,

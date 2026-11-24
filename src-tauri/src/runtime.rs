@@ -98,6 +98,8 @@ pub trait Runtime: Send + Sync {
     /// deck-server's accounts of its machine (`deck.accounts.<method>`:
     /// list, switch, remove, login.start, login.finish).
     fn accounts_call(&self, method: &str, params: Value) -> Result<Value>;
+    /// deck-server's `deck.repos.list`: folders Claude Code knows on its machine.
+    fn repos_list(&self) -> Result<Value>;
 }
 
 // ---- params ---------------------------------------------------------------------
@@ -617,6 +619,10 @@ impl Runtime for HerdrRuntime {
     fn accounts_call(&self, method: &str, params: Value) -> Result<Value> {
         herdr::call(&self.endpoint, &format!("deck.accounts.{method}"), params)
     }
+
+    fn repos_list(&self) -> Result<Value> {
+        herdr::call(&self.endpoint, "deck.repos.list", json!({}))
+    }
 }
 
 #[cfg(test)]
@@ -889,6 +895,9 @@ mod tests {
             Ok(())
         }
         fn accounts_call(&self, _: &str, _: Value) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        fn repos_list(&self) -> Result<Value> {
             Ok(Value::Null)
         }
     }

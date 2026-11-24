@@ -49,11 +49,11 @@ pub enum HerdrError {
         /// Human-readable cause for the common connect failures; empty otherwise.
         hint: &'static str,
     },
-    #[error("io error talking to herdr: {0}")]
+    #[error("io error talking to the server: {0}")]
     Io(#[from] std::io::Error),
-    #[error("herdr returned an error for {method}: {message}")]
+    #[error("the server refused {method}: {message}")]
     Api { method: String, message: String },
-    #[error("unexpected reply from herdr: {0}")]
+    #[error("unexpected reply from the server: {0}")]
     Shape(String),
     #[error("timed out waiting for herdr to answer {method}")]
     Timeout { method: String },

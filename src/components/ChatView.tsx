@@ -51,6 +51,8 @@ const clock = (ts: number) => {
 };
 
 export default function ChatView(p: { paneId: string; sessionId: string; tree?: Tree; outputTick?: number; harness?: HarnessRepo[]; onTerminal?: () => void; agent?: () => AgentLive | undefined;
+  /** Name of the server (machine) the session runs on. */
+  machine?: string;
   /** Headless: the sign-in card, when the session's machine has no usable Claude login. */
   signIn?: () => JSX.Element | null }) {
   const headless = () => !!p.agent;
@@ -408,7 +410,10 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
       <div class="pane-body">
         <div class="chat-log" ref={scroller} onScroll={onScroll}>
           <Show when={truncated()}><div class="chat-note">· older messages are in the transcript, not loaded ·</div></Show>
-          <Show when={!chat().items.length && !error() && !streaming() && !live()?.asks.length}><div class="chat-note">· new session — nothing said yet ·</div></Show>
+          <Show when={!chat().items.length && !error() && !streaming() && !live()?.asks.length}><div class="chat-note chat-start">
+            <div>· new session — nothing said yet ·</div>
+            <Show when={headless()}><div class="micro">Claude works on <b>{p.machine || "this server"}</b> in <b>{pane()?.cwd || "its home folder"}</b>: ask it anything there. To work in a repository, open it with + next to SESSIONS.</div></Show>
+          </div></Show>
           <For each={chat().items}>{(it, i) => (
             <>
               <Item it={it} />
