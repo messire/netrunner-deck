@@ -66,7 +66,7 @@ export default function Prefs(p: {
           </Show>
         </td>
         <td><span class="kind">{s().kind}</span>{s().new ? <span class="kind new">new</span> : null}{s().manual ? <span class="kind">manual</span> : null}</td>
-        <td class="mono">{s().status.version ? `${s().status.version}${s().status.protocol != null ? ` · p${s().status.protocol}` : ""}` : "—"}</td>
+        <td class="mono" title={s().status.version ?? undefined}>{s().status.version ? `${s().status.version}${s().status.protocol != null ? ` · p${s().status.protocol}` : ""}` : "—"}</td>
         <td class="mono">{s().connected && s().status.state === "online" ? p.panes(s().id) : "—"}</td>
         <td class="act">
           <Show when={!s().connected} fallback={

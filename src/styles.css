@@ -200,7 +200,9 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .upd{border:1px solid var(--yel);background:rgba(252,238,10,.08);color:var(--yel);padding:1px 8px;cursor:pointer;letter-spacing:1.5px;font-weight:700}
 .upd:hover{background:rgba(252,238,10,.18)}
 .upd:disabled{opacity:.6;cursor:default}
-.menu{position:fixed;z-index:50;min-width:220px;background:#120A10;border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 8px 24px rgba(0,0,0,.6);padding:4px 0;font-size:12.5px;letter-spacing:1px;user-select:none;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+/* Chamfered frames (.menu, .palette, .srv-menu, .prefs): clip-path cuts the CSS border off the
+   chamfer, so a 225deg gradient paints the 1px diagonal edge; stop = chamfer*0.7071 - 0.4px. */
+.menu{position:fixed;z-index:50;min-width:220px;background:linear-gradient(225deg,var(--cy) 6.7px,#120A10 6.7px);border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 8px 24px rgba(0,0,0,.6);padding:4px 0;font-size:12.5px;letter-spacing:1px;user-select:none;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
 .menu-title{padding:6px 12px 4px;color:var(--mut);font:10.5px var(--fm);letter-spacing:1.5px;border-bottom:1px solid var(--line);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
 .menu-item{display:flex;justify-content:space-between;gap:18px;padding:6px 12px;color:var(--txt);cursor:pointer;white-space:nowrap}
 .menu-item:hover,.menu-item.cur{background:rgba(103,224,227,.1);color:var(--cy)}
@@ -211,7 +213,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .menu-item.off:hover{background:transparent;color:var(--mut)}
 .menu-item .num{display:inline-block;min-width:22px;color:var(--mut);font:11.5px var(--fm);margin-right:6px}
 .palette-backdrop{position:fixed;inset:0;z-index:40;background:rgba(11,6,9,.55);display:flex;justify-content:center;align-items:flex-start;padding-top:12vh}
-.palette{width:min(640px,80vw);background:#120A10;border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 12px 40px rgba(0,0,0,.7);padding:10px 0 6px;font-size:14px;letter-spacing:1px;user-select:none;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%)}
+.palette{width:min(640px,80vw);background:linear-gradient(225deg,var(--cy) 9.5px,#120A10 9.5px);border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 12px 40px rgba(0,0,0,.7);padding:10px 0 6px;font-size:14px;letter-spacing:1px;user-select:none;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%)}
 .palette-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px 8px}
 .palette-input{display:block;width:calc(100% - 24px);margin:0 12px 6px;padding:7px 10px;background:#0B0609;border:1px solid var(--line);color:var(--cy);font:15px var(--fm);outline:none}
 .palette-input:focus{border-color:var(--cy)}
@@ -619,7 +621,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .gear .pip.bad{background:var(--org)}
 .gear .pip.new{background:var(--cy)}
 .srv-anchor{position:fixed;z-index:45}
-.srv-menu{min-width:340px;max-width:min(460px,92vw);background:#120A10;border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 10px 28px rgba(0,0,0,.65);padding:6px 0;font-size:13px;letter-spacing:.5px;user-select:none;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%)}
+.srv-menu{min-width:340px;max-width:min(460px,92vw);background:linear-gradient(225deg,var(--cy) 8.1px,#120A10 8.1px);border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 10px 28px rgba(0,0,0,.65);padding:6px 0;font-size:13px;letter-spacing:.5px;user-select:none;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%)}
 .srv-menu .ttl{padding:6px 14px 4px;color:var(--mut);font:10.5px var(--fm);letter-spacing:1.5px}
 .srv-menu hr{border:0;border-top:1px solid var(--line);margin:5px 0}
 .srv-menu button{display:grid;grid-template-columns:14px 12px 1fr auto;align-items:center;gap:10px;width:100%;padding:7px 14px;background:none;border:0;color:var(--txt);text-align:left;cursor:pointer;font:inherit}
@@ -653,7 +655,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .sw[aria-checked=true]::after{left:19px;background:var(--grn)}
 .sw:focus-visible{outline:1px solid var(--yel);outline-offset:2px}
 .prefs-backdrop{padding-top:8vh}
-.prefs{display:grid;grid-template-columns:170px 1fr;width:min(980px,94vw);max-height:80vh;background:#120A10;border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 14px 44px rgba(0,0,0,.75);clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,0 100%);user-select:none}
+.prefs{display:grid;grid-template-columns:170px 1fr;width:min(980px,94vw);max-height:80vh;background:linear-gradient(225deg,var(--cy) 10.9px,#120A10 10.9px);border:1px solid var(--cy);box-shadow:0 0 0 1px #0B0609,0 14px 44px rgba(0,0,0,.75);clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,0 100%);user-select:none}
 .prefs .pnav{border-right:1px solid var(--line);padding:14px 0;display:flex;flex-direction:column}
 .prefs .pnav .h{padding:0 16px 10px;color:var(--mut);font:10.5px var(--fm);letter-spacing:1.5px}
 .prefs .pnav a{padding:8px 16px;font-family:var(--fh);font-weight:600;letter-spacing:1.5px;font-size:12.5px;color:var(--tcy)}
@@ -667,7 +669,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .prefs th:nth-child(1){width:56px}.prefs th:nth-child(3){width:150px}.prefs th:nth-child(4){width:100px}.prefs th:nth-child(5){width:60px}.prefs th:nth-child(6){width:120px}
 .prefs th{text-align:left;font:10.5px var(--fm);color:var(--mut);letter-spacing:1.5px;padding:4px 8px;border-bottom:1px solid var(--line)}
 .prefs td{padding:8px;border-bottom:1px solid rgba(74,16,32,.5);vertical-align:top;color:var(--txt)}
-.prefs td.mono{font:12px var(--fm);white-space:nowrap}
+.prefs td.mono{font:12px var(--fm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .prefs td.act{white-space:nowrap;text-align:right}
 .prefs td.act .btn+.btn{margin-left:6px}
 .prefs .who{display:flex;flex-direction:column;gap:3px;min-width:0;overflow:hidden}
