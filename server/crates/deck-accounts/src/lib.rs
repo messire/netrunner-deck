@@ -1041,7 +1041,19 @@ pub fn make_folder(path: &str) -> Result<Value> {
     if !p.is_absolute() {
         return Err(format!("{} is not an absolute path", p.display()));
     }
-    std::fs::create_dir_all(&p).map_err(|e| format!("cannot create {}: {e}", p.display()))?;
+    std::fs::create_dir_all(&p).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            let user = std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "this user".into());
+            format!(
+                "no permission to create {} as {user}: it is outside your home folder",
+                p.display()
+            )
+        } else {
+            format!("cannot create {}: {e}", p.display())
+        }
+    })?;
     folder_state(&p.to_string_lossy())
 }
 

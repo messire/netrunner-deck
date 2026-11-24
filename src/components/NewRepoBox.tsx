@@ -48,12 +48,20 @@ export default function NewRepoBox(p: {
     const r = rows()[at()];
     if (r) void open(r.root);
   };
-  const createAndOpen = () => run(async () => {
+  /** A folder that could not be created for lack of permission: the same name in the home folder. */
+  const homeAlternative = () => {
     const path = missing();
+    if (!path || !/no permission|permission denied|access is denied/i.test(error() ?? "") || path.startsWith("~")) return null;
+    const name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+    return name ? `~/${name}` : null;
+  };
+  /** Creates `path` (default: the missing one) on the server's machine and opens it. */
+  const createAndOpen = (target?: string) => run(async () => {
+    const path = target ?? missing();
     if (!path || !p.create) return;
-    await p.create(path);
+    const made = (await p.create(path)) as { path?: string } | undefined;
     setMissing(null);
-    await p.onPick(path);
+    await p.onPick(made?.path ?? path);
     p.onClose();
   });
   const onKey = (e: KeyboardEvent) => {
@@ -86,10 +94,17 @@ export default function NewRepoBox(p: {
         <Show when={missing()}>{(path) => (
           <div class="repo-missing">
             <span>Folder <b>{path()}</b> does not exist{p.where ? ` on ${p.where}` : ""}.</span>
-            <Show when={p.create}><button class="abtn ok" disabled={busy()} onClick={createAndOpen}>{busy() ? "CREATING…" : "CREATE FOLDER · OPEN"}</button></Show>
+            <Show when={p.create}><button class="abtn ok" disabled={busy()} onClick={() => void createAndOpen()}>{busy() ? "CREATING…" : "CREATE FOLDER · OPEN"}</button></Show>
           </div>
         )}</Show>
-        <Show when={error()}>{(e) => <div class="repo-error">{e()}</div>}</Show>
+        <Show when={error()}>{(e) => (
+          <div class="repo-error">
+            <span>{e().replace(/^the server refused deck\.fs\.mkdir: /, "")}{homeAlternative() ? `. Create it in your home folder instead, e.g. ${homeAlternative()}` : ""}</span>
+            <Show when={missing() && homeAlternative()}>{(alt) => (
+              <button class="abtn ok" disabled={busy()} onClick={() => { setQ(alt()); void createAndOpen(alt()); }}>CREATE {alt()} · OPEN</button>
+            )}</Show>
+          </div>
+        )}</Show>
         <div class="dlga"><span class="micro">↑↓ · Enter · Esc</span><span class="sp" /><button class="abtn" onClick={p.onClose}>CANCEL</button><button class="abtn ok" disabled={busy()} onClick={() => void go()}>{busy() ? "…" : "OPEN"}</button></div>
       </div>
     </div>

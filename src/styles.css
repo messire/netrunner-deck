@@ -755,3 +755,4 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .mode-pop .slash-it.cur .sn{color:var(--org)}
 .chat-start{display:flex;flex-direction:column;gap:6px;align-items:center}.chat-start .micro{max-width:560px;text-align:center;line-height:1.5}.chat-start b{color:var(--cy);font-weight:600}
 .repo-missing{display:flex;align-items:center;gap:12px;color:var(--yel);font-size:13px;margin-top:4px}.repo-missing b{color:var(--cy);font-weight:600}.repo-missing .abtn{margin-left:auto}.repo-error{color:var(--red);font-size:13px;margin-top:4px;word-break:break-word}
+.repo-error{display:flex;align-items:center;gap:12px}.repo-error .abtn{margin-left:auto;flex:none}

@@ -286,7 +286,8 @@ const fake = (() => {
       case "fs_call": {
         const path = String(args.path);
         const made = ((window as any).__deckMade ??= new Set<string>()) as Set<string>;
-        if (args.method === "mkdir") made.add(path);
+        if (args.method === "mkdir" && path === "/repos") throw new Error("the server refused deck.fs.mkdir: no permission to create /repos as me: it is outside your home folder");
+        if (args.method === "mkdir") { const full = path.replace(/^~/, "/home/me"); made.add(full); return { path: full, exists: true, dir: true }; }
         const exists = made.has(path) || !/missing|repos$/.test(path);
         return { path, exists, dir: exists };
       }
