@@ -1,6 +1,6 @@
 # ADR 0003: Claude Code runs headless; Deck shows only the chat
 
-Status: accepted, 2026-11-24 (server side implemented; Deck side next)
+Status: accepted, 2026-11-24 (implemented: server and Deck)
 
 ## Context
 
@@ -79,11 +79,15 @@ dropped: the transcript has the full history.
 
 ## Consequences
 
-* Deck (next step) opens a Claude tab as `deck-server agent` and shows the
-  chat from the first moment: history from the transcript, the live turn
-  and cards (permission, AskUserQuestion, plan approval) from
-  `deck.agent.subscribe`, its own model / mode switch and stop button. The
-  TERM view and terminal tabs go away.
+* Deck opens a Claude tab on deck-server as `deck-server agent` (new tab,
+  Quickhacks, archive restore) and shows it only as a chat: history from
+  the transcript, the reply being written, and cards for permission
+  requests (allow / always allow / deny with a note), AskUserQuestion and
+  plan approval from `deck.agent.subscribe` (`src/agent.ts`,
+  `src/agentStore.ts`, `src/components/AskCard.tsx`,
+  `src-tauri/src/agent.rs`). The header has the session's permission mode,
+  model and a stop button; the slash popup lists the session's own
+  commands. A headless pane has no TERM view. Herdr panes keep theirs.
 * Claude Code's interactive built-in commands (`/model`, `/config`, `/mcp`,
   `/resume`, `/rewind`, `/login`, `/doctor`) do not exist headless; Deck
   offers the needed ones itself. Custom commands and skills work as text.

@@ -1037,10 +1037,16 @@ pub fn restore(app: &AppHandle, server: Option<&str>, id: &str) -> Result<Value,
         targets.push((pane, sid.to_string()));
     }
     let resumed = targets.len();
+    // deck-server runs Claude headless (only ever a chat, docs/adr/0003-headless-claude.md).
+    let headless = rt.agent_call("list", json!({})).is_ok();
     std::thread::spawn(move || {
         std::thread::sleep(RESUME_SETTLE);
         for (pane, sid) in targets {
-            let cmd = format!("claude --resume {sid}");
+            let cmd = if headless {
+                format!("{} --resume {sid}", crate::quickhacks::HEADLESS_CLAUDE)
+            } else {
+                format!("claude --resume {sid}")
+            };
             if let Err(e) = rt
                 .pane_send_text(&pane, &cmd)
                 .and_then(|_| rt.pane_send_keys(&pane, &["enter"]))

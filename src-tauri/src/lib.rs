@@ -1,3 +1,4 @@
+mod agent;
 mod archive;
 mod bridge;
 mod endpoint;
@@ -454,6 +455,30 @@ async fn transcript_watch(
     session_id: Option<String>,
 ) -> Result<(), String> {
     blocking(move || transcript::watch(&app, server, session_id)).await
+}
+
+// ---- headless Claude sessions (deck-server) ---------------------------------
+
+/// `deck.agent.<method>` (send, respond, interrupt, set, list) on `server`.
+#[tauri::command]
+async fn agent_call(
+    app: AppHandle,
+    server: Option<String>,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
+    blocking(move || agent::call(&app, server.as_deref(), &method, params)).await
+}
+
+/// Stream a headless pane's events to the webview (`deck://agent`).
+#[tauri::command]
+fn agent_watch(app: AppHandle, server: Option<String>, pane_id: String) {
+    agent::watch(&app, server, pane_id);
+}
+
+#[tauri::command]
+fn agent_unwatch(app: AppHandle, server: Option<String>, pane_id: String) {
+    agent::unwatch(&app, server.as_deref(), &pane_id);
 }
 
 // ---- external links ---------------------------------------------------------
@@ -985,6 +1010,7 @@ pub fn run() {
             app.manage(servers::Registry::open(&data_dir));
             app.manage(archive::Store::open(&data_dir));
             app.manage(transcript::Watch::default());
+            app.manage(agent::Watches::default());
             app.manage(harness::Roots::default());
             app.manage(harness::Classifying::default());
             app.manage(quickhacks::Store::open(&data_dir));
@@ -1044,6 +1070,9 @@ pub fn run() {
             transcript_read,
             transcript_mtimes,
             transcript_watch,
+            agent_call,
+            agent_watch,
+            agent_unwatch,
             servers::servers_list,
             servers::servers_scan,
             servers::servers_seen,

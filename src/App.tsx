@@ -8,6 +8,8 @@ import { connectedServers, filterTree, keepDown, LEGACY_SERVERS, migrateKey, off
 import TabBar, { Clock, Pulse } from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
 import ChatView from "./components/ChatView";
+import { HEADLESS_CLAUDE, isHeadlessAgent } from "./agent";
+import { agentOf, syncAgents } from "./agentStore";
 import KeyBar from "./components/KeyBar";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import Palette, { type PaletteItem } from "./components/Palette";
@@ -71,12 +73,17 @@ export default function App() {
   const [termPanes, setTermPanes] = createSignal<Set<string>>(new Set());
   const setPaneView = (id: string, view: "chat" | "term") =>
     setTermPanes((s) => { const n = new Set(s); if (view === "term") n.add(id); else n.delete(id); return n; });
-  /** The Claude session id behind a pane, when Herdr identified one (`agent_session`). */
+  /** The pane runs Claude Code headless (`deck-server agent`): it is only ever a chat. */
+  const headless = (id: string) => isHeadlessAgent(tree()?.panes.find((p) => p.pane_id === id)?.agent);
+  /** The Claude session id behind a pane: a headless pane's own stream says it, otherwise Herdr's `agent_session`. */
   const claudeSession = (id: string) => {
     const x = tree()?.panes.find((p) => p.pane_id === id);
+    if (x && isHeadlessAgent(x.agent)) return agentOf(id)?.sessionId ?? null;
     const s = x?.agent_session;
     return x && (x.agent ?? "").toLowerCase().includes("claude") && s?.kind === "id" && s.value ? s.value : null;
   };
+  // One event stream per headless Claude pane in the tree (status, questions, live text).
+  createEffect(() => { void syncAgents((tree()?.panes ?? []).filter((p) => isHeadlessAgent(p.agent)).map((p) => p.pane_id)); });
   const [offline, setOffline] = createSignal<string | null>(null);
 
   // ---- servers (docs/plan/DECK-SERVERS-UI.md) --------------------------------
@@ -357,7 +364,10 @@ export default function App() {
       }
       if (!paneId) return;
       setSelectedPane(paneId);
-      if (kind.command) await startIn(paneId, kind.command);
+      // On deck-server Claude runs headless (only ever a chat, docs/adr/0003-headless-claude.md).
+      const onDeckServer = servers()?.servers.find((s) => s.id === serverOf(paneId!))?.kind === "deck-server";
+      const command = kind.id === "claude" && onDeckServer ? HEADLESS_CLAUDE : kind.command;
+      if (command) await startIn(paneId, command);
     } catch (e) { showError(`tab.create: ${String(e)}`); }
   };
   // "+" next to SESSIONS: open a repository as a space, then ask what to run in it.
@@ -739,9 +749,13 @@ export default function App() {
         <TabBar tree={tree()} selectedPane={currentPane()} onSelectPane={setSelectedPane} onTabMenu={tabMenu} onNewTab={newTab} />
         <Show when={currentPane()} fallback={<div class="empty">NO PANE SELECTED · open a workspace in Herdr</div>}>
           {(id) => (
-            <Show when={!termPanes().has(id()) && claudeSession(id())}
-              fallback={<TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} onMenu={setMenu} chat={claudeSession(id()) ? () => setPaneView(id(), "chat") : undefined} />}>
-              {(sid) => <ChatView paneId={id()} sessionId={sid()} tree={tree()} outputTick={outputTick()} harness={harness()} onTerminal={() => setPaneView(id(), "term")} />}
+            <Show when={headless(id())} fallback={
+              <Show when={!termPanes().has(id()) && claudeSession(id())}
+                fallback={<TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} onMenu={setMenu} chat={claudeSession(id()) ? () => setPaneView(id(), "chat") : undefined} />}>
+                {(sid) => <ChatView paneId={id()} sessionId={sid()} tree={tree()} outputTick={outputTick()} harness={harness()} onTerminal={() => setPaneView(id(), "term")} />}
+              </Show>
+            }>
+              <ChatView paneId={id()} sessionId={claudeSession(id()) ?? ""} tree={tree()} outputTick={outputTick()} harness={harness()} agent={() => agentOf(id())} />
             </Show>
           )}
         </Show>

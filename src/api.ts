@@ -1,6 +1,6 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, listen } from "./tauri";
-import { mergeTrees, splitId, tagDeep, type ServersView } from "./servers";
+import { mergeTrees, splitId, tagDeep, tagId, type ServersView } from "./servers";
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
@@ -168,6 +168,20 @@ export interface TranscriptChunk { session_id: string; path: string; start: numb
 
 /** Server of a tagged id; `null` lets the Rust side pick the primary server. */
 const srv = (server?: string | null) => (server ? server : null);
+
+/**
+ * A headless Claude pane reports the agent label `deck-claude` (so Deck can
+ * tell it from a terminal one); everywhere it is shown it is just Claude.
+ */
+function claudeNamed<T>(v: T): T {
+  if (Array.isArray(v)) { v.forEach(claudeNamed); return v; }
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    if (o.agent === "deck-claude") o.display_agent = "Claude";
+    for (const k in o) if (o[k] && typeof o[k] === "object") claudeNamed(o[k]);
+  }
+  return v;
+}
 /** Quickhack runs → the server they were launched on, to tag their progress events. */
 const runServer = new Map<string, string | null>();
 
@@ -182,7 +196,7 @@ export const api = {
     const results = await Promise.allSettled(servers.map((server) => invoke<Tree>("herdr_tree", { server })));
     const parts: { server: string; tree: Tree }[] = [];
     const down: Record<string, string> = {};
-    results.forEach((r, i) => { if (r.status === "fulfilled") parts.push({ server: servers[i], tree: r.value }); else down[servers[i]] = String(r.reason); });
+    results.forEach((r, i) => { if (r.status === "fulfilled") parts.push({ server: servers[i], tree: claudeNamed(r.value) }); else down[servers[i]] = String(r.reason); });
     if (servers.length && !parts.length) throw new Error(Object.values(down)[0]);
     return { tree: mergeTrees(parts), down };
   },
@@ -193,6 +207,22 @@ export const api = {
   },
   sendText: (paneKey: string, text: string) => { const { server, id } = splitId(paneKey); return invoke("herdr_pane_send_text", { server: srv(server), paneId: id, text }); },
   sendKeys: (paneKey: string, keys: string[]) => { const { server, id } = splitId(paneKey); return invoke("herdr_pane_send_keys", { server: srv(server), paneId: id, keys }); },
+  /**
+   * deck-server's headless Claude sessions (docs/adr/0003-headless-claude.md):
+   * `send {text, images?}`, `respond {request_id, response}`, `interrupt`,
+   * `set {model?, permission_mode?}` on the pane's server.
+   */
+  agentCall: (paneKey: string, method: "send" | "respond" | "interrupt" | "set", params: Record<string, unknown> = {}) => {
+    const { server, id } = splitId(paneKey);
+    return invoke<unknown>("agent_call", { server: srv(server), method, params: { ...params, pane_id: id } });
+  },
+  /** Stream a headless pane's events (`onAgent`) until `agentUnwatch`. */
+  agentWatch: (paneKey: string) => { const { server, id } = splitId(paneKey); return invoke<void>("agent_watch", { server: srv(server), paneId: id }); },
+  agentUnwatch: (paneKey: string) => { const { server, id } = splitId(paneKey); return invoke<void>("agent_unwatch", { server: srv(server), paneId: id }); },
+  /** One line of a headless pane's stream, with the pane's (tagged) id. */
+  onAgent: (cb: (paneKey: string, line: unknown) => void): Promise<UnlistenFn> =>
+    listen<{ server?: string | null; pane_id: string; line: unknown }>("deck://agent", (e) =>
+      cb(e.payload.server ? tagId(e.payload.server, e.payload.pane_id) : e.payload.pane_id, e.payload.line)),
   focus: (target: "workspace" | "tab" | "pane", key: string) => { const { server, id } = splitId(key); return invoke("herdr_focus", { server: srv(server), target, id }); },
   /**
    * Tree actions (M3); the Rust side maps the name to a Herdr method with a fixed param set.
@@ -290,6 +320,7 @@ export const api = {
   onEvent: (cb: (event: HerdrEvent, server: string | null) => void): Promise<UnlistenFn> =>
     listen<HerdrEvent>("herdr://event", (e) => {
       const server = typeof e.payload?.server === "string" ? e.payload.server : null;
+      claudeNamed(e.payload);
       cb(server ? tagDeep(server, e.payload) : e.payload, server);
     }),
   onOffline: (cb: (server: string | null, message: string) => void): Promise<UnlistenFn> =>

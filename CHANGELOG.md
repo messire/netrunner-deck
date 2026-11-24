@@ -4,6 +4,7 @@ Versions follow the rule in [README → Versioning](README.md#versioning): patch
 
 ## Unreleased
 - deck-server runs Claude Code headless: `deck-server agent` in a pane starts Claude on the stream-json control protocol, without a terminal, and serves it as `deck.agent.*` (subscribe with replay, send, permission answers, interrupt, model and mode). See docs/adr/0003-headless-claude.md.
+- Deck shows a Claude tab on deck-server only as a chat, with no console: new tabs, Quickhacks and archive restore start `deck-server agent`; the reply streams in as it is written; permission requests, AskUserQuestion and plan approval are cards in the chat; permission mode, model and stop are in the header; pasted images go with the message.
 
 ## [0.4.0] — 2026-11-24
 - Several servers in one Deck: SERVERS preferences with discovery, connect/disconnect, rename; panes of all servers in one tree.

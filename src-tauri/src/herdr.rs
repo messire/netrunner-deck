@@ -488,6 +488,47 @@ pub fn subscribe(
     }
 }
 
+/// A long-lived request whose reply is a stream of lines (`deck.agent.subscribe`):
+/// every JSON object line goes to `on_line`, the head reply included, until it
+/// returns `false` (`Ok`). An `error` reply, the stream closing or a transport
+/// failure is an `Err`. Like [`subscribe`] it takes no call slot and has no
+/// deadline; the caller runs it on its own thread.
+pub fn stream(
+    method: &str,
+    endpoint: &Endpoint,
+    params: Value,
+    on_line: &mut dyn FnMut(Value) -> bool,
+) -> Result<()> {
+    let mut stream = connect_with(endpoint, None)?;
+    let request = json!({ "id": next_id(), "method": method, "params": params });
+    stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).map_err(|e| opened(endpoint, e))? == 0 {
+            return Err(HerdrError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "stream closed",
+            )));
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        if !value.is_object() {
+            continue;
+        }
+        if let LineClass::Error(message) = classify_line(&line) {
+            return Err(HerdrError::Api { method: method.to_owned(), message });
+        }
+        if !on_line(value) {
+            return Ok(());
+        }
+    }
+}
+
 /// Read the whole reply body when a method may answer with more than one line
 /// (not used by the current methods; kept for `pane.stream` in the fork).
 #[allow(dead_code)]

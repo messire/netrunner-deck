@@ -86,6 +86,14 @@ pub trait Runtime: Send + Sync {
     fn transcript_stat(&self, session_ids: &[String]) -> Result<Value>;
     /// The server runs on another machine: its files are not Deck's files.
     fn is_remote(&self) -> bool;
+
+    /// deck-server's headless Claude sessions (`deck.agent.<method>`:
+    /// send, respond, interrupt, set, list; docs/adr/0003-headless-claude.md).
+    fn agent_call(&self, method: &str, params: Value) -> Result<Value>;
+    /// `deck.agent.subscribe`: every line of the stream (the head reply,
+    /// then `deck.agent.event` / `deck.agent.reset`) to `on_line` until it
+    /// returns `false` (then `Ok`) or the stream ends (`Err`).
+    fn agent_subscribe(&self, params: Value, on_line: &mut dyn FnMut(Value) -> bool) -> Result<()>;
 }
 
 // ---- params ---------------------------------------------------------------------
@@ -593,6 +601,14 @@ impl Runtime for HerdrRuntime {
     fn is_remote(&self) -> bool {
         self.endpoint.is_remote()
     }
+
+    fn agent_call(&self, method: &str, params: Value) -> Result<Value> {
+        herdr::call(&self.endpoint, &format!("deck.agent.{method}"), params)
+    }
+
+    fn agent_subscribe(&self, params: Value, on_line: &mut dyn FnMut(Value) -> bool) -> Result<()> {
+        herdr::stream("deck.agent.subscribe", &self.endpoint, params, on_line)
+    }
 }
 
 #[cfg(test)]
@@ -857,6 +873,12 @@ mod tests {
         }
         fn is_remote(&self) -> bool {
             false
+        }
+        fn agent_call(&self, _: &str, _: Value) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        fn agent_subscribe(&self, _: Value, _: &mut dyn FnMut(Value) -> bool) -> Result<()> {
+            Ok(())
         }
     }
 
