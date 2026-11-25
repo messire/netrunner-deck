@@ -3,6 +3,9 @@
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
 ## Unreleased
+
+## [0.10.0] — 2026-11-25
+- PREFERENCES › SECRETS: `~/.claude/.env` of each machine (its deck-server) as a KEY / VALUE table — values masked with a reveal button per row, edit, + ADD, delete, SAVE, RELOAD. Comments, blank lines, order, `export`, quoting and CRLF are kept; Deck holds the values only while the panel is open. The server writes only that one file (atomically, 0600 on Unix).
 - Installer with three kinds: client and server (default), client only, or server only. deck-server is installed windowless, starts when you sign in and updates itself; the choice is remembered and kept by updates. See docs/adr/0006-installer-kinds.md.
 - deck-server on Windows never opens a console window (typed in a terminal it still prints there).
 - COPY TO / MOVE TO between any connected servers, Herdr or deck-server, either way. The files are the work of Deck's bridge on each machine (built into Deck here, `deck-server bridge` there), so a machine with only Herdr works too and Herdr is not changed. On Herdr a branch arrives as a worktree in Herdr's own worktrees folder (it shows in its "open worktree"), joining the same repository when it is already there, and the session opens in a tab with `claude --resume`. Between two servers on one machine nothing is copied: the other server opens the same checkouts.
