@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRows, parseEnv, quoteValue, rowsOf, serializeEnv, validKey } from "./secrets";
+import { applyRows, mergeEnv, parseEnv, quoteValue, rowsOf, serializeEnv, validKey } from "./secrets";
 
 const FILE = [
   "# fake values only",
@@ -96,5 +96,19 @@ describe("quoteValue and validKey", () => {
     expect(validKey("FAKE_KEY_1")).toBe(true);
     expect(validKey("_x")).toBe(true);
     expect(["", "1A", "A-B", "A B", "export A"].some(validKey)).toBe(false);
+  });
+});
+
+describe("mergeEnv", () => {
+  it("replaces shared keys in place, appends new ones, keeps the rest", () => {
+    const target = "# target\nKEEP=1\nSHARED=old # note\nSAME=x\n";
+    const source = "# source comment\nSHARED=new value\nSAME=x\nNEW_KEY=2\n";
+    const m = mergeEnv(target, source);
+    expect(m).toEqual({ text: '# target\nKEEP=1\nSHARED="new value" # note\nSAME=x\nNEW_KEY=2\n', added: 1, replaced: 1 });
+  });
+
+  it("works into an empty file and changes nothing when nothing differs", () => {
+    expect(mergeEnv("", "A=1\r\nB=2\r\n")).toEqual({ text: "A=1\nB=2\n", added: 2, replaced: 0 });
+    expect(mergeEnv("A=1\n", "A=1\n")).toEqual({ text: "A=1\n", added: 0, replaced: 0 });
   });
 });

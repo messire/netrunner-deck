@@ -999,7 +999,7 @@ export default function App() {
           onRename={(id, name) => serverCall(api.serverRename(id, name))}
           onForget={(id) => serverCall(api.serverForget(id))} onRemoveHost={(m) => serverCall(api.serverRemoveHost(m))}
           onProbe={api.serverProbe} onAddHost={(u, h, port, sockets) => api.serverAddHost(u, h, port, sockets).then((v) => { setServers(v); setPrefsError(null); })}
-          onClose={closePrefs} />
+          active={accountsServer()} onClose={closePrefs} />
       </Show>
       <Show when={newTabFor()}>{(t) => { const target = t(); return <NewTabBox initial={remembered("deck.newTabKind") ?? "claude"} onPick={(k) => openTab(target, k)} onClose={() => setNewTabFor(null)} />; }}</Show>
       <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} check={checkFolder} create={createFolder}

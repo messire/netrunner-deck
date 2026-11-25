@@ -1,6 +1,6 @@
 import { For, Show, createResource, createSignal, onCleanup, onMount } from "solid-js";
 import { api } from "../api";
-import { dotOf, hintOf, machineErrorOf, type Probed, type ServerView, type ServersView } from "../servers";
+import { dotOf, hintOf, machineErrorOf, machineOfServer, machinesOf, type Probed, type ServerView, type ServersView } from "../servers";
 import AddHostDialog from "./AddHostDialog";
 import Connections from "./Connections";
 import Secrets from "./Secrets";
@@ -25,6 +25,8 @@ export default function Prefs(p: {
   onRemoveHost: (machine: string) => void;
   onProbe: (user: string, host: string, port: number) => Promise<Probed[]>;
   onAddHost: (user: string, host: string, port: number, sockets: string[]) => Promise<void>;
+  /** The selected session's server: SECRETS opens on its machine. */
+  active?: string | null;
   onClose: () => void;
 }) {
   let panel!: HTMLDivElement;
@@ -39,6 +41,14 @@ export default function Prefs(p: {
   const connected = () => rows().filter((s) => s.connected);
   const offered = () => rows().filter((s) => !s.connected);
   const online = () => connected().filter((s) => s.status.state === "online").length;
+  const machines = () => machinesOf(rows());
+  /** SECRETS has unsaved edits: closing waits for SAVE or RELOAD. */
+  const [secretsDirty, setSecretsDirty] = createSignal(false);
+  const [held, setHeld] = createSignal(false);
+  const close = () => {
+    if (secretsDirty()) { setSection("secrets"); setHeld(true); setTimeout(() => setHeld(false), 2500); return; }
+    p.onClose();
+  };
 
   onMount(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -47,7 +57,7 @@ export default function Prefs(p: {
   });
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape" && armed()) { e.preventDefault(); e.stopPropagation(); setArmed(null); }
-    else if (e.key === "Escape" && !renaming() && !adding()) { e.preventDefault(); e.stopPropagation(); p.onClose(); }
+    else if (e.key === "Escape" && !renaming() && !adding()) { e.preventDefault(); e.stopPropagation(); close(); }
   };
   const closeAdd = () => { setAdding(false); setTimeout(() => addBtn?.focus(), 0); };
 
@@ -118,7 +128,7 @@ export default function Prefs(p: {
   };
 
   return (
-    <div class="palette-backdrop prefs-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) p.onClose(); }}>
+    <div class="palette-backdrop prefs-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div ref={panel} class="prefs" role="dialog" aria-modal="true" aria-label="Preferences" onKeyDown={onKey}>
         <nav class="pnav">
           <div class="h">PREFERENCES</div>
@@ -134,29 +144,28 @@ export default function Prefs(p: {
               <h3>CONNECTIONS</h3>
               <span class="micro">per machine: what its deck-server is signed in to</span>
               <span class="sp" />
-              <button class="btn" aria-label="close" onClick={p.onClose}>✕</button>
+              <button class="btn" aria-label="close" onClick={close}>✕</button>
             </div>
-            <Connections servers={connected().filter((s) => s.kind === "deck-server" && s.status.state === "online").map((s) => ({ id: s.id, name: s.name }))} />
+            <Connections servers={machines()} />
           </div>
         </Show>
-        <Show when={section() === "secrets"}>
-          <div class="pbody">
-            <div class="phead">
-              <h3>SECRETS</h3>
-              <span class="micro">per machine: ~/.claude/.env, the environment Claude Code reads there</span>
-              <span class="sp" />
-              <button class="btn" aria-label="close" onClick={p.onClose}>✕</button>
-            </div>
-            <Secrets servers={connected().filter((s) => s.kind === "deck-server" && s.status.state === "online").map((s) => ({ id: s.id, name: s.name }))} />
+        <div class="pbody" hidden={section() !== "secrets"}>
+          <div class="phead">
+            <h3>SECRETS</h3>
+            <span class="micro">per machine: ~/.claude/.env, the environment Claude Code reads there</span>
+            <span class="sp" />
+            <button class="btn" aria-label="close" onClick={close}>✕</button>
           </div>
-        </Show>
+          <Show when={held()}><div class="err" role="alert">Unsaved SECRETS changes: SAVE or RELOAD first.</div></Show>
+          <Secrets machines={machines()} active={machineOfServer(rows(), machines(), p.active)?.key} onDirty={setSecretsDirty} />
+        </div>
         <div class="pbody" hidden={section() !== "servers"}>
           <div class="phead">
             <h3>SERVERS</h3>
             <span class="micro">{connected().length} connected · {online()} online{offered().length ? ` · ${offered().length} found` : ""}{p.scanning ? " · scanning…" : ""}</span>
             <span class="sp" />
             <button class="btn" disabled={p.scanning} onClick={p.onScan}>↻ FIND AGAIN</button>
-            <button class="btn" aria-label="close" onClick={p.onClose}>✕</button>
+            <button class="btn" aria-label="close" onClick={close}>✕</button>
           </div>
           <Show when={p.error}>{(e) => <div class="err" role="alert">{e()}</div>}</Show>
           <Show when={rows().length || down().length} fallback={<div class="micro empty-srv">{p.view?.scanned ? "No servers found. Start Herdr or deck-server here, or + ADD a machine." : "Looking for servers…"}</div>}>

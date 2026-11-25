@@ -164,3 +164,32 @@ export const LEGACY_SERVERS: ServersView = {
   servers: [{ id: "", name: "herdr", kind: "herdr", address: "", connected: true, manual: false, found: true, new: false, status: { state: "online" } }],
   scanned: true,
 };
+
+/** One machine Deck reaches, for the per-machine panels (SECRETS): the server whose connection asks it. */
+export interface MachineView { key: string; id: string; name: string }
+
+/**
+ * Pure. Every machine with a connected server, once: `local` for this PC,
+ * else the server's `user@host[:port]`. The server asked is a deck-server
+ * if the machine has one, then an online one; any server works, since
+ * machine work is answered by Deck's bridge there.
+ */
+export function machinesOf(servers: ServerView[]): MachineView[] {
+  const rank = (s: ServerView) => (s.kind === "deck-server" ? 0 : 2) + (s.status.state === "online" ? 0 : 1);
+  const best = new Map<string, ServerView>();
+  for (const s of servers) {
+    if (!s.connected || s.status.state === "offline") continue;
+    const key = s.machine ?? (s.remote ? s.id : "local");
+    const had = best.get(key);
+    if (!had || rank(s) < rank(had)) best.set(key, s);
+  }
+  return [...best].map(([key, s]) => ({ key, id: s.id, name: s.name }));
+}
+
+/** Pure. The machine `server` is on, among `machines` built from `servers`. */
+export function machineOfServer(servers: ServerView[], machines: MachineView[], server: string | null | undefined): MachineView | undefined {
+  const s = servers.find((x) => x.id === server);
+  if (!s) return undefined;
+  const key = s.machine ?? (s.remote ? s.id : "local");
+  return machines.find((m) => m.key === key);
+}

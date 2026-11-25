@@ -1,39 +1,62 @@
-import { For, Index, Show, createMemo, createSignal } from "solid-js";
+import { For, Index, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { api } from "../api";
-import { applyRows, parseEnv, rowsOf, validKey, type EnvDoc, type EnvRow } from "../secrets";
+import { applyRows, mergeEnv, parseEnv, rowsOf, validKey, type EnvDoc, type EnvRow } from "../secrets";
+import type { MachineView } from "../servers";
 
 interface EnvFile { path: string; exists: boolean; text: string }
 interface Row extends EnvRow { shown: boolean }
+/** COPY TO waiting for its confirmation. */
+interface Pending { to: MachineView; added: number; replaced: number }
 
 const errorOf = (e: unknown) => String(e).replace(/^Error: /, "");
+const read = (id: string) => api.machine<EnvFile>(id, "deck.secrets.read");
 
 /**
- * PREFERENCES › SECRETS: `~/.claude/.env` on each machine (its deck-server),
- * the environment Claude Code reads there, as a KEY / VALUE table. Read and
- * written over the server's connection (`deck.secrets.read` / `.write`);
- * Deck holds the values only while this panel is open and never keeps them.
+ * PREFERENCES › SECRETS: `~/.claude/.env` on one machine at a time (every
+ * machine with a connected server; the selected session's first), the
+ * environment Claude Code reads there, as a KEY / VALUE table. Read and
+ * written over that server's connection (`deck.secrets.read` / `.write`,
+ * answered by Deck's bridge there); COPY TO merges this file into another
+ * machine's by key. Deck holds the values only while this panel is open.
  */
-export default function Secrets(p: { servers: { id: string; name: string }[] }) {
+export default function Secrets(p: { machines: MachineView[]; active?: string; onDirty: (dirty: boolean) => void }) {
+  const [picked, setPicked] = createSignal<string | null>(null);
+  const [dirty, setDirty] = createSignal(false);
+  const current = () => p.machines.find((m) => m.key === picked()) ?? p.machines.find((m) => m.key === p.active) ?? p.machines[0];
+  createEffect(() => p.onDirty(dirty()));
+  onCleanup(() => p.onDirty(false));
   return (
-    <div class="conns">
-      <For each={p.servers} fallback={<div class="micro empty-srv">No deck-server connected. Secrets live on a deck-server's machine.</div>}>
-        {(s) => <Machine id={s.id} name={s.name} />}
-      </For>
+    <div class="secrets">
+      <Show when={p.machines.length} fallback={<div class="micro empty-srv">No server connected. Secrets live on a server's machine.</div>}>
+        <div class="sec-tabs" role="tablist" aria-label="machine">
+          <For each={p.machines}>{(m) => (
+            <button class={`btn${current()?.key === m.key ? " on" : ""}`} role="tab" aria-selected={current()?.key === m.key}
+                    disabled={dirty() && current()?.key !== m.key} title={dirty() && current()?.key !== m.key ? "SAVE or RELOAD first" : m.name}
+                    onClick={() => setPicked(m.key)}>{m.name}</button>
+          )}</For>
+        </div>
+        <Show when={current()} keyed>
+          {(m) => <Machine machine={m} others={p.machines.filter((x) => x.key !== m.key)} onDirty={setDirty} />}
+        </Show>
+      </Show>
     </div>
   );
 }
 
-function Machine(p: { id: string; name: string }) {
+function Machine(p: { machine: MachineView; others: MachineView[]; onDirty: (dirty: boolean) => void }) {
   const [file, setFile] = createSignal<EnvFile | null>(null);
   const [doc, setDoc] = createSignal<EnvDoc>(parseEnv(""));
   const [rows, setRows] = createSignal<Row[]>([]);
   const [loading, setLoading] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [copyMenu, setCopyMenu] = createSignal(false);
+  const [pending, setPending] = createSignal<Pending | null>(null);
+  const [copied, setCopied] = createSignal<string | null>(null);
 
   const load = () => {
-    setLoading(true); setError(null);
-    api.machine<EnvFile>(p.id, "deck.secrets.read")
+    setLoading(true); setError(null); setPending(null);
+    read(p.machine.id)
       .then((f) => {
         const d = parseEnv(f.text);
         setFile(f); setDoc(d); setRows(rowsOf(d).map((r) => ({ ...r, shown: false })));
@@ -45,27 +68,68 @@ function Machine(p: { id: string; name: string }) {
 
   const text = createMemo(() => applyRows(doc(), rows()));
   const bad = createMemo(() => rows().some((r) => !validKey(r.key) && (r.key !== "" || r.value !== "")));
-  const changed = () => !!file() && text() !== file()!.text;
+  const changed = createMemo(() => !!file() && text() !== file()!.text);
+  createEffect(() => p.onDirty(changed()));
   const edit = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const add = () => setRows((rs) => [...rs, { line: null, key: "", value: "", shown: true }]);
   const remove = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i));
   const save = () => {
-    setSaving(true); setError(null);
-    api.machine(p.id, "deck.secrets.write", { text: text() })
+    setSaving(true); setError(null); setCopied(null);
+    api.machine(p.machine.id, "deck.secrets.write", { text: text() })
       .then(load)
       .catch((e) => setError(errorOf(e)))
       .finally(() => setSaving(false));
   };
 
+  /** COPY TO: read the target's file and say what the merge would do. */
+  const copyTo = (to: MachineView) => {
+    setCopyMenu(false); setError(null); setCopied(null); setSaving(true);
+    read(to.id)
+      .then((t) => { const m = mergeEnv(t.text, file()!.text); setPending({ to, added: m.added, replaced: m.replaced }); })
+      .catch((e) => setError(`${to.name}: ${errorOf(e)}`))
+      .finally(() => setSaving(false));
+  };
+  /** The merge again on the target's file as it is now, then written there. */
+  const confirmCopy = () => {
+    const c = pending();
+    if (!c) return;
+    setSaving(true); setError(null);
+    read(c.to.id)
+      .then((t) => api.machine(c.to.id, "deck.secrets.write", { text: mergeEnv(t.text, file()!.text).text }))
+      .then(() => { setPending(null); setCopied(`copied to ${c.to.name}`); })
+      .catch((e) => setError(`${c.to.name}: ${errorOf(e)}`))
+      .finally(() => setSaving(false));
+  };
+  const busy = () => loading() || saving();
+
   return (
-    <div class="conn-machine">
+    <div class="conn-machine sec-machine">
       <div class="conn-h sec-h">
-        <span class="nm">{p.name}</span>
         <span class="micro sec-path" title={file()?.path}>{file()?.path ?? "~/.claude/.env"}</span>
         <span class="sp" />
-        <button class="btn" disabled={loading() || saving()} onClick={load} title={changed() ? "discard the changes and read the file again" : "read the file again"}>RELOAD</button>
-        <button class="btn pri" disabled={!changed() || bad() || saving() || loading()} onClick={save}>{saving() ? "SAVING…" : "SAVE"}</button>
+        <div class="sec-copy">
+          <button class="btn" disabled={busy() || !file()?.exists || changed() || !p.others.length || !!pending()} aria-haspopup="menu" aria-expanded={copyMenu()}
+                  title={changed() ? "SAVE or RELOAD first" : !p.others.length ? "no other machine connected" : "merge this file into another machine's .env"}
+                  onClick={() => setCopyMenu(!copyMenu())}>COPY TO ▾</button>
+          <Show when={copyMenu()}>
+            <div class="sec-menu" role="menu" onMouseLeave={() => setCopyMenu(false)}>
+              <For each={p.others}>{(m) => <button role="menuitem" onClick={() => copyTo(m)}>{m.name}</button>}</For>
+            </div>
+          </Show>
+        </div>
+        <button class="btn" disabled={busy()} onClick={load} title={changed() ? "discard the changes and read the file again" : "read the file again"}>RELOAD</button>
+        <button class="btn pri" disabled={!changed() || bad() || busy()} onClick={save}>{saving() ? "…" : "SAVE"}</button>
       </div>
+      <Show when={pending()}>
+        {(c) => (
+          <div class="sec-confirm" role="alert">
+            <span>{c().added} new, {c().replaced} replaced on <b>{c().to.name}</b></span>
+            <span class="sp" />
+            <button class="btn pri" disabled={saving() || (c().added === 0 && c().replaced === 0)} onClick={confirmCopy}>COPY</button>
+            <button class="btn" disabled={saving()} onClick={() => setPending(null)}>CANCEL</button>
+          </div>
+        )}
+      </Show>
       <Show when={file()} fallback={<div class="micro">{loading() ? "reading…" : ""}</div>}>
         {(f) => (
           <>
@@ -98,7 +162,8 @@ function Machine(p: { id: string; name: string }) {
             <div class="add">
               <button class="btn" onClick={add}>+ ADD</button>
               <Show when={bad()}><span class="err">a key is letters, digits and _, not starting with a digit</span></Show>
-              <Show when={changed() && !bad()}><span class="micro">unsaved changes</span></Show>
+              <Show when={changed() && !bad()}><span class="micro sec-unsaved">unsaved changes · SAVE or RELOAD</span></Show>
+              <Show when={!changed() && copied()}>{(c) => <span class="micro">{c()}</span>}</Show>
             </div>
           </>
         )}

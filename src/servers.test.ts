@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Tree } from "./api";
 import { buildTree } from "./tree";
-import { connectedServers, hintOf, machineErrorOf, validateHostForm, filterTree, keepDown, localId, mergeTrees, migrateKey, offeredServers, serverOf, splitId, tagDeep, tagId, type ServerView } from "./servers";
+import { connectedServers, hintOf, machineErrorOf, machineOfServer, machinesOf, validateHostForm, filterTree, keepDown, localId, mergeTrees, migrateKey, offeredServers, serverOf, splitId, tagDeep, tagId, type ServerView } from "./servers";
 
 const one = (label: string, repo?: string): Tree => ({
   workspaces: [{ workspace_id: "w1", number: 1, label, focused: true, pane_count: 1, tab_count: 1, active_tab_id: "w1:t1", agent_status: "idle",
@@ -114,5 +114,25 @@ describe("ADD machine dialog", () => {
     expect(machineErrorOf("no Herdr or deck-server is running on dev@build-box.example.com")).toMatch(/no Herdr or deck-server runs/);
     expect(machineErrorOf("ssh: Could not resolve hostname nowhere.example.com")).toMatch(/not known/);
     expect(machineErrorOf("something odd")).toBe("something odd");
+  });
+});
+
+describe("machinesOf", () => {
+  const srv = (id: string, kind: "herdr" | "deck-server", state: "online" | "offline" | "connecting", machine?: string, connected = true): ServerView =>
+    ({ id, name: id, kind, address: "", connected, manual: false, found: true, new: false, remote: !!machine, machine: machine ?? null, status: { state } });
+  it("lists each machine once, asking its deck-server, remote ones included", () => {
+    const servers = [
+      srv("herdr", "herdr", "online"),
+      srv("deck-server/try", "deck-server", "online"),
+      srv("dev@box.example.com/herdr", "herdr", "online", "dev@box.example.com"),
+      srv("dev@box.example.com/deck-server", "deck-server", "connecting", "dev@box.example.com"),
+      srv("dev@down.example.com/deck-server", "deck-server", "offline", "dev@down.example.com"),
+      srv("dev@off.example.com/deck-server", "deck-server", "online", "dev@off.example.com", false),
+    ];
+    const ms = machinesOf(servers);
+    expect(ms.map((m) => [m.key, m.id])).toEqual([["local", "deck-server/try"], ["dev@box.example.com", "dev@box.example.com/deck-server"]]);
+    expect(machineOfServer(servers, ms, "dev@box.example.com/herdr")?.id).toBe("dev@box.example.com/deck-server");
+    expect(machineOfServer(servers, ms, "herdr")?.key).toBe("local");
+    expect(machineOfServer(servers, ms, "nope")).toBeUndefined();
   });
 });

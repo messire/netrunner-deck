@@ -12,7 +12,7 @@ interface GitHubStatus { available: boolean; signed_in: boolean; user?: string |
 export default function Connections(p: { servers: { id: string; name: string }[] }) {
   return (
     <div class="conns">
-      <For each={p.servers} fallback={<div class="micro empty-srv">No deck-server connected. Connections live on a deck-server's machine.</div>}>
+      <For each={p.servers} fallback={<div class="micro empty-srv">No server connected. Connections live on a server's machine.</div>}>
         {(s) => <Machine id={s.id} name={s.name} />}
       </For>
     </div>

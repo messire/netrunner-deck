@@ -112,3 +112,27 @@ export function applyRows(doc: EnvDoc, rows: EnvRow[]): string {
   }
   return serializeEnv({ ...doc, lines, trailing: doc.trailing || doc.lines.length === 0 });
 }
+
+/**
+ * `source` merged into `target` by key: a key both have takes the source's
+ * value (in the target's line), a key only the source has is appended, the
+ * target's other lines stay as they are. `added` / `replaced` count keys
+ * (a key with the same value in both is neither).
+ */
+export function mergeEnv(target: string, source: string): { text: string; added: number; replaced: number } {
+  const from = new Map<string, string>();
+  for (const r of rowsOf(parseEnv(source))) from.set(r.key, r.value);
+  const doc = parseEnv(target);
+  const rows = rowsOf(doc);
+  const have = new Set(rows.map((r) => r.key));
+  const changed = new Set<string>();
+  const merged: EnvRow[] = rows.map((r) => {
+    const v = from.get(r.key);
+    if (v === undefined || v === r.value) return r;
+    changed.add(r.key);
+    return { ...r, value: v };
+  });
+  const fresh = [...from].filter(([k]) => !have.has(k));
+  for (const [key, value] of fresh) merged.push({ line: null, key, value });
+  return { text: applyRows(doc, merged), added: fresh.length, replaced: changed.size };
+}
