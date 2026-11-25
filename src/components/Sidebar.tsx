@@ -2,7 +2,7 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { serverOf } from "../servers";
 import { accountLabel, usageOf, type AgentStatus, type Account, type AccountList, type GitSync, type Pane, type Tab, type Tree, type Workspace } from "../api";
 import {
-  buildTree, ctxPct, defaultOpen, firstPane, loadOpen, saveOpen, waiting,
+  buildTree, ctxPct, defaultOpen, firstPane, loadFolded, loadOpen, saveOpen, toggleFolded, waiting,
   type RepoNode, type RootNode, type SessionNode, type SpaceNode, type TabNode,
 } from "../tree";
 
@@ -111,6 +111,9 @@ export default function Sidebar(p: Props) {
     setOpen(next);
     saveOpen(storage(), next);
   };
+  // Server sections folded by the user (remembered per server).
+  const [srvFolded, setSrvFolded] = createSignal<Record<string, boolean>>(loadFolded(storage()));
+  const foldServer = (id: string, e: MouseEvent) => { e.stopPropagation(); setSrvFolded(toggleFolded(storage(), srvFolded(), id)); };
   const select = (n: Node) => { const pane = firstPane(n); if (pane) p.onSelectPane(pane.pane_id); };
   const stop = (e: MouseEvent, fn: () => void) => { e.stopPropagation(); fn(); };
 
@@ -243,14 +246,15 @@ export default function Sidebar(p: Props) {
               const panes = () => sec.tree?.panes.length ?? 0;
               return (
                 <div class={`srv-sec ${sec.error ? "down" : ""}`}>
-                  <div class="row srv" title={sec.error ?? sec.name}>
+                  <div class="row srv" title={`${sec.error ?? sec.name} · click to ${srvFolded()[sec.id] ? "unfold" : "fold"}`} onClick={(e) => foldServer(sec.id, e)}>
+                    <button class="car cy" title={srvFolded()[sec.id] ? "expand" : "collapse"} aria-expanded={!srvFolded()[sec.id]} onClick={(e) => foldServer(sec.id, e)}>{srvFolded()[sec.id] ? "▸" : "▾"}</button>
                     <span class={`dot ${sec.error ? "bad" : sec.connecting ? "wait" : "ok"}`} aria-hidden="true" />
                     <span class="nm">{sec.name.toUpperCase()}</span>
                     <Show when={sec.error}><span class="tag b">OFFLINE</span></Show>
                     <button class="add" title={`open a repository on ${sec.name}`} onClick={(e) => stop(e, () => p.onNewRepo(sec.id))}>+</button>
                     <span class="cnt">{panes()}</span>
                   </div>
-                  <div class="srv-body" inert={!!sec.error} aria-disabled={!!sec.error}>
+                  <div class="srv-body" hidden={!!srvFolded()[sec.id]} inert={!!sec.error} aria-disabled={!!sec.error}>
                     <For each={secRoots()}>{(r) => (r.kind === "repo" ? <RepoRow r={r} /> : <SpaceRow s={r} />)}</For>
                     <Show when={!secRoots().length && !sec.error}><div class="row micro">no spaces · + opens a repository</div></Show>
                   </div>

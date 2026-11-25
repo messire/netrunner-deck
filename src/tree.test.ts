@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Agent, Pane, Tab, Tree, Workspace } from "./api";
-import { buildTree, contains, ctxPct, defaultOpen, firstPane, loadOpen, rollup, saveOpen, spaces, waiting } from "./tree";
+import { buildTree, contains, ctxPct, defaultOpen, firstPane, loadFolded, loadOpen, rollup, saveOpen, spaces, toggleFolded, waiting } from "./tree";
 
 const ws = (id: string, label: string, extra: Partial<Workspace> = {}): Workspace => ({
   workspace_id: id, number: 1, label, focused: false, pane_count: 1, tab_count: 1, active_tab_id: `${id}:t1`, agent_status: "idle", ...extra,
@@ -161,5 +161,22 @@ describe("ctxPct / open state", () => {
     store.set("deck.tree.open", "{not json");
     expect(loadOpen(storage)).toEqual({});
     expect(loadOpen(undefined)).toEqual({});
+  });
+});
+
+describe("server sections fold", () => {
+  it("are remembered per server and survive bad storage", () => {
+    const mem = new Map<string, string>();
+    const st = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
+    let f = loadFolded(st);
+    expect(f).toEqual({});
+    f = toggleFolded(st, f, "herdr");
+    expect(loadFolded(st)).toEqual({ herdr: true });
+    f = toggleFolded(st, f, "deck@vm");
+    f = toggleFolded(st, f, "herdr");
+    expect(loadFolded(st)).toEqual({ "deck@vm": true });
+    mem.set("deck.srv.folded", "not json");
+    expect(loadFolded(st)).toEqual({});
+    expect(loadFolded(undefined)).toEqual({});
   });
 });

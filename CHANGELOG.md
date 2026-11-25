@@ -3,6 +3,7 @@
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
 ## Unreleased
+- SESSIONS: a server's section folds and unfolds with a click on its header (▾/▸); the choice is remembered per server.
 
 ## [0.9.0] — 2026-11-25
 - The chat header is taller; its labels and the mode and model buttons are 1.3× taller and sit on one centre line.

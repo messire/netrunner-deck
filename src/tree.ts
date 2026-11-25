@@ -171,3 +171,19 @@ export function loadOpen(storage: Pick<Storage, "getItem"> | undefined): Record<
 export function saveOpen(storage: Pick<Storage, "setItem"> | undefined, open: Record<string, boolean>): void {
   try { storage?.setItem(OPEN_KEY, JSON.stringify(open)); } catch { /* private mode etc. */ }
 }
+
+/** Server sections folded in SESSIONS, by server id (`deck.srv.folded`), kept across restarts. */
+export const FOLDED_KEY = "deck.srv.folded";
+export function loadFolded(storage: Pick<Storage, "getItem"> | undefined): Record<string, boolean> {
+  try {
+    const v = JSON.parse(storage?.getItem(FOLDED_KEY) ?? "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch { return {}; }
+}
+/** Flips one server's fold and stores the result; the new map. */
+export function toggleFolded(storage: Pick<Storage, "setItem"> | undefined, folded: Record<string, boolean>, id: string): Record<string, boolean> {
+  const next = { ...folded };
+  if (next[id]) delete next[id]; else next[id] = true;
+  try { storage?.setItem(FOLDED_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
+  return next;
+}
