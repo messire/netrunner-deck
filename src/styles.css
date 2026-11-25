@@ -301,11 +301,13 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .arc-q.wide{width:100%;font-size:17px;padding:8px 10px}
 
 /* ---- chat view (transcript-based) ---------------------------------------- */
-.chat .th .abtn{margin-left:10px;padding:0 10px;height:29px;line-height:1;display:inline-flex;align-items:center}
+.chat .th .abtn{margin-left:10px;padding:0 10px;height:28px;line-height:normal;display:inline-flex;align-items:center}
 .chat{grid-template-rows:40px 1fr}
 .chat .th{padding-right:16px}
+/* every label of the chat header on one centre line, whatever its font */
+.chat .th>span{display:inline-flex;align-items:center;height:28px;line-height:normal;padding-top:2px}
 /* permission mode chip: default (muted) · accept edits (green) · plan (cyan) · bypass (red) */
-.mode{margin-left:12px;padding:0 8px;height:26px;line-height:1;display:inline-flex;align-items:center;border:1px solid currentColor;background:transparent;font:600 11px var(--fh);letter-spacing:1px;cursor:pointer;color:var(--mut);white-space:nowrap}
+.mode{margin-left:12px;padding:0 8px;height:28px;display:inline-flex;align-items:center;border:1px solid currentColor;background:transparent;font:600 11px var(--fh);letter-spacing:1px;cursor:pointer;color:var(--mut);white-space:nowrap}
 .mode:hover{filter:brightness(1.3)}
 .mode-accept-edits{color:var(--grn);background:rgba(43,255,136,.08)}
 .mode-plan{color:var(--cy);background:rgba(103,224,227,.08)}
