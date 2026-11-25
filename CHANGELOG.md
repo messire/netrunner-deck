@@ -7,6 +7,7 @@ Versions follow the rule in [README → Versioning](README.md#versioning): patch
 - GitHub sign-in per machine: when a github.com clone is refused, the dialog offers "Sign in to GitHub on {machine}" (device code shown in Deck, approved in the browser); the token stays on that machine and the clone retries by itself. Needs the Netrunner Deck GitHub OAuth App's client id (not set yet).
 - COPY TO / MOVE TO another server: right-click a repository (everything or chosen branches and sessions), a branch (it and all or some of its sessions) or a session. The repository arrives in `~/{name}` there with its full history, the chosen worktrees, uncommitted and untracked changes and its own harness; the Claude sessions arrive with their paths rewritten and resume there. MOVE removes them from the source only after the target has them. Busy sessions refuse; progress is shown and the work goes on when the dialog closes.
 - HARNESS: PERSONAL and its items have COPY TO / MOVE TO as well (everything or chosen items; overwrite, skip or keep both on a name clash). Only instructions, skills, agents, commands and rules travel — never credentials, accounts, settings or transcripts.
+- Fix: OPEN REPOSITORY on another machine said "not a directory" after CREATE · OPEN (Deck checked the folder on its own disk instead of leaving it to the server); quickhack launch and session restore no longer look at this PC's disk for a server's folders either.
 - See docs/adr/0005-clone-and-transfer.md.
 
 ## [0.7.0] — 2026-11-25

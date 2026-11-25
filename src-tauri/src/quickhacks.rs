@@ -197,9 +197,7 @@ pub fn launch(
     run: String,
     l: Launch,
 ) -> Result<Value, String> {
-    if !Path::new(&l.cwd).is_dir() {
-        return Err(format!("directory is gone: {}", l.cwd));
-    }
+    // The folder is on the server's machine: the server says if it is gone.
     let rt = crate::servers::runtime_for(&app, server.as_deref())?;
     let (workspace_id, pane_id) =
         open_session_dir(&*rt, &l.cwd, Some(&l.repo_root), l.label.as_deref(), true)?;
@@ -298,7 +296,8 @@ pub fn open_session_dir(
             .to_string();
         return Ok((ws, pane));
     }
-    let root = repo_root.filter(|r| Path::new(r).is_dir()).unwrap_or(dir);
+    // Paths are the server's machine's: Deck never looks at its own disk for them.
+    let root = repo_root.filter(|r| !r.trim().is_empty()).unwrap_or(dir);
     let opened = rt
         .worktree_open(runtime::WorktreeOpen {
             cwd: root.to_string(),
@@ -337,9 +336,11 @@ fn same_dir(a: &str, b: &str) -> bool {
 
 /// Open a repository (or any folder) as a workspace: a new tab when it is
 /// already open, else attached through `worktree.open` on itself.
+/// The folder is on the server's machine (often another one): only the
+/// server can say whether it is there, so Deck does not look.
 pub fn repo_open(rt: &dyn Runtime, path: &str, label: Option<&str>) -> Result<Value, String> {
-    if !Path::new(path).is_dir() {
-        return Err(format!("not a directory: {path}"));
+    if path.trim().is_empty() {
+        return Err("a folder is needed".into());
     }
     let (workspace_id, pane_id) = open_session_dir(rt, path, None, label, true)?;
     Ok(json!({ "workspace_id": workspace_id, "pane_id": pane_id }))
@@ -376,6 +377,20 @@ pub fn worktree_create(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A folder that exists only on the server's machine (here: nowhere on
+    /// this one) is still asked for: Deck never checks its own disk.
+    #[test]
+    fn a_remote_folder_is_opened_by_the_server_not_checked_here() {
+        let rt = crate::runtime::tests::Recorder::default();
+        let err = repo_open(&rt, "/home/someone/definitely-not-on-this-pc", None).unwrap_err();
+        assert!(!err.contains("not a directory"), "{err}");
+        let asked = rt.requests();
+        assert!(
+            asked.iter().any(|r| matches!(r, crate::runtime::Request::WorktreeOpen(w) if w.path == "/home/someone/definitely-not-on-this-pc")),
+            "{asked:?}"
+        );
+    }
 
     #[test]
     fn readiness_heuristics() {

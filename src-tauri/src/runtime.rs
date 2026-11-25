@@ -639,7 +639,7 @@ impl Runtime for HerdrRuntime {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
@@ -780,9 +780,12 @@ mod tests {
 
     /// Records the request each trait method stands for.
     #[derive(Default)]
-    struct Recorder(Mutex<Vec<Request>>);
+    pub(crate) struct Recorder(Mutex<Vec<Request>>);
 
     impl Recorder {
+        pub(crate) fn requests(&self) -> Vec<Request> {
+            self.0.lock().unwrap().clone()
+        }
         fn rec(&self, r: Request) -> Result<Value> {
             self.0.lock().unwrap().push(r);
             Ok(Value::Null)
