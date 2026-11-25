@@ -4,6 +4,12 @@ Versions follow the rule in [README → Versioning](README.md#versioning): patch
 
 ## Unreleased
 
+## [0.10.1] — 2026-11-25
+- SECRETS lists every machine with a connected server, remote ones too (it showed only this PC), as tabs at the top; it opens on the selected session's machine. CONNECTIONS lists the same machines.
+- SECRETS: COPY TO ▾ merges the shown `.env` into another machine's by key (same keys replaced, new keys appended, the rest kept) after a confirmation "N new, M replaced on <machine>".
+- PREFERENCES keeps one size for every section; the SECRETS list has room below its last row.
+- Esc, ✕ or a click outside no longer drop unsaved SECRETS edits: the panel stays and asks to SAVE or RELOAD.
+
 ## [0.10.0] — 2026-11-25
 - PREFERENCES › SECRETS: `~/.claude/.env` of each machine (its deck-server) as a KEY / VALUE table — values masked with a reveal button per row, edit, + ADD, delete, SAVE, RELOAD. Comments, blank lines, order, `export`, quoting and CRLF are kept; Deck holds the values only while the panel is open. The server writes only that one file (atomically, 0600 on Unix).
 - Installer with three kinds: client and server (default), client only, or server only. deck-server is installed windowless, starts when you sign in and updates itself; the choice is remembered and kept by updates. See docs/adr/0006-installer-kinds.md.
