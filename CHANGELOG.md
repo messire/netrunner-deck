@@ -2,6 +2,13 @@
 
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
+## Unreleased
+- Clone from OPEN REPOSITORY: paste a git URL (https, ssh, `git@host:…`) and the server of that machine clones it into `~/{name}` (editable; a new or empty folder) with its own git and credentials, showing the phase and percent, then opens it as a new space. The clone goes on if the dialog is closed.
+- GitHub sign-in per machine: when a github.com clone is refused, the dialog offers "Sign in to GitHub on {machine}" (device code shown in Deck, approved in the browser); the token stays on that machine and the clone retries by itself. Needs the Netrunner Deck GitHub OAuth App's client id (not set yet).
+- COPY TO / MOVE TO another server: right-click a repository (everything or chosen branches and sessions), a branch (it and all or some of its sessions) or a session. The repository arrives in `~/{name}` there with its full history, the chosen worktrees, uncommitted and untracked changes and its own harness; the Claude sessions arrive with their paths rewritten and resume there. MOVE removes them from the source only after the target has them. Busy sessions refuse; progress is shown and the work goes on when the dialog closes.
+- HARNESS: PERSONAL and its items have COPY TO / MOVE TO as well (everything or chosen items; overwrite, skip or keep both on a name clash). Only instructions, skills, agents, commands and rules travel — never credentials, accounts, settings or transcripts.
+- See docs/adr/0005-clone-and-transfer.md.
+
 ## [0.7.0] — 2026-11-25
 - A new deck-server tab opens as a chat at once (it showed the agent's terminal until the tree caught up).
 - Permission modes: bypass can be switched on; a mode or model change Claude refuses shows in the chat; modes are no longer checked against a built-in list, and after a server update a tab's agent replaces itself with the new binary on the same conversation.

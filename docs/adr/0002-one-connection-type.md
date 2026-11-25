@@ -59,4 +59,6 @@ and adds the host to discovery.
 
 ## Not yet remote
 
-Archive, harness and uplink still read this machine's files.
+Archive, harness and uplink still read this machine's files. Clone, GitHub
+sign-in and COPY TO / MOVE TO are the servers' work over this same
+connection ([ADR 0005](0005-clone-and-transfer.md)).
