@@ -756,3 +756,14 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .chat-start{display:flex;flex-direction:column;gap:6px;align-items:center}.chat-start .micro{max-width:560px;text-align:center;line-height:1.5}.chat-start b{color:var(--cy);font-weight:600}
 .repo-missing{display:flex;align-items:center;gap:12px;color:var(--yel);font-size:13px;margin-top:4px}.repo-missing b{color:var(--cy);font-weight:600}.repo-missing .abtn{margin-left:auto}.repo-error{color:var(--red);font-size:13px;margin-top:4px;word-break:break-word}
 .repo-error{display:flex;align-items:center;gap:12px}.repo-error .abtn{margin-left:auto;flex:none}
+
+/* OPEN REPOSITORY: clone a pasted git URL on the server's machine */
+.clone-box{display:flex;flex-direction:column;gap:10px;padding:6px 2px}
+.clone-line{display:flex;align-items:center;gap:8px;font:14px var(--ft);color:var(--txt);flex-wrap:wrap}
+.clone-line b{color:var(--yel);font-weight:600}
+.arc-q.clone-target{flex:1;min-width:200px;width:auto;font:14px var(--fm)}
+.clone-progress{display:flex;align-items:center;gap:10px}
+.clone-progress .seg,.xfer-progress .seg{flex:1;height:6px;background:rgba(103,224,227,.12);position:relative}
+.clone-progress .seg i,.xfer-progress .seg i{position:absolute;inset:0 auto 0 0;background:var(--cy);transition:width .3s}
+.gh-code{font:600 26px var(--fm);letter-spacing:6px;color:var(--yel);padding:6px 0;cursor:copy;user-select:all}
+.chat-menu.signin.gh{max-width:none;margin:0}

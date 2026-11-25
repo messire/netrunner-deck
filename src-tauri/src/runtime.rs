@@ -102,6 +102,9 @@ pub trait Runtime: Send + Sync {
     fn repos_list(&self) -> Result<Value>;
     /// deck-server's `deck.fs.<method>` (stat, mkdir) on its machine.
     fn fs_call(&self, method: &str, params: Value) -> Result<Value>;
+    /// deck-server's work on its own machine (`deck.git.*`, `deck.github.*`,
+    /// `deck.transfer.*`): `method` is the full method name.
+    fn machine_call(&self, method: &str, params: Value) -> Result<Value>;
 }
 
 // ---- params ---------------------------------------------------------------------
@@ -629,6 +632,10 @@ impl Runtime for HerdrRuntime {
     fn fs_call(&self, method: &str, params: Value) -> Result<Value> {
         herdr::call(&self.endpoint, &format!("deck.fs.{method}"), params)
     }
+
+    fn machine_call(&self, method: &str, params: Value) -> Result<Value> {
+        herdr::call(&self.endpoint, method, params)
+    }
 }
 
 #[cfg(test)]
@@ -907,6 +914,9 @@ mod tests {
             Ok(Value::Null)
         }
         fn fs_call(&self, _: &str, _: Value) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        fn machine_call(&self, _: &str, _: Value) -> Result<Value> {
             Ok(Value::Null)
         }
     }

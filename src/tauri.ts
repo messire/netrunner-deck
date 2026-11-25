@@ -110,7 +110,7 @@ const fake = (() => {
     { id: "deck-server/try", name: "deck-server · try", kind: "deck-server", remote: q.get("remote") === "1", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\deck-server\\sessions\\try\\herdr.sock", connected: q.get("servers") !== "0", manual: false, found: true, new: false,
       status: q.get("servers") === "down" ? { state: "offline", error: "herdr server is not reachable at \\\\.\\pipe\\…\\try\\herdr.sock: Access is denied. (os error 5) — Herdr runs elevated" } : { ...online } },
     { id: "herdr-dev/decktest", name: "herdr-dev · decktest", kind: "herdr", address: "\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\herdr-dev\\sessions\\decktest\\herdr.sock", connected: false, manual: false, found: true, new: true, status: { ...online } },
-    { id: "dev@build-box.example.com/deck-server", name: "deck-server @ dev@build-box.example.com", kind: "deck-server", address: "dev@build-box.example.com:/home/dev/.config/deck-server/herdr.sock", connected: false, manual: true, found: true, new: false, remote: true, machine: "dev@build-box.example.com", status: { state: "online", version: "0.4.0", protocol: 22 } },
+    { id: "dev@build-box.example.com/deck-server", name: "deck-server @ dev@build-box.example.com", kind: "deck-server", address: "dev@build-box.example.com:/home/dev/.config/deck-server/herdr.sock", connected: q.get("xfer") === "1", manual: true, found: true, new: false, remote: true, machine: "dev@build-box.example.com", status: { state: "online", version: "0.4.0", protocol: 22 } },
   ];
   // Saved machines the last scan could not reach (`?servers=0` has none).
   const unreachable: { machine: string; error: string }[] = q.get("servers") === "0" ? [] : [{ machine: "dev@old-box.example.com:2222", error: "ssh dev@old-box.example.com:2222: no answer within 20s" }];
@@ -140,6 +140,14 @@ const fake = (() => {
     ],
     agents: [{ terminal_id: "t2", agent: "deck-claude", agent_status: "blocked", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p2", focused: false }],
   };
+  if (q.get("xfer") === "1") {
+    trial.workspaces = [
+      { workspace_id: "w1", number: 1, label: "atlas", focused: true, pane_count: 2, tab_count: 1, active_tab_id: "w1:t1", agent_status: "idle", worktree: { repo_key: "atlas", repo_name: "atlas", branch: "main", is_linked_worktree: false, checkout_path: "C:\\Temp\\atlas" } },
+      { workspace_id: "w2", number: 2, label: "feat", focused: false, pane_count: 1, tab_count: 1, active_tab_id: "w2:t1", agent_status: "idle", worktree: { repo_key: "atlas", repo_name: "atlas", branch: "feat/clone", is_linked_worktree: true, checkout_path: "C:\\Temp\\atlas-feat" } },
+    ] as never;
+    trial.tabs.push({ tab_id: "w2:t1", workspace_id: "w2", number: 1, label: "feat chat", focused: false, pane_count: 1, agent_status: "idle" });
+    trial.panes.push({ pane_id: "w2:p1", terminal_id: "t3", workspace_id: "w2", tab_id: "w2:t1", focused: false, cwd: "C:\\Temp\\atlas-feat", agent: "deck-claude", agent_status: "idle" });
+  }
   const treeOf = (server: unknown) => {
     const s = srv(server ?? "herdr");
     if (!s.connected) throw new Error(`server ${s.id} is not connected`);
@@ -318,6 +326,35 @@ const fake = (() => {
           default: throw new Error(`unknown accounts method ${args.method}`);
         }
       }
+      // Clone and GitHub sign-in answer like a deck-server would.
+      case "machine_call": {
+        const m = String(args.method), p = (args.params ?? {}) as Record<string, unknown>;
+        const jobs = ((window as any).__deckJobs ??= new Map<string, { kind: string; at: number; extra: Record<string, unknown> }>()) as Map<string, { kind: string; at: number; extra: Record<string, unknown> }>;
+        const gh = (window as any).__deckGitHub ??= { signedIn: false, polls: 0 };
+        const job = (kind: string, extra: Record<string, unknown> = {}) => { const id = `${kind}-${jobs.size + 1}`; jobs.set(id, { kind, at: Date.now(), extra }); return id; };
+        const age = (id: string) => Date.now() - (jobs.get(id)?.at ?? 0);
+        switch (m) {
+          case "deck.git.clone.start": {
+            const path = String(p.path).replace(/^~/, "/home/me");
+            if ((window as any).__deckMade?.has(path) || path === "/home/me/notes") throw new Error(`the server refused deck.git.clone.start: ${path} is not empty — pick another folder (a clone goes into a new or empty one)`);
+            return { job: job("clone", { url: p.url, path }), path };
+          }
+          case "deck.git.clone.status": case "deck.git.clone.cancel": {
+            const j = jobs.get(String(p.job))!; const t = age(String(p.job));
+            if (m.endsWith("cancel")) j.extra.cancelled = true;
+            if (j.extra.cancelled) return { state: "cancelled", phase: "", percent: null, message: "cancelled" };
+            if (/private/.test(String(j.extra.url)) && !gh.signedIn) return t < 800 ? { state: "running", phase: "Cloning", percent: null } : { state: "failed", phase: "Cloning", message: "remote: Repository not found.\nfatal: repository 'https://github.com/o/private.git/' not found", auth: true, github: true, path: j.extra.path };
+            const phases: [string, number][] = [["Counting objects", 100], ["Receiving objects", 37], ["Receiving objects", 81], ["Resolving deltas", 64]];
+            const i = Math.floor(t / 700);
+            return i < phases.length ? { state: "running", phase: phases[i][0], percent: phases[i][1], path: j.extra.path } : { state: "done", phase: "Resolving deltas", percent: 100, path: j.extra.path };
+          }
+          case "deck.github.status": return { configured: true, signed_in: gh.signedIn, user: gh.signedIn ? "octo" : null };
+          case "deck.github.login.start": gh.polls = 0; return { login_id: "gh-1", user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900 };
+          case "deck.github.login.status": gh.polls++; if (gh.polls >= 2) { gh.signedIn = true; return { state: "done", user: "octo" }; } return { state: "pending" };
+          default: throw new Error(`the server refused ${m}: unknown method`);
+        }
+      }
+      case "open_external": console.info("[stand-in] open", args.url); return null;
       default: throw new Error(`browser stand-in: unknown command ${cmd}`);
     }
   };

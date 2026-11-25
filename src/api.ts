@@ -165,6 +165,17 @@ export interface RepoGroup { id: string; name: string; repos: string[]; hidden: 
 export interface HarnessItem { kind: string; name: string; path: string; size: number; mtime_ms: number; local: boolean; description?: string | null; tags: string[]; argument_hint?: string | null }
 export interface HarnessRepo { key: string; name: string; root: string; personal: boolean; exists: boolean; items: HarnessItem[] }
 
+/** A background job on a server's machine (clone, transfer): `deck.*.status`. */
+export interface MachineJob {
+  job?: string;
+  state?: "running" | "done" | "failed" | "cancelled";
+  phase?: string;
+  percent?: number | null;
+  message?: string | null;
+  path?: string | null;
+  [key: string]: unknown;
+}
+
 /** A harness entry pinned to the QUICKHACKS panel. */
 export interface Hack { id: string; name: string; kind: string; source: "personal" | "project"; repo_key?: string | null; repo_name?: string | null; path: string; description?: string | null; argument_hint?: string | null }
 export interface HacksSaved { hacks: Hack[]; collapsed: boolean }
@@ -338,6 +349,9 @@ export const api = {
   folderCreate: (server: string | null, path: string) => invoke<{ path: string; exists: boolean; dir: boolean }>("fs_call", { server: srv(server), method: "mkdir", path }),
   /** Folders Claude Code knows on `server`'s machine (deck-server's `deck.repos.list`). */
   reposList: (server: string | null) => invoke<{ folders: { name: string; root: string; git: boolean }[] }>("repos_list", { server: srv(server) }),
+  /** Work on `server`'s machine: `deck.git.clone.*`, `deck.github.*`, `deck.transfer.*` (the server does it on its own disk). */
+  machine: <T = MachineJob>(server: string | null, method: string, params: Record<string, unknown> = {}) =>
+    invoke<T>("machine_call", { server: srv(server), method, params }),
   /** The accounts of `server`'s machine (deck-server keeps them; Deck only asks). */
   accountsList: (server: string | null) => { count("accounts_call"); return invoke<AccountList>("accounts_call", { server: srv(server), method: "list", params: {} }); },
   accountsSwitch: (server: string | null, number: number) => invoke<AccountList>("accounts_call", { server: srv(server), method: "switch", params: { number } }),

@@ -31,7 +31,11 @@ use base64::Engine as _;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
+pub mod clone;
+pub mod github;
 mod http;
+pub mod jobs;
+pub mod proc;
 pub use http::{Curl, Http, HttpRequest, HttpResponse};
 
 // ---- Claude Code's OAuth client (as the installed CLI uses it) ---------------
@@ -128,12 +132,17 @@ fn random_token(len: usize) -> Result<String> {
     Ok(b64url(&bytes))
 }
 
+/// A random id for a job or a sign-in in flight.
+pub fn random_id() -> Result<String> {
+    random_token(12)
+}
+
 /// PKCE S256: the challenge for a verifier.
 pub fn code_challenge(verifier: &str) -> String {
     b64url(&Sha256::digest(verifier.as_bytes()))
 }
 
-fn percent_encode(s: &str) -> String {
+pub(crate) fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
@@ -170,7 +179,7 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn read_json(path: &Path) -> Result<Option<Value>> {
+pub(crate) fn read_json(path: &Path) -> Result<Option<Value>> {
     match std::fs::read_to_string(path) {
         Ok(text) if text.trim().is_empty() => Ok(None),
         Ok(text) => serde_json::from_str(&text)
@@ -182,7 +191,7 @@ fn read_json(path: &Path) -> Result<Option<Value>> {
 }
 
 /// Writes JSON next to `path` and renames it over, readable by the owner only.
-fn write_json(path: &Path, value: &Value, private: bool) -> Result<()> {
+pub(crate) fn write_json(path: &Path, value: &Value, private: bool) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
@@ -1017,7 +1026,7 @@ pub fn expand_home(path: &str) -> PathBuf {
     }
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
@@ -1075,7 +1084,7 @@ pub fn resolve_in_home(input: &str, home: &Path) -> Result<PathBuf> {
 /// server machine) every folder Deck opens or creates is inside the home of
 /// the user the server runs as; on Windows (the user's own PC) a path is
 /// taken as it is, with `~` expanded.
-fn place_of(path: &str) -> Result<PathBuf> {
+pub fn place_of(path: &str) -> Result<PathBuf> {
     if path.trim().is_empty() {
         return Err("a path is needed".into());
     }

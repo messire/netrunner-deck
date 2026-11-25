@@ -2,6 +2,7 @@ mod accounts;
 mod agent;
 pub mod client;
 mod event_hub;
+mod machine;
 pub mod schema;
 mod server;
 mod status;

@@ -358,6 +358,9 @@ fn handle_connection_with_stop(
     if let Some(response) = crate::api::accounts::handle(line) {
         return write_text_line_allow_disconnect(&mut stream, &response);
     }
+    if let Some(response) = crate::api::machine::handle(line) {
+        return write_text_line_allow_disconnect(&mut stream, &response);
+    }
 
     let request = match serde_json::from_str::<Request>(line) {
         Ok(request) => request,

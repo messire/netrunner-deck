@@ -5,6 +5,7 @@ mod bridge;
 mod endpoint;
 mod harness;
 mod herdr;
+mod machine;
 mod quickhacks;
 mod runtime;
 mod servers;
@@ -409,6 +410,18 @@ async fn fs_call(
     path: String,
 ) -> Result<Value, String> {
     blocking(move || accounts::fs(&app, server.as_deref(), &method, &path)).await
+}
+
+/// `deck.git.*` (clone), `deck.github.*` (sign-in) and `deck.transfer.*`
+/// on `server`'s machine: the server does the work on its own disk.
+#[tauri::command]
+async fn machine_call(
+    app: AppHandle,
+    server: Option<String>,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
+    blocking(move || machine::call(&app, server.as_deref(), &method, params)).await
 }
 
 // ---- headless Claude sessions (deck-server) ---------------------------------
@@ -918,6 +931,7 @@ pub fn run() {
             accounts_call,
             repos_list,
             fs_call,
+            machine_call,
             archive_list,
             archive_close,
             archive_restore,

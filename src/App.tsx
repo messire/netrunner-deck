@@ -855,7 +855,8 @@ export default function App() {
       </Show>
       <Show when={newTabFor()}>{(t) => { const target = t(); return <NewTabBox initial={remembered("deck.newTabKind") ?? "claude"} onPick={(k) => openTab(target, k)} onClose={() => setNewTabFor(null)} />; }}</Show>
       <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} check={checkFolder} create={createFolder}
-        where={repoServerName()} remote={isRemote(repoTarget())} loading={isRemote(repoTarget()) && remoteFolders() === null} /></Show>
+        where={repoServerName()} remote={isRemote(repoTarget())} loading={isRemote(repoTarget()) && remoteFolders() === null}
+        server={repoTarget()} cloneable={onDeckServer(repoTarget())} /></Show>
       <Show when={wtBox()}>{(w) => { const t = w(); return <NewWorktreeBox repo={t.repo} onCreate={(b, base) => createWorktree(t.root, b, base, t.server)} onClose={() => setWtBox(null)} />; }}</Show>
       <Show when={ask()}>{(q) => <PromptBox title={q().title} value={q().value} placeholder="name" ok={q().ok} onClose={() => setAsk(null)} />}</Show>
       <Show when={overlay() === "palette"}><Palette title="Palette" items={paletteItems()} onClose={() => setOverlay(null)} /></Show>
