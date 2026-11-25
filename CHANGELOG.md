@@ -3,6 +3,8 @@
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
 ## Unreleased
+- Installer with three kinds: client and server (default), client only, or server only. deck-server is installed windowless, starts when you sign in and updates itself; the choice is remembered and kept by updates. See docs/adr/0006-installer-kinds.md.
+- deck-server on Windows never opens a console window (typed in a terminal it still prints there).
 - COPY TO / MOVE TO between any connected servers, Herdr or deck-server, either way. The files are the work of Deck's bridge on each machine (built into Deck here, `deck-server bridge` there), so a machine with only Herdr works too and Herdr is not changed. On Herdr a branch arrives as a worktree in Herdr's own worktrees folder (it shows in its "open worktree"), joining the same repository when it is already there, and the session opens in a tab with `claude --resume`. Between two servers on one machine nothing is copied: the other server opens the same checkouts.
 - Clone and GitHub sign-in are the bridge's work too, so they work on any machine Deck reaches.
 - SESSIONS: a server's section folds and unfolds with a click on its header (▾/▸); the choice is remembered per server.

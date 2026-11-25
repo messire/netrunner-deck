@@ -62,6 +62,22 @@ jobs:
             echo "TAURI_SIGNING_PRIVATE_KEY secret is missing: an unsigned build cannot be offered by the updater" >&2
             exit 1
           fi
+      # The installer ships deck-server (its "server" and "client and server"
+      # kinds): the Windows build CI published to deck-server-latest,
+      # checked against its manifest.
+      - name: deck-server for the installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p deck-server-bin
+          gh release download deck-server-latest --repo "$GITHUB_REPOSITORY" --dir deck-server-bin \
+            -p deck-server.json -p deck-server-windows-x86_64.exe
+          want=$(node -p 'require("./deck-server-bin/deck-server.json").assets["windows-x86_64"].sha256')
+          got=$(sha256sum deck-server-bin/deck-server-windows-x86_64.exe | cut -d' ' -f1)
+          [ "$want" = "$got" ] || { echo "deck-server checksum mismatch" >&2; exit 1; }
+          echo "DECK_SERVER_EXE=$(cygpath -w "$PWD/deck-server-bin/deck-server-windows-x86_64.exe")" >> "$GITHUB_ENV"
       - run: npm run tauri build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

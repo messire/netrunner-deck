@@ -22,6 +22,9 @@
 
 // Modules shared with `herdr` carry code (and re-exports) only its TUI/CLI uses.
 #![allow(dead_code, unused_imports)]
+// No console window on Windows: started at sign-in or by the installer it
+// must not flash one. Typed in a terminal it attaches to that terminal.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::io;
 
@@ -347,7 +350,25 @@ fn raise_open_files_limit() {
     }
 }
 
+/// Windows: a GUI-subsystem program has no console; typed in a terminal (no
+/// standard handles given) it writes to that terminal's.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
+    };
+    // SAFETY: plain Win32 calls; both fail harmlessly.
+    unsafe {
+        let out = GetStdHandle(STD_OUTPUT_HANDLE);
+        if out.is_null() || out == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
 fn main() -> io::Result<()> {
+    #[cfg(windows)]
+    attach_parent_console();
     raise_open_files_limit();
     // Before the env is cleaned: a hook call targets the server in HERDR_SOCKET_PATH.
     let raw: Vec<String> = std::env::args().collect();
