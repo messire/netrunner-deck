@@ -574,8 +574,11 @@ fn a_branch_joins_the_same_repository_already_there() {
         .to_string();
     let size = wait(&src, &job)["size"].as_u64().unwrap();
     let imp = dst
-        .import_start(&json!({ "kind": "repo", "path": target.to_string_lossy(), "worktrees": herdr_wt.to_string_lossy() }))
-        .unwrap()["job"].as_str().unwrap().to_string();
+        .import_start_with("repo", Some(target.clone()), Some(herdr_wt.clone()))
+        .unwrap()["job"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let mut off = 0u64;
     loop {
         let c = src

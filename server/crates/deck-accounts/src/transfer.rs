@@ -493,6 +493,17 @@ impl Transfer {
             .and_then(Value::as_str)
             .filter(|w| !w.is_empty())
             .map(PathBuf::from);
+        self.import_start_with(kind, target, worktrees)
+    }
+
+    /// [`Transfer::import_start`] with the target resolved; `worktrees`: where
+    /// new worktrees go (the target server's own folder).
+    fn import_start_with(
+        &self,
+        kind: &str,
+        target: Option<PathBuf>,
+        worktrees: Option<PathBuf>,
+    ) -> crate::Result<Value> {
         let id = self.import_start_at(kind, target)?;
         if let (Some(w), Some(j)) = (worktrees, id.get("job").and_then(Value::as_str)) {
             self.jobs
