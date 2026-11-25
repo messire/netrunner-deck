@@ -326,7 +326,7 @@ const fake = (() => {
           default: throw new Error(`unknown accounts method ${args.method}`);
         }
       }
-      // Clone and GitHub sign-in answer like a deck-server would.
+      // `?xfer=1`: clone, GitHub sign-in and COPY TO / MOVE TO answer like a deck-server would.
       case "machine_call": {
         const m = String(args.method), p = (args.params ?? {}) as Record<string, unknown>;
         const jobs = ((window as any).__deckJobs ??= new Map<string, { kind: string; at: number; extra: Record<string, unknown> }>()) as Map<string, { kind: string; at: number; extra: Record<string, unknown> }>;
@@ -351,9 +351,29 @@ const fake = (() => {
           case "deck.github.status": return { configured: true, signed_in: gh.signedIn, user: gh.signedIn ? "octo" : null };
           case "deck.github.login.start": gh.polls = 0; return { login_id: "gh-1", user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900 };
           case "deck.github.login.status": gh.polls++; if (gh.polls >= 2) { gh.signedIn = true; return { state: "done", user: "octo" }; } return { state: "pending" };
+          case "deck.transfer.export.start": return { job: job("export", { params: p }) };
+          case "deck.transfer.import.start": {
+            if (p.kind === "repo" && String(p.path) === "~/notes") throw new Error("the server refused deck.transfer.import.start: /home/me/notes is already taken on this machine — pick another name");
+            return { job: job("import", { kind: p.kind, path: p.kind === "repo" ? String(p.path).replace(/^~/, "/home/me") : null }), path: p.kind === "repo" ? String(p.path).replace(/^~/, "/home/me") : null };
+          }
+          case "deck.transfer.import.commit": { const j = jobs.get(String(p.job))!; j.at = Date.now(); j.extra.committed = true; return { job: p.job }; }
+          case "deck.transfer.remove.start": return { job: job("remove") };
+          case "deck.transfer.conflicts": return { existing: ((p.items as string[]) ?? []).filter((i) => i === "CLAUDE.md") };
+          case "deck.transfer.finish": case "deck.transfer.cancel": return {};
+          case "deck.transfer.status": {
+            const j = jobs.get(String(p.job))!; const t = age(String(p.job));
+            if (t < 1200) return { state: "running", phase: j.kind === "export" ? "Packing history" : j.kind === "import" ? "Checking out main" : "Removing", percent: Math.round(t / 12) };
+            if (j.kind === "export") return { state: "done", phase: "Packing sessions", percent: 100, size: 3_400_000 };
+            if (j.kind === "import" && j.extra.kind === "harness") return { state: "done", percent: 100, copied: ["skills/deploy"], skipped: ["CLAUDE.md"], renamed: [] };
+            if (j.kind === "import") return { state: "done", percent: 100, path: j.extra.path, worktrees: [{ path: j.extra.path, branch: "main", root: true }], sessions: [{ id: "fake-session", cwd: j.extra.path }] };
+            return { state: "done", percent: 100 };
+          }
           default: throw new Error(`the server refused ${m}: unknown method`);
         }
       }
+      case "transfer_relay": (window as any).__deckRelay = Date.now(); return { relay: "relay-1" };
+      case "transfer_relay_status": { const t = Date.now() - (window as any).__deckRelay; const size = 3_400_000; return { sent: Math.min(size, Math.round(size * t / 2000)), size, done: t >= 2000, error: null }; }
+      case "transfer_open": console.info("[stand-in] transfer_open", JSON.stringify(args)); return { resumed: (args.sessions as unknown[]).length };
       case "open_external": console.info("[stand-in] open", args.url); return null;
       default: throw new Error(`browser stand-in: unknown command ${cmd}`);
     }

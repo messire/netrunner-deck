@@ -35,7 +35,9 @@ pub mod clone;
 pub mod github;
 mod http;
 pub mod jobs;
+pub mod pack;
 pub mod proc;
+pub mod transfer;
 pub use http::{Curl, Http, HttpRequest, HttpResponse};
 
 // ---- Claude Code's OAuth client (as the installed CLI uses it) ---------------

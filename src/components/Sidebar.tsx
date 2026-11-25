@@ -45,6 +45,8 @@ interface Props {
   onTabMenu: (e: MouseEvent, t: Tab) => void;
   onPaneMenu: (e: MouseEvent, pane: Pane) => void;
   onAccountMenu: (e: MouseEvent, a: Account) => void;
+  /** Right-click on a repository row (COPY TO / MOVE TO). */
+  onRepoMenu?: (e: MouseEvent, r: RepoNode) => void;
   /** Create at any level, like Herdr: space (optionally cloned from one), tab, split. */
   /** "+" next to SESSIONS (or on a server section): open a repository as a new space. */
   onNewRepo: (server?: string) => void;
@@ -183,7 +185,7 @@ export default function Sidebar(p: Props) {
 
   const RepoRow = (q: { r: RepoNode }) => (
     <>
-      <div class="row repo" onClick={(e) => toggle(q.r, e)}>
+      <div class="row repo" onClick={(e) => toggle(q.r, e)} onContextMenu={(e) => { e.preventDefault(); p.onRepoMenu?.(e, q.r); }}>
         <Caret node={q.r} color="yel" />
         <span class="nm">{q.r.label}</span>
         <button class="add" title="new worktree in this repo (worktree.create)"

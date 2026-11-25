@@ -352,6 +352,13 @@ export const api = {
   /** Work on `server`'s machine: `deck.git.clone.*`, `deck.github.*`, `deck.transfer.*` (the server does it on its own disk). */
   machine: <T = MachineJob>(server: string | null, method: string, params: Record<string, unknown> = {}) =>
     invoke<T>("machine_call", { server: srv(server), method, params }),
+  /** Relay a transfer's pack from the source server's export to the target server's import (Deck only passes bytes). */
+  transferRelay: (from: string | null, to: string | null, exportJob: string, importJob: string) =>
+    invoke<{ relay: string }>("transfer_relay", { from: srv(from), to: srv(to), exportJob, importJob }),
+  transferRelayStatus: (relay: string) => invoke<{ sent: number; size: number; done: boolean; error?: string | null }>("transfer_relay_status", { relay }),
+  /** Open what arrived on `server` as spaces and resume its sessions there. */
+  transferOpen: (server: string | null, worktrees: { path: string; root: boolean }[], sessions: { id: string; cwd: string }[]) =>
+    invoke<{ resumed: number }>("transfer_open", { server: srv(server), worktrees, sessions }),
   /** The accounts of `server`'s machine (deck-server keeps them; Deck only asks). */
   accountsList: (server: string | null) => { count("accounts_call"); return invoke<AccountList>("accounts_call", { server: srv(server), method: "list", params: {} }); },
   accountsSwitch: (server: string | null, number: number) => invoke<AccountList>("accounts_call", { server: srv(server), method: "switch", params: { number } }),

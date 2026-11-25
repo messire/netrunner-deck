@@ -424,6 +424,39 @@ async fn machine_call(
     blocking(move || machine::call(&app, server.as_deref(), &method, params)).await
 }
 
+/// Relays a transfer's pack from the source server's export to the target
+/// server's import, on its own thread: `{relay}`.
+#[tauri::command]
+async fn transfer_relay(
+    app: AppHandle,
+    from: Option<String>,
+    to: Option<String>,
+    export_job: String,
+    import_job: String,
+) -> Result<Value, String> {
+    blocking(move || {
+        machine::relay_start(&app, from.as_deref(), to.as_deref(), export_job, import_job)
+    })
+    .await
+}
+
+/// `{sent, size, done, error}` of a relay.
+#[tauri::command]
+fn transfer_relay_status(relay: String) -> Result<Value, String> {
+    machine::relay_status(&relay)
+}
+
+/// Opens what a transfer brought to `server` as spaces and resumes its sessions.
+#[tauri::command]
+async fn transfer_open(
+    app: AppHandle,
+    server: Option<String>,
+    worktrees: Vec<machine::Placed>,
+    sessions: Vec<machine::Arrived>,
+) -> Result<Value, String> {
+    blocking(move || machine::open_on(&app, server.as_deref(), worktrees, sessions)).await
+}
+
 // ---- headless Claude sessions (deck-server) ---------------------------------
 
 /// `deck.agent.<method>` (send, respond, interrupt, set, resume, restart, list) on `server`.
@@ -932,6 +965,9 @@ pub fn run() {
             repos_list,
             fs_call,
             machine_call,
+            transfer_relay,
+            transfer_relay_status,
+            transfer_open,
             archive_list,
             archive_close,
             archive_restore,

@@ -12,7 +12,11 @@ import { isHeadlessAgent } from "./agent";
 import SignInCard from "./components/SignInCard";
 import { agentOf, syncAgents } from "./agentStore";
 import KeyBar from "./components/KeyBar";
-import ContextMenu, { type MenuState } from "./components/ContextMenu";
+import ContextMenu, { type MenuItem, type MenuState } from "./components/ContextMenu";
+import TransferDialog, { type TransferState } from "./components/TransferDialog";
+import { exportParams, removeParams, repoOf, type Plan, type TBranch, type TRepo } from "./transfer";
+import { runTransfer } from "./jobs";
+import { buildTree, type RepoNode } from "./tree";
 import Palette, { type PaletteItem } from "./components/Palette";
 import ArchiveView from "./components/ArchiveView";
 import PromptBox from "./components/PromptBox";
@@ -455,6 +459,72 @@ export default function App() {
       newTabOrPick(r.workspace_id, r.pane_id);
     } catch (e) { showError(`worktree.create: ${String(e)}`); }
   };
+  // ---- COPY TO / MOVE TO another server (a repository, a branch, a session) ----
+  type Xfer = { mode: "copy" | "move"; scope: "repo" | "branch" | "session"; repo: TRepo; branch?: TBranch; session?: string; from: { id: string; name: string }; to: { id: string; name: string } };
+  const [xfer, setXfer] = createSignal<Xfer | null>(null);
+  const [xferState, setXferState] = createSignal<TransferState | null>(null);
+  const serverName = (id: string) => connected().find((s) => s.id === id)?.name ?? (id || "this server");
+  /** The sidebar's repository node a space belongs to. */
+  const repoNodeOf = (workspaceId: string): RepoNode | null =>
+    buildTree(fullTree()).find((r): r is RepoNode => r.kind === "repo" && r.spaces.some((s) => s.id === workspaceId)) ?? null;
+  /** Other connected deck-servers a transfer from `from` can go to. */
+  const transferTargets = (from: string) => connected().filter((s) => s.id !== from && s.kind === "deck-server" && !isDown(s.id));
+  const transferItems = (from: string, open: (mode: "copy" | "move", to: { id: string; name: string }) => void): MenuItem[] => {
+    if (!onDeckServer(from)) return [{ label: "COPY TO · MOVE TO", hint: "needs deck-server here", disabled: true }];
+    const sub = (mode: "copy" | "move"): MenuItem[] => transferTargets(from).map((s) => ({ label: s.name.toUpperCase(), hint: s.remote ? "another machine" : "this machine", run: () => open(mode, { id: s.id, name: s.name }) }));
+    return [{ label: "COPY TO", hint: "keeps it here", items: sub("copy") }, { label: "MOVE TO", hint: "removes it here after", items: sub("move") }];
+  };
+  const xferRunning = () => { const st = xferState(); return !!st && !st.error && !st.done; };
+  const openTransfer = (mode: "copy" | "move", scope: Xfer["scope"], workspaceId: string, to: { id: string; name: string }, paneId?: string) => {
+    const node = repoNodeOf(workspaceId);
+    if (!node) { showError("this space is not a git repository — nothing to transfer"); return; }
+    const repo = repoOf(node, claudeSession);
+    const branch = repo.branches.find((b) => b.workspaceId === workspaceId);
+    if (scope === "session" && paneId && !branch?.sessions.find((x) => x.paneId === paneId)?.sessionId) {
+      showError("this session has no conversation yet — nothing to transfer");
+      return;
+    }
+    if (xferRunning()) { showError("a transfer is already running"); return; }
+    const from = serverOf(workspaceId);
+    setXferState(null);
+    setXfer({ mode, scope, repo, branch, session: paneId, from: { id: from, name: serverName(from) }, to });
+  };
+  const startTransfer = (plan: Plan, path: string) => {
+    const x = xfer();
+    if (!x) return;
+    const move = x.mode === "move";
+    const verb = move ? "Moved" : "Copied";
+    // MOVE: what runs on the source closes once the target has it all.
+    const closeOnSource = async () => {
+      const root = plan.worktrees.find((w) => w.root);
+      if (plan.whole && root) { await api.action("workspace.close", root.workspaceId, { close_group: true }).catch(() => {}); return; }
+      const linked = plan.worktrees.filter((w) => !w.root);
+      for (const w of linked) await api.action("workspace.close", w.workspaceId).catch(() => {});
+      // Sessions of the main checkout close one by one (the checkout stays).
+      for (const s of plan.sessions) {
+        const inLinked = linked.some((w) => tree()?.panes.find((pn) => pn.pane_id === s.pane_id)?.workspace_id === w.workspaceId);
+        if (!inLinked) await api.action("pane.close", s.pane_id).catch(() => {});
+      }
+    };
+    setXferState({ step: { phase: "Starting", percent: 0 } });
+    runTransfer({
+      kind: "repo", from: x.from.id, to: x.to.id, fromName: x.from.name, toName: x.to.name,
+      exportParams: exportParams(plan), path, move, removeParams: removeParams(plan), beforeRemove: closeOnSource,
+      onStep: (step) => setXferState({ step }),
+    }).then(async (arrived) => {
+      const worktrees = (arrived.worktrees as { path: string; root: boolean }[] | undefined) ?? [];
+      const sessions = (arrived.sessions as { id: string; cwd: string }[] | undefined) ?? [];
+      await api.transferOpen(x.to.id, worktrees, sessions).catch((e) => showError(`opening on ${x.to.name}: ${String(e)}`));
+      refetchTree();
+      const text = `${verb} ${plan.name} to ${x.to.name} (${String(arrived.path ?? path)}): ${worktrees.length} ${worktrees.length === 1 ? "branch" : "branches"}, ${sessions.length} ${sessions.length === 1 ? "session" : "sessions"}, opened there${move ? `; removed from ${x.from.name}` : ""}.`;
+      setXferState({ step: { phase: "Done", percent: 100 }, done: text });
+      if (!xfer()) api.notify("Transfer done", text).catch(() => {});
+    }).catch((e) => {
+      const m = String(e).replace(/^Error: /, "").replace(/^the server refused deck\.[\w.]+: /, "");
+      setXferState((st) => ({ step: st?.step ?? { phase: "", percent: 0 }, error: m }));
+      if (!xfer()) showError(`transfer: ${m}`);
+    });
+  };
   // RENAME for a space / tab / pane: Deck's prompt → `*.rename {label}`.
   const [ask, setAsk] = createSignal<{ title: string; value: string; ok: (v: string) => void } | null>(null);
   const rename = (kind: "workspace" | "tab" | "pane", id: string, current: string) =>
@@ -471,6 +541,7 @@ export default function App() {
       ...(w.worktree?.checkout_path ? [{ label: "PULL · UPDATE", hint: "git pull --ff-only · log in UPLINK", run: () => pull(w) }] : []),
       { label: "NEW TAB", hint: "tab.create", run: () => newTabOrPick(w.workspace_id) },
       { label: "NEW SPACE", hint: "workspace.create", run: () => runAction("workspace.create", w.workspace_id) },
+      ...(w.worktree?.checkout_path ? transferItems(serverOf(w.workspace_id), (mode, to) => openTransfer(mode, "branch", w.workspace_id, to)) : []),
       { label: "CLOSE · ARCHIVE", hint: "keep for restore", run: () => archiveClose(w) },
       { label: "CLOSE SPACE", hint: "workspace.close", danger: true, run: () => runAction("workspace.close", w.workspace_id) },
       // A primary repo workspace with linked worktrees refuses a plain close (workspace_group_close_required).
@@ -499,11 +570,17 @@ export default function App() {
       { label: "OPEN", run: () => selectPane(pane.pane_id) },
       { label: "FOCUS IN HERDR", hint: "pane.focus", run: () => api.focus("pane", pane.pane_id).catch((er) => showError(String(er))) },
       { label: "RENAME", hint: "pane.rename", run: () => rename("pane", pane.pane_id, pane.label ?? "") },
+      ...(claudeSession(pane.pane_id) ? transferItems(serverOf(pane.pane_id), (mode, to) => openTransfer(mode, "session", pane.workspace_id, to, pane.pane_id)) : []),
       { label: "SPLIT RIGHT", hint: "pane.split", run: () => runAction("pane.split", pane.pane_id, { direction: "right" }) },
       { label: "SPLIT DOWN", hint: "pane.split", run: () => runAction("pane.split", pane.pane_id, { direction: "down" }) },
       { label: "CLOSE PANE", hint: "pane.close", danger: true, run: () => runAction("pane.close", pane.pane_id) },
     ],
   });
+  const repoMenu = (e: MouseEvent, r: RepoNode) => {
+    const ws = (r.spaces.find((x) => x.root) ?? r.spaces[0])?.workspace;
+    if (!ws) return;
+    setMenu({ x: e.clientX, y: e.clientY, title: r.label.toUpperCase(), items: transferItems(serverOf(ws.workspace_id), (mode, to) => openTransfer(mode, "repo", ws.workspace_id, to)) });
+  };
   const accountMenu = (e: MouseEvent, a: Account) => setMenu({
     x: e.clientX, y: e.clientY, title: accountLabel(a).toUpperCase(),
     items: [
@@ -783,6 +860,7 @@ export default function App() {
         onWorkspaceMenu={workspaceMenu}
         onTabMenu={tabMenu}
         onPaneMenu={paneMenu}
+        onRepoMenu={repoMenu}
         onAccountMenu={accountMenu}
         onNewRepo={newRepo}
         onNewWorktree={(repo, root, server) => setWtBox({ repo, root, server: server ?? null })}
@@ -857,6 +935,10 @@ export default function App() {
       <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} check={checkFolder} create={createFolder}
         where={repoServerName()} remote={isRemote(repoTarget())} loading={isRemote(repoTarget()) && remoteFolders() === null}
         server={repoTarget()} cloneable={onDeckServer(repoTarget())} /></Show>
+      <Show when={xfer()}>{(x) => (
+        <TransferDialog mode={x().mode} scope={x().scope} repo={x().repo} branch={x().branch} session={x().session} from={x().from} to={x().to}
+          state={xferState()} onStart={startTransfer} onClose={() => setXfer(null)} />
+      )}</Show>
       <Show when={wtBox()}>{(w) => { const t = w(); return <NewWorktreeBox repo={t.repo} onCreate={(b, base) => createWorktree(t.root, b, base, t.server)} onClose={() => setWtBox(null)} />; }}</Show>
       <Show when={ask()}>{(q) => <PromptBox title={q().title} value={q().value} placeholder="name" ok={q().ok} onClose={() => setAsk(null)} />}</Show>
       <Show when={overlay() === "palette"}><Palette title="Palette" items={paletteItems()} onClose={() => setOverlay(null)} /></Show>

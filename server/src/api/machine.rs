@@ -9,6 +9,9 @@
 //!   `deck.github.login.start` → `{login_id, user_code, verification_uri,
 //!   expires_in}`, `deck.github.login.status {login_id}` → `{state, user,
 //!   message}`, `deck.github.logout`;
+//! * `deck.transfer.export.start`, `.export.read`, `.import.start`,
+//!   `.import.write`, `.import.commit`, `.conflicts`, `.remove.start`,
+//!   `.status`, `.cancel`, `.finish` (`deck_accounts::transfer`).
 //!
 //! Answered on the API thread before the typed request is parsed, like
 //! `deck.accounts.*`; everything long runs as a job on its own thread.
@@ -17,6 +20,7 @@ use std::sync::OnceLock;
 
 use deck_accounts::github::GitHub;
 use deck_accounts::jobs::Jobs;
+use deck_accounts::transfer::{Places, Transfer};
 use deck_accounts::Curl;
 use serde_json::{json, Value};
 
@@ -30,6 +34,29 @@ fn github() -> &'static GitHub<Curl> {
     GH.get_or_init(|| GitHub::new(crate::config::config_dir().join("github"), Curl::default()))
 }
 
+fn transfer() -> &'static Transfer {
+    static T: OnceLock<Transfer> = OnceLock::new();
+    T.get_or_init(|| {
+        let claude_home =
+            deck_accounts::Paths::from_env(crate::config::config_dir().join("accounts"))
+                .claude_home;
+        let worktrees = crate::worktree::expand_tilde_absolute_path(
+            &crate::config::Config::load().config.worktrees.directory,
+        );
+        Transfer::new(Places {
+            work: crate::config::config_dir().join("transfer"),
+            claude_home,
+            worktrees,
+            // On a server machine a move removes nothing outside the home.
+            removable: if cfg!(unix) {
+                deck_accounts::home_dir()
+            } else {
+                None
+            },
+        })
+    })
+}
+
 fn text(params: &Value, key: &str) -> Result<String, String> {
     params
         .get(key)
@@ -38,9 +65,13 @@ fn text(params: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{key} is required"))
 }
 
-/// The reply line for a `deck.git.*` or `deck.github.*` request; `None` for any other line.
+/// The reply line for a `deck.git.*`, `deck.github.*` or `deck.transfer.*`
+/// request; `None` for any other line.
 pub(crate) fn handle(line: &str) -> Option<String> {
-    if !(line.contains("deck.git.") || line.contains("deck.github.")) {
+    if !(line.contains("deck.git.")
+        || line.contains("deck.github.")
+        || line.contains("deck.transfer."))
+    {
         return None;
     }
     let request: Value = serde_json::from_str(line).ok()?;
@@ -68,6 +99,21 @@ pub(crate) fn handle(line: &str) -> Option<String> {
             "login.start" => github().login_start(),
             "login.status" => text(&params, "login_id").and_then(|l| github().login_status(&l)),
             other => Err(format!("unknown method deck.github.{other}")),
+        }
+    } else if let Some(m) = method.strip_prefix("deck.transfer.") {
+        let t = transfer();
+        match m {
+            "export.start" => t.export_start(&params),
+            "export.read" => t.export_read(&params),
+            "import.start" => t.import_start(&params),
+            "import.write" => t.import_write(&params),
+            "import.commit" => t.import_commit(&params),
+            "conflicts" => t.conflicts(&params),
+            "remove.start" => t.remove_start(&params),
+            "status" => text(&params, "job").and_then(|j| t.status(&j)),
+            "cancel" => text(&params, "job").and_then(|j| t.cancel(&j)),
+            "finish" => text(&params, "job").and_then(|j| t.finish(&j)),
+            other => Err(format!("unknown method deck.transfer.{other}")),
         }
     } else {
         return None;

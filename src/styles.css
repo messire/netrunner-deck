@@ -767,3 +767,20 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .clone-progress .seg i,.xfer-progress .seg i{position:absolute;inset:0 auto 0 0;background:var(--cy);transition:width .3s}
 .gh-code{font:600 26px var(--fm);letter-spacing:6px;color:var(--yel);padding:6px 0;cursor:copy;user-select:all}
 .chat-menu.signin.gh{max-width:none;margin:0}
+/* COPY TO / MOVE TO */
+.dlgbox.xfer{width:min(640px,92vw);display:flex;flex-direction:column;gap:8px}
+.xfer-mode{display:flex;gap:18px;font:14px var(--ft);color:var(--txt);margin-top:4px}
+.xfer-mode input,.xfer-row input{accent-color:var(--cy)}
+.xfer-list{max-height:280px;overflow:auto;border:1px solid var(--line);background:rgba(0,0,0,.25);padding:4px 0}
+.xfer-list.dim{opacity:.45}
+.xfer-row{display:flex;align-items:center;gap:8px;padding:4px 10px;font:13.5px var(--ft);color:var(--txt);cursor:pointer}
+.xfer-row:hover{background:rgba(103,224,227,.06)}
+.xfer-row.br .nm{color:var(--red);font-weight:600}
+.xfer-row.sess{padding-left:30px}
+.xfer-row.off{color:var(--mut);cursor:default}
+.xfer-row .path{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:50%}
+.xfer-sum{line-height:1.5}
+.xfer-warn{border:1px solid var(--org);color:var(--org);padding:6px 10px;font:13px var(--ft)}
+.xfer-done{border:1px solid var(--grn);color:var(--grn);padding:6px 10px;font:13px var(--ft)}
+.xfer-progress{display:flex;align-items:center;gap:10px}
+.menu.sub{z-index:51}
