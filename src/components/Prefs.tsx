@@ -1,4 +1,5 @@
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createResource, createSignal, onCleanup, onMount } from "solid-js";
+import { api } from "../api";
 import { dotOf, hintOf, machineErrorOf, type Probed, type ServerView, type ServersView } from "../servers";
 import AddHostDialog from "./AddHostDialog";
 import Connections from "./Connections";
@@ -61,6 +62,11 @@ export default function Prefs(p: {
   const Row = (q: { s: ServerView }) => {
     const s = () => q.s;
     const hint = () => hintOf(s().status.error);
+    // deck-server says which build it is and whether it keeps itself up to date.
+    const [info] = createResource(() => (s().connected && s().kind === "deck-server" && s().status.state === "online" ? s().id : null),
+      (id) => api.machine<{ version: string; commit?: string | null; updates: boolean }>(id, "deck.server.info")
+        // A deck-server too old to answer does not update itself either.
+        .catch((e) => (/unknown variant|invalid request/.test(String(e)) ? { version: "", commit: null, updates: false } : null)));
     return (
       <tr class={s().status.state === "offline" ? "bad" : ""}>
         <td>
@@ -86,7 +92,11 @@ export default function Prefs(p: {
           </Show>
         </td>
         <td><span class="kind">{s().kind}</span>{s().new ? <span class="kind new">new</span> : null}{s().manual && !s().remote ? <span class="kind">manual</span> : null}</td>
-        <td class="mono" title={s().status.version ?? undefined}>{s().status.version ? `${s().status.version}${s().status.protocol != null ? ` · p${s().status.protocol}` : ""}` : "—"}</td>
+        <td class="mono" title={info()?.commit ? `commit ${info()!.commit}` : s().status.version ?? undefined}>
+          {s().status.version ? `${s().status.version}${s().status.protocol != null ? ` · p${s().status.protocol}` : ""}` : "—"}
+          <Show when={info()?.commit}>{(c) => <span class="micro"> · {c().slice(0, 7)}</span>}</Show>
+          <Show when={info() && !info()!.updates}><span class="kind stale" title="built by hand, without a release commit: it never updates itself — start a release build of deck-server instead">LOCAL BUILD · NO UPDATES</span></Show>
+        </td>
         <td class="mono">{s().connected && s().status.state === "online" ? p.panes(s().id) : "—"}</td>
         <td class="act">
           <Show when={armed() !== s().id}>

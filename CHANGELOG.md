@@ -3,6 +3,8 @@
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
 ## Unreleased
+- deck-server on Windows updates itself like on Linux: CI publishes a Windows build to `deck-server-latest`; a running server downloads it (checksum verified), moves its own binary aside, puts the new one in place and restarts without a window, its sessions coming back from the snapshot.
+- SERVERS shows each deck-server's build commit and marks one built by hand (or too old to say) as "LOCAL BUILD · NO UPDATES".
 - The bottom bar shows this build (Deck version and commit, `dev` for a dev build) and the version of the selected session's server.
 
 ## [0.8.0] — 2026-11-25

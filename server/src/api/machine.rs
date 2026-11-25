@@ -56,6 +56,20 @@ fn transfer() -> &'static Transfer {
     })
 }
 
+/// `deck.server.info` → `{version, commit, updates}`: this build, and whether
+/// it keeps itself up to date (a local build without a commit does not).
+fn server_info() -> Value {
+    let commit = option_env!("HERDR_BUILD_COMMIT")
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "commit": commit,
+        "updates": commit.is_some(),
+        "os": std::env::consts::OS,
+    })
+}
+
 fn text(params: &Value, key: &str) -> Result<String, String> {
     params
         .get(key)
@@ -68,6 +82,7 @@ fn text(params: &Value, key: &str) -> Result<String, String> {
 /// request; `None` for any other line.
 pub(crate) fn handle(line: &str) -> Option<String> {
     if !(line.contains("deck.git.")
+        || line.contains("deck.server.info")
         || line.contains("deck.github.")
         || line.contains("deck.transfer."))
     {
@@ -91,6 +106,8 @@ pub(crate) fn handle(line: &str) -> Option<String> {
             }
             other => Err(format!("unknown method deck.git.clone.{other}")),
         }
+    } else if method == "deck.server.info" {
+        Ok(server_info())
     } else if let Some(m) = method.strip_prefix("deck.github.") {
         match m {
             "status" => Ok(github().status()),

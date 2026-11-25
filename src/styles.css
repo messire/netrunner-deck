@@ -795,3 +795,4 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .conn-state b{color:var(--grn);font-weight:600}
 .pnav a{cursor:pointer}
 .keys .build{color:var(--mut);opacity:.75}
+.kind.stale{color:var(--org);border-color:var(--org);margin-left:6px}

@@ -71,7 +71,6 @@ mod release_notes;
 mod render_prof;
 mod render_signal;
 mod selection;
-#[cfg(unix)]
 #[path = "deck_server/self_update.rs"]
 mod self_update;
 mod server;
@@ -110,6 +109,9 @@ const USAGE: &str =
 /// What the command line asks for, after `--session` was taken out.
 #[derive(Debug, PartialEq, Eq)]
 enum Action {
+    /// Internal (Windows self-update): wait for the old server to stop, then
+    /// start this binary in its place.
+    Respawn,
     Start,
     Foreground,
     Stop,
@@ -130,6 +132,7 @@ fn action_of(rest: &[String]) -> Result<Action, String> {
         (["stop"], false) => Ok(Action::Stop),
         (["status"], false) => Ok(Action::Status),
         (["update"], false) => Ok(Action::Update),
+        (["__respawn"], false) => Ok(Action::Respawn),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -205,13 +208,57 @@ fn panes_run_agents() {
     }
 }
 
-/// Background self-update of a running server (Unix only; Deck ships Windows').
+/// Background self-update of a running server.
 fn start_self_update() {
-    #[cfg(unix)]
     match std::env::current_exe() {
-        Ok(exe) => self_update::spawn_background(exe, live_handoff),
+        Ok(exe) => self_update::spawn_background(exe, handoff),
         Err(err) => tracing::warn!(%err, "self-update off: no executable path"),
     }
+}
+
+/// After the binary was replaced: hand over live (Unix) or restart on it
+/// (Windows).
+fn handoff(exe: &std::path::Path) -> Result<(), String> {
+    if cfg!(windows) {
+        restart_on(exe)
+    } else {
+        live_handoff(exe)
+    }
+}
+
+/// Windows: a detached `<exe> __respawn` waits until this server is gone and
+/// starts the new binary windowless; this server then stops (its panes come
+/// back from the session snapshot).
+fn restart_on(exe: &std::path::Path) -> Result<(), String> {
+    if !running() {
+        return Ok(());
+    }
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("__respawn")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Some(name) = session::active_name() {
+        command.args(["--session", &name]);
+    }
+    platform::detach_server_daemon_command(&mut command);
+    platform::launch_server_daemon_command(&mut command)
+        .map_err(|e| format!("cannot start the new deck-server: {e}"))?;
+    let _ = request("server.stop");
+    Ok(())
+}
+
+/// `__respawn`: wait (up to two minutes) for the old server to stop, then
+/// start this binary detached in its place.
+fn respawn(session: Option<&str>) -> io::Result<()> {
+    for _ in 0..1200 {
+        if !running() {
+            return start_detached(session);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(io::Error::other("the old deck-server did not stop"))
 }
 
 /// Ask the running server to hand its panes over to the binary at `exe`.
@@ -232,24 +279,16 @@ fn live_handoff(exe: &std::path::Path) -> Result<(), String> {
 
 /// `deck-server update`: check now and, if newer, install and hand off.
 fn update_now() -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        let exe = std::env::current_exe()?;
-        match self_update::check_and_apply(&exe, &live_handoff) {
-            Ok(self_update::Outcome::Disabled(why)) => println!("self-update off: {why}"),
-            Ok(self_update::Outcome::UpToDate(c)) => println!("deck-server is up to date ({c})"),
-            Ok(self_update::Outcome::Updated { from, to }) => {
-                println!("deck-server updated {from} -> {to}")
-            }
-            Err(err) => return Err(io::Error::other(err)),
+    let exe = std::env::current_exe()?;
+    match self_update::check_and_apply(&exe, &handoff) {
+        Ok(self_update::Outcome::Disabled(why)) => println!("self-update off: {why}"),
+        Ok(self_update::Outcome::UpToDate(c)) => println!("deck-server is up to date ({c})"),
+        Ok(self_update::Outcome::Updated { from, to }) => {
+            println!("deck-server updated {from} -> {to}")
         }
-        Ok(())
+        Err(err) => return Err(io::Error::other(err)),
     }
-    #[cfg(not(unix))]
-    {
-        println!("deck-server on Windows is updated with Netrunner Deck");
-        Ok(())
-    }
+    Ok(())
 }
 
 /// The `--session` value, if given (for passing it on to the detached server).
@@ -376,6 +415,7 @@ fn main() -> io::Result<()> {
             server::headless::run_server()
         }
         Action::Update => update_now(),
+        Action::Respawn => respawn(session_arg(&args)),
         Action::Start if running() => {
             println!("deck-server is already running at {}", socket.display());
             Ok(())

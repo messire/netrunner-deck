@@ -26,6 +26,7 @@ pub const METHODS: &[&str] = &[
     "deck.git.clone.start",
     "deck.git.clone.status",
     "deck.git.clone.cancel",
+    "deck.server.info",
     "deck.github.status",
     "deck.github.logout",
     "deck.github.login.start",

@@ -348,6 +348,7 @@ const fake = (() => {
             const i = Math.floor(t / 700);
             return i < phases.length ? { state: "running", phase: phases[i][0], percent: phases[i][1], path: j.extra.path } : { state: "done", phase: "Resolving deltas", percent: 100, path: j.extra.path };
           }
+          case "deck.server.info": return args.server === "deck-server/try" ? { version: "0.9.5", commit: null, updates: false } : { version: "0.10.0", commit: "70314e7295e0", updates: true };
           case "deck.github.status": return { available: true, signed_in: gh.signedIn, user: gh.signedIn ? "octo" : null };
           case "deck.github.logout": gh.signedIn = false; return { available: true, signed_in: false, user: null };
           case "deck.github.login.start": gh.polls = 0; return { login_id: "gh-1" };

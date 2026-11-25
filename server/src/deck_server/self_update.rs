@@ -1,4 +1,4 @@
-//! deck-server keeps itself up to date on Linux/macOS nodes.
+//! deck-server keeps itself up to date, on Linux/macOS nodes and on Windows.
 //!
 //! A background thread of the running server checks an update source every
 //! few minutes. The source is a URL or a local directory holding
@@ -10,14 +10,17 @@
 //! When the source names another commit than the one this binary was built
 //! from, the new binary is downloaded, checked, put in place of the running
 //! one and the server live-hands its panes over to it (`server.live_handoff`):
-//! agents keep running, clients reconnect.
+//! agents keep running, clients reconnect. On Windows, where a running
+//! program cannot be replaced and there is no live handoff, the running
+//! binary is moved aside (`deck-server.old.exe`), the new one put in its
+//! place, and the server restarts on it without a window; its panes come
+//! back from the session snapshot and resume their conversations.
 //!
 //! Optional `update.json` in the app config dir (`~/.config/deck-server`):
 //! `{"enabled": true, "source": "https://… or /local/dir", "interval_minutes": 5}`.
 //! Builds without `HERDR_BUILD_COMMIT` (local `cargo build`) never update.
 
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -111,22 +114,30 @@ pub fn check_and_apply(
     if manifest.commit == current {
         return Ok(Outcome::UpToDate(short(current)));
     }
-    let arch = std::env::consts::ARCH;
+    let key = asset_key(std::env::consts::OS, std::env::consts::ARCH);
     let asset = manifest
         .assets
-        .get(arch)
-        .ok_or_else(|| format!("{source} has no deck-server for {arch}"))?;
+        .get(&key)
+        .ok_or_else(|| format!("{source} has no deck-server for {key}"))?;
     let bytes = read_source(source, &asset.name)?;
     let sum = hex(&Sha256::digest(&bytes));
     if !sum.eq_ignore_ascii_case(asset.sha256.trim()) {
         return Err(format!("{} checksum mismatch ({sum})", asset.name));
     }
 
-    let staged = exe.with_file_name(".deck-server.update");
+    let staged = exe.with_file_name(if cfg!(windows) {
+        ".deck-server.update.exe"
+    } else {
+        ".deck-server.update"
+    });
     std::fs::write(&staged, &bytes).map_err(|e| format!("write {}: {e}", staged.display()))?;
-    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
-        .map_err(|e| format!("chmod {}: {e}", staged.display()))?;
-    let probe = std::process::Command::new(&staged)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod {}: {e}", staged.display()))?;
+    }
+    let probe = crate::noninteractive_process::command(&staged)
         .arg("--version")
         .output()
         .map_err(|e| format!("new binary does not run: {e}"))?;
@@ -134,6 +145,18 @@ pub fn check_and_apply(
         let _ = std::fs::remove_file(&staged);
         return Err("new binary failed its --version check".into());
     }
+    #[cfg(windows)]
+    {
+        // A running program cannot be overwritten, but it can be renamed.
+        let old = exe.with_file_name("deck-server.old.exe");
+        let _ = std::fs::remove_file(&old);
+        std::fs::rename(exe, &old).map_err(|e| format!("move {} aside: {e}", exe.display()))?;
+        if let Err(e) = std::fs::rename(&staged, exe) {
+            let _ = std::fs::rename(&old, exe);
+            return Err(format!("replace {}: {e}", exe.display()));
+        }
+    }
+    #[cfg(not(windows))]
     std::fs::rename(&staged, exe).map_err(|e| format!("replace {}: {e}", exe.display()))?;
     info!(
         from = current,
@@ -195,6 +218,16 @@ fn read_source(source: &str, name: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+/// The manifest key of this machine's build: the CPU architecture on Linux
+/// (`x86_64`, `aarch64`), `windows-<arch>` on Windows.
+pub fn asset_key(os: &str, arch: &str) -> String {
+    if os == "windows" {
+        format!("windows-{arch}")
+    } else {
+        arch.to_string()
+    }
+}
+
 fn short(commit: &str) -> String {
     commit.chars().take(12).collect()
 }
@@ -214,6 +247,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(m.assets["x86_64"].name, "deck-server-linux-x86_64");
+        assert_eq!(asset_key("linux", "x86_64"), "x86_64");
+        assert_eq!(asset_key("windows", "x86_64"), "windows-x86_64");
     }
 
     #[test]

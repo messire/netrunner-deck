@@ -1,7 +1,7 @@
 name: deck-server
 
-# Every push to main that touches the server publishes static Linux builds to
-# the rolling `deck-server-latest` release. Running deck-servers poll its
+# Every push to main that touches the server publishes static Linux builds and
+# a Windows build to the rolling `deck-server-latest` release. Running deck-servers poll its
 # deck-server.json and update themselves (server/src/deck_server/self_update.rs).
 
 on:
@@ -77,8 +77,42 @@ jobs:
             deck-server-linux-${{ matrix.arch }}
             deck-server-linux-${{ matrix.arch }}.sha256
 
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+      - uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
+        with:
+          version: 0.16.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+          key: windows
+      - name: Build
+        env:
+          HERDR_BUILD_COMMIT: ${{ github.sha }}
+        run: cargo build --release --locked --bin deck-server
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "deck-server-windows-x86_64.exe"
+          Copy-Item target/release/deck-server.exe "$env:GITHUB_WORKSPACE/$name"
+          (Get-FileHash "$env:GITHUB_WORKSPACE/$name" -Algorithm SHA256).Hash.ToLower() | Set-Content -NoNewline "$env:GITHUB_WORKSPACE/$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deck-server-windows-x86_64
+          path: |
+            deck-server-windows-x86_64.exe
+            deck-server-windows-x86_64.exe.sha256
+
   publish:
-    needs: build
+    needs: [build, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -89,9 +123,11 @@ jobs:
           jq -cn --arg commit "$GITHUB_SHA" \
             --arg x "$(cat deck-server-linux-x86_64.sha256)" \
             --arg a "$(cat deck-server-linux-aarch64.sha256)" \
+            --arg w "$(cat deck-server-windows-x86_64.exe.sha256)" \
             '{commit: $commit, assets: {
                x86_64: {name: "deck-server-linux-x86_64", sha256: $x},
-               aarch64: {name: "deck-server-linux-aarch64", sha256: $a}}}' > deck-server.json
+               aarch64: {name: "deck-server-linux-aarch64", sha256: $a},
+               "windows-x86_64": {name: "deck-server-windows-x86_64.exe", sha256: $w}}}' > deck-server.json
           cat deck-server.json
       - name: Publish deck-server-latest
         env:
@@ -101,10 +137,10 @@ jobs:
           if ! gh release view deck-server-latest >/dev/null 2>&1; then
             gh release create deck-server-latest --prerelease --latest=false \
               --target "$GITHUB_SHA" --title "deck-server (latest main)" \
-              --notes "Rolling Linux build of deck-server; running servers update from it."
+              --notes "Rolling Linux and Windows builds of deck-server; running servers update from it."
           fi
           # Binaries first, manifest last: a server never sees a manifest
           # that points at binaries not uploaded yet.
           gh release upload deck-server-latest --clobber \
-            deck-server-linux-x86_64 deck-server-linux-aarch64
+            deck-server-linux-x86_64 deck-server-linux-aarch64 deck-server-windows-x86_64.exe
           gh release upload deck-server-latest --clobber deck-server.json
