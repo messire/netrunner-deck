@@ -488,7 +488,10 @@ fn spawn_claude(host: &Host, options: &Options, session: proto::Session<'_>) -> 
             .stderr(Stdio::piped())
             // Herdr's own Claude hooks would claim the pane for `herdr:claude`;
             // this host reports the pane itself.
-            .env_remove(crate::HERDR_ENV_VAR);
+            .env_remove(crate::HERDR_ENV_VAR)
+            // No one can answer a git login prompt here: fail instead of waiting.
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never");
         match command.spawn() {
             Ok(child) => return Ok(child),
             Err(err) if err.kind() == io::ErrorKind::NotFound => last = Some(err),

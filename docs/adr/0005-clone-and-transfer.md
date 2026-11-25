@@ -39,16 +39,31 @@ clone leaves nothing behind.
 
 ### GitHub sign-in
 
-GitHub's OAuth device flow, run by the server (`deck.github.login.start` →
-`{login_id, user_code, verification_uri}`, `login.status`, `status`,
-`logout`). The server polls GitHub and keeps the token in
-`<config dir>/github/token.json` (owner-only on Unix). A clone refused for
-a github.com address is retried once over HTTPS with the token given to
-that one git process in its environment (`GIT_CONFIG_*`:
-`http.https://github.com/.extraheader`, credential helpers off): never on a
-command line, in a remote URL or a repository's config, in a log or a
-reply. Scope `repo`. The OAuth App's client id is `github::CLIENT_ID`
-(empty until the app exists; `DECK_GITHUB_CLIENT_ID` overrides it).
+The official GitHub CLI, run by the server (`deck_accounts::github`): no
+app registration, no client id, no token typed anywhere.
+
+* `gh` is the machine's own when it is on `PATH` (or `~/.local/bin`);
+  otherwise the server downloads the latest official release for its OS
+  and architecture from GitHub, checks it against the release's
+  checksums and keeps it in `<config dir>/tools/gh/bin` (no root, no
+  package manager).
+* `deck.github.login.start` → `{login_id}` starts `gh auth login --hostname
+  github.com --git-protocol https --web` without a terminal (`GH_BROWSER`
+  a no-op); `deck.github.login.status` → `{state: installing | starting |
+  pending | done | failed, user_code, verification_uri, user, message}`.
+  Deck shows the code and opens the link in the user's browser; the user
+  approves as whichever GitHub user they are. Then `gh auth setup-git`
+  makes `gh` git's credential helper for github.com on that machine, so a
+  clone from Deck, Claude's Bash and a terminal there all reach the
+  user's repositories.
+* `deck.github.status` → `{available, signed_in, user}`, `deck.github.logout`.
+  PREFERENCES › CONNECTIONS shows this per connected deck-server.
+* The token is `gh`'s, where `gh` keeps it; Deck never sees it.
+
+A clone of a github.com address given over SSH that is refused is tried
+once more over HTTPS. Headless agents run `claude` with
+`GIT_TERMINAL_PROMPT=0`, so git in a chat fails instead of waiting for a
+login nobody can type.
 
 ### Transfer (COPY TO / MOVE TO)
 
@@ -86,7 +101,7 @@ target: overwrite, skip or keep both (`name-2`).
 * Both machines need this deck-server; a stock Herdr cannot clone or
   transfer (the menus say so).
 * Moving the main checkout alone removes nothing: it is the repository.
-* The GitHub token is per machine, used only for clones Deck starts; git
-  run by an agent there does not see it.
+* The GitHub login is per machine and is `gh`'s: git run by an agent or in
+  a terminal there uses it too.
 * HARNESS still reads this computer's `~/.claude` itself (ADR 0002, "Not
   yet remote"); its transfer goes through this computer's deck-server.

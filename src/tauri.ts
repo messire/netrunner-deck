@@ -348,9 +348,16 @@ const fake = (() => {
             const i = Math.floor(t / 700);
             return i < phases.length ? { state: "running", phase: phases[i][0], percent: phases[i][1], path: j.extra.path } : { state: "done", phase: "Resolving deltas", percent: 100, path: j.extra.path };
           }
-          case "deck.github.status": return { configured: true, signed_in: gh.signedIn, user: gh.signedIn ? "octo" : null };
-          case "deck.github.login.start": gh.polls = 0; return { login_id: "gh-1", user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900 };
-          case "deck.github.login.status": gh.polls++; if (gh.polls >= 2) { gh.signedIn = true; return { state: "done", user: "octo" }; } return { state: "pending" };
+          case "deck.github.status": return { available: true, signed_in: gh.signedIn, user: gh.signedIn ? "octo" : null };
+          case "deck.github.logout": gh.signedIn = false; return { available: true, signed_in: false, user: null };
+          case "deck.github.login.start": gh.polls = 0; return { login_id: "gh-1" };
+          case "deck.github.login.status": {
+            gh.polls++;
+            if (gh.polls < 2) return { state: "installing" };
+            if (gh.polls < 5) return { state: "pending", user_code: "938E-09BA", verification_uri: "https://github.com/login/device" };
+            gh.signedIn = true;
+            return { state: "done", user: "octo", user_code: "938E-09BA", verification_uri: "https://github.com/login/device" };
+          }
           case "deck.transfer.export.start": return { job: job("export", { params: p }) };
           case "deck.transfer.import.start": {
             if (p.kind === "repo" && String(p.path) === "~/notes") throw new Error("the server refused deck.transfer.import.start: /home/me/notes is already taken on this machine — pick another name");

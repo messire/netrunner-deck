@@ -5,10 +5,10 @@
 //! * `deck.git.clone.start {url, path}` → `{job, path}`,
 //!   `deck.git.clone.status {job}` → `{state, phase, percent, message, path,
 //!   auth?, github?}`, `deck.git.clone.cancel {job}`;
-//! * `deck.github.status` → `{configured, signed_in, user}`,
-//!   `deck.github.login.start` → `{login_id, user_code, verification_uri,
-//!   expires_in}`, `deck.github.login.status {login_id}` → `{state, user,
-//!   message}`, `deck.github.logout`;
+//! * `deck.github.status` → `{available, signed_in, user}`,
+//!   `deck.github.login.start` → `{login_id}`, `deck.github.login.status
+//!   {login_id}` → `{state, user_code, verification_uri, user, message}`,
+//!   `deck.github.logout` (the official GitHub CLI, `deck_accounts::github`);
 //! * `deck.transfer.export.start`, `.export.read`, `.import.start`,
 //!   `.import.write`, `.import.commit`, `.conflicts`, `.remove.start`,
 //!   `.status`, `.cancel`, `.finish` (`deck_accounts::transfer`).
@@ -21,7 +21,6 @@ use std::sync::OnceLock;
 use deck_accounts::github::GitHub;
 use deck_accounts::jobs::Jobs;
 use deck_accounts::transfer::{Places, Transfer};
-use deck_accounts::Curl;
 use serde_json::{json, Value};
 
 fn clones() -> &'static Jobs {
@@ -29,9 +28,9 @@ fn clones() -> &'static Jobs {
     JOBS.get_or_init(Jobs::default)
 }
 
-fn github() -> &'static GitHub<Curl> {
-    static GH: OnceLock<GitHub<Curl>> = OnceLock::new();
-    GH.get_or_init(|| GitHub::new(crate::config::config_dir().join("github"), Curl::default()))
+fn github() -> &'static GitHub {
+    static GH: OnceLock<GitHub> = OnceLock::new();
+    GH.get_or_init(|| GitHub::new(crate::config::config_dir().join("tools")))
 }
 
 fn transfer() -> &'static Transfer {
@@ -82,7 +81,7 @@ pub(crate) fn handle(line: &str) -> Option<String> {
         match m {
             "start" => text(&params, "url").and_then(|url| {
                 let path = text(&params, "path")?;
-                deck_accounts::clone::start(clones(), &url, &path, || github().token())
+                deck_accounts::clone::start(clones(), &url, &path)
             }),
             "status" => {
                 text(&params, "job").and_then(|j| deck_accounts::clone::status(clones(), &j))

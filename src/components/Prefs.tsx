@@ -1,12 +1,14 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { dotOf, hintOf, machineErrorOf, type Probed, type ServerView, type ServersView } from "../servers";
 import AddHostDialog from "./AddHostDialog";
+import Connections from "./Connections";
 
 /**
- * PREFERENCES (Ctrl+,): a modal panel with sections on the left. Only
- * SERVERS for now: what is connected, what discovery found (offered, never
- * connected by itself), machines that cannot be reached, and + ADD (a
- * dialog: user, host, port, CHECK). Esc closes.
+ * PREFERENCES (Ctrl+,): a modal panel with sections on the left. SERVERS:
+ * what is connected, what discovery found (offered, never connected by
+ * itself), machines that cannot be reached, and + ADD (a dialog: user,
+ * host, port, CHECK). CONNECTIONS: what each machine is signed in to
+ * (GitHub). Esc closes.
  */
 export default function Prefs(p: {
   view?: ServersView;
@@ -27,6 +29,7 @@ export default function Prefs(p: {
   let addBtn!: HTMLButtonElement;
   const [renaming, setRenaming] = createSignal<string | null>(null);
   const [adding, setAdding] = createSignal(false);
+  const [section, setSection] = createSignal<"servers" | "connections">("servers");
   /** The row whose REMOVE MACHINE waits for a second click. */
   const [armed, setArmed] = createSignal<string | null>(null);
   const rows = () => p.view?.servers ?? [];
@@ -108,11 +111,23 @@ export default function Prefs(p: {
       <div ref={panel} class="prefs" role="dialog" aria-modal="true" aria-label="Preferences" onKeyDown={onKey}>
         <nav class="pnav">
           <div class="h">PREFERENCES</div>
-          <a class="on" aria-current="page">SERVERS</a>
+          <a class={section() === "servers" ? "on" : ""} aria-current={section() === "servers" ? "page" : undefined} onClick={() => setSection("servers")}>SERVERS</a>
+          <a class={section() === "connections" ? "on" : ""} aria-current={section() === "connections" ? "page" : undefined} onClick={() => setSection("connections")}>CONNECTIONS</a>
           <a class="soon">VIEW · soon</a>
           <a class="soon">NOTIFICATIONS · soon</a>
         </nav>
-        <div class="pbody">
+        <Show when={section() === "connections"}>
+          <div class="pbody">
+            <div class="phead">
+              <h3>CONNECTIONS</h3>
+              <span class="micro">per machine: what its deck-server is signed in to</span>
+              <span class="sp" />
+              <button class="btn" aria-label="close" onClick={p.onClose}>✕</button>
+            </div>
+            <Connections servers={connected().filter((s) => s.kind === "deck-server" && s.status.state === "online").map((s) => ({ id: s.id, name: s.name }))} />
+          </div>
+        </Show>
+        <div class="pbody" hidden={section() !== "servers"}>
           <div class="phead">
             <h3>SERVERS</h3>
             <span class="micro">{connected().length} connected · {online()} online{offered().length ? ` · ${offered().length} found` : ""}{p.scanning ? " · scanning…" : ""}</span>

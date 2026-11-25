@@ -74,7 +74,7 @@ impl Default for Curl {
     }
 }
 
-fn find_curl() -> PathBuf {
+pub(crate) fn find_curl() -> PathBuf {
     #[cfg(windows)]
     {
         if let Some(root) = std::env::var_os("SystemRoot") {

@@ -786,3 +786,11 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .menu.sub{z-index:51}
 .xfer-mode.conflict{flex-wrap:wrap;row-gap:4px}
 .xfer-mode label{white-space:nowrap}
+/* PREFERENCES › CONNECTIONS */
+.conns{display:flex;flex-direction:column;gap:14px}
+.conn-machine{border:1px solid var(--line);padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+.conn-h .nm{color:var(--yel);font:600 13px var(--fh);letter-spacing:1px}
+.conn-row{display:flex;align-items:center;gap:12px;font:13px var(--ft);color:var(--txt)}
+.conn-kind{font:11px var(--fm);letter-spacing:1px;color:var(--cy);min-width:70px}
+.conn-state b{color:var(--grn);font-weight:600}
+.pnav a{cursor:pointer}

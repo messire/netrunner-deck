@@ -3,18 +3,15 @@
 //!
 //! The machine's own `git` does it with whatever credentials the machine
 //! already has (ssh keys and agent, a credential helper), never asking
-//! ([`crate::proc::git`]). When that is refused for a github.com URL and
-//! the machine has signed in to GitHub ([`crate::github`]), the clone is
-//! tried once more over HTTPS with that token, given to this one git
-//! process in its environment as an `http.extraHeader`: never on its
-//! command line, never in the new repository's config, never logged.
+//! ([`crate::proc::git`]). A github.com address given over SSH that is
+//! refused is tried once more over HTTPS, where the machine's GitHub CLI
+//! sign-in ([`crate::github`], `gh auth setup-git`) answers for git.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
-use base64::Engine as _;
 use serde_json::{json, Value};
 
 use crate::jobs::{Job, Jobs};
@@ -135,25 +132,6 @@ pub fn is_auth_error(stderr: &str) -> bool {
     .any(|p| s.contains(p))
 }
 
-/// The environment that gives one git process a GitHub token for HTTPS,
-/// with the machine's credential helpers turned off for it.
-pub fn token_env(token: &str) -> Vec<(String, String)> {
-    let basic = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
-    vec![
-        ("GIT_CONFIG_COUNT".into(), "2".into()),
-        ("GIT_CONFIG_KEY_0".into(), "credential.helper".into()),
-        ("GIT_CONFIG_VALUE_0".into(), String::new()),
-        (
-            "GIT_CONFIG_KEY_1".into(),
-            "http.https://github.com/.extraheader".into(),
-        ),
-        (
-            "GIT_CONFIG_VALUE_1".into(),
-            format!("AUTHORIZATION: basic {basic}"),
-        ),
-    ]
-}
-
 /// Where a clone may go: nothing there yet, or an empty folder.
 fn check_target(path: &Path) -> crate::Result<bool> {
     match std::fs::metadata(path) {
@@ -180,14 +158,8 @@ fn check_target(path: &Path) -> crate::Result<bool> {
 }
 
 /// `deck.git.clone.start {url, path}` → `{job, path}`: the clone runs in
-/// the background; `token` gives the machine's GitHub token, asked only
-/// when the first try was refused.
-pub fn start(
-    jobs: &Jobs,
-    url: &str,
-    path: &str,
-    token: impl Fn() -> Option<String> + Send + 'static,
-) -> crate::Result<Value> {
+/// the background.
+pub fn start(jobs: &Jobs, url: &str, path: &str) -> crate::Result<Value> {
     let url = url.trim().to_string();
     if !is_git_url(&url) {
         return Err(format!("{url} is not a git address"));
@@ -204,25 +176,20 @@ pub fn start(
     let thread_target = target.clone();
     std::thread::Builder::new()
         .name("deck-git-clone".into())
-        .spawn(move || run(&thread_job, &url, &thread_target, existed, token))
+        .spawn(move || run(&thread_job, &url, &thread_target, existed))
         .map_err(|e| format!("cannot start the clone: {e}"))?;
     Ok(json!({ "job": id, "path": target.to_string_lossy() }))
 }
 
-fn run(
-    job: &Arc<Job>,
-    url: &str,
-    target: &Path,
-    existed: bool,
-    token: impl Fn() -> Option<String>,
-) {
-    let first = clone_once(job, url, target, None);
+fn run(job: &Arc<Job>, url: &str, target: &Path, existed: bool) {
+    let first = clone_once(job, url, target);
     let result = match first {
-        Err((text, true)) if !job.is_cancelled() => match (github_https(url), token()) {
-            (Some(https), Some(token)) => {
-                job.set_phase("Signing in to GitHub", None);
+        // SSH refused: over HTTPS the machine's GitHub sign-in may answer.
+        Err((text, true)) if !job.is_cancelled() => match github_https(url) {
+            Some(https) if https != url => {
+                job.set_phase("Trying HTTPS", None);
                 clean_target(target, existed);
-                clone_once(job, &https, target, Some(&token))
+                clone_once(job, &https, target)
             }
             _ => Err((text, true)),
         },
@@ -262,18 +229,8 @@ fn clean_target(target: &Path, existed: bool) {
 }
 
 /// One `git clone`; `Err((git's words, refused credentials))`.
-fn clone_once(
-    job: &Job,
-    url: &str,
-    target: &Path,
-    token: Option<&str>,
-) -> Result<(), (String, bool)> {
+fn clone_once(job: &Job, url: &str, target: &Path) -> Result<(), (String, bool)> {
     let mut command = crate::proc::git();
-    if let Some(token) = token {
-        for (k, v) in token_env(token) {
-            command.env(k, v);
-        }
-    }
     command
         .args(["clone", "--progress", "--", url])
         .arg(target)
@@ -466,27 +423,6 @@ mod tests {
     }
 
     #[test]
-    fn the_token_goes_only_into_the_environment() {
-        let env = token_env("gho_secret");
-        assert!(env
-            .iter()
-            .any(|(k, v)| k == "GIT_CONFIG_KEY_1" && v == "http.https://github.com/.extraheader"));
-        let header = &env
-            .iter()
-            .find(|(k, _)| k == "GIT_CONFIG_VALUE_1")
-            .unwrap()
-            .1;
-        let b64 = header.strip_prefix("AUTHORIZATION: basic ").unwrap();
-        let raw = base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .unwrap();
-        assert_eq!(String::from_utf8(raw).unwrap(), "x-access-token:gho_secret");
-        assert!(env
-            .iter()
-            .any(|(k, v)| k == "GIT_CONFIG_KEY_0" && v == "credential.helper"));
-    }
-
-    #[test]
     fn a_clone_goes_into_a_new_or_empty_folder_only() {
         let dir = std::env::temp_dir().join(format!(
             "deck-clone-target-{}-{}",
@@ -541,7 +477,7 @@ mod tests {
                 .trim_start_matches('/')
         );
         let job = crate::jobs::Jobs::start(&jobs, "x").unwrap().1;
-        let r = clone_once(&job, &url, &target, None);
+        let r = clone_once(&job, &url, &target);
         assert_eq!(r, Ok(()));
         assert!(target.join("a.txt").is_file());
         assert!(check_target(&target).unwrap_err().contains("is not empty"));
