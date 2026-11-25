@@ -78,7 +78,9 @@ jobs:
             deck-server-linux-${{ matrix.arch }}.sha256
 
   windows:
-    runs-on: windows-latest
+    # VS 2022's MSVC headers: the newer ones on windows-latest demand Clang 22,
+    # newer than Zig 0.16's, for the vendored libghostty-vt C++ (simdutf).
+    runs-on: windows-2022
     defaults:
       run:
         working-directory: server
