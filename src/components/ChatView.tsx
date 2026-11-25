@@ -39,6 +39,29 @@ const md = (text: string): string => DOMPurify.sanitize(marked.parse(text, { asy
  */
 const drafts = new Map<string, { text: string; pasted: string[] }>();
 
+/**
+ * Chats already read, by session id. Showing the same session again (the
+ * chat remounted, a tab switched back, or the id briefly unknown while the
+ * live link reconnects) continues from here instead of emptying the chat and
+ * reading the transcript again, which on a remote server takes a moment and
+ * made the history blink. A few recent ones are kept; their images' blob:
+ * URLs go with them.
+ */
+interface Folded { builder: ChatBuilder; offset: number; truncated: boolean; blobs: string[] }
+const folded = new Map<string, Folded>();
+const KEEP_CHATS = 4;
+function foldedChat(id: string): Folded {
+  const f = folded.get(id) ?? { builder: new ChatBuilder(), offset: 0, truncated: false, blobs: [] };
+  folded.delete(id);
+  folded.set(id, f); // most recent last
+  for (const [old, o] of folded) {
+    if (folded.size <= KEEP_CHATS) break;
+    folded.delete(old);
+    for (const u of o.blobs) URL.revokeObjectURL(u);
+  }
+  return f;
+}
+
 /** The image shown full-size over the chat (one per window). */
 const [zoom, setZoom] = createSignal<string | null>(null);
 
@@ -60,12 +83,11 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   // The chat is folded incrementally: only new transcript blocks are pushed,
   // and only touched items come back as new objects (the keyed <For> below
   // re-renders just those). Nothing keeps the raw blocks around.
-  let builder = new ChatBuilder();
+  let cur: Folded = { builder: new ChatBuilder(), offset: 0, truncated: false, blobs: [] };
   const [chat, setChat] = createSignal<ChatState>({ items: [], title: null, pendingTools: 0 });
   // Pasted images arrive as base64 inside the transcript; they are turned into
   // blob: URLs once and the base64 is dropped, so a long session with many
   // screenshots does not keep megabytes of text alive twice (block + DOM).
-  const blobs: string[] = [];
   const toBlob = (src: string): string => {
     const m = /^data:([^;,]+);base64,(.*)$/s.exec(src);
     if (!m) return src;
@@ -74,21 +96,22 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const url = URL.createObjectURL(new Blob([bytes], { type: m[1] }));
-      blobs.push(url);
+      cur.blobs.push(url);
       return url;
     } catch { return src; }
   };
-  const dropBlobs = () => { for (const u of blobs) URL.revokeObjectURL(u); blobs.length = 0; };
   const ingest = (fresh: Block[]) => {
     for (const b of fresh) if (b.kind === "user" && b.images.length) b.images = b.images.map(toBlob);
-    builder.push(fresh);
-    setChat(builder.state());
+    cur.builder.push(fresh);
+    setChat(cur.builder.state());
   };
   const [error, setError] = createSignal<string | null>(null);
   const [truncated, setTruncated] = createSignal(false);
+  // The transcript has been read once for the session shown (until then the
+  // live reply is not shown on its own, without the history above it).
+  const [loaded, setLoaded] = createSignal(false);
   const [draft, setDraft] = createSignal(drafts.get(p.paneId)?.text ?? "");
   const [atBottom, setAtBottom] = createSignal(true);
-  let offset = 0;            // bytes of the transcript consumed so far
   let loading: Promise<void> | null = null;
   let scroller!: HTMLDivElement;
   let input!: HTMLTextAreaElement;
@@ -115,22 +138,26 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
     if (loading) return loading;
     // A headless session that has not said anything yet has no id or transcript.
     if (!p.sessionId) return Promise.resolve();
+    const f = cur;
     loading = (async () => {
       try {
-        const first = offset === 0;
-        const chunk = await api.transcriptRead(p.sessionId, first ? undefined : offset, first ? TAIL_BYTES : undefined, serverOf(p.paneId));
-        if (disposed || chunk.session_id !== p.sessionId) return;
-        if (first && chunk.start > 0) setTruncated(true);
-        if (chunk.end > offset) {
-          offset = chunk.end;
+        const first = f.offset === 0;
+        const chunk = await api.transcriptRead(p.sessionId, first ? undefined : f.offset, first ? TAIL_BYTES : undefined, serverOf(p.paneId));
+        if (disposed || chunk.session_id !== p.sessionId || f !== cur) return;
+        if (first && chunk.start > 0) { f.truncated = true; setTruncated(true); }
+        setLoaded(true);
+        if (chunk.end > f.offset) {
+          f.offset = chunk.end;
           const fresh = chunk.lines.flatMap(parseLine);
           if (fresh.length) ingest(fresh);
         }
         setError(null);
       } catch (e) {
-        setError(String(e));
+        if (f === cur) { setError(String(e)); setLoaded(true); }
       } finally {
         loading = null;
+        // The session changed while this read was out: read the new one.
+        if (f !== cur && !disposed) void pull();
       }
     })();
     return loading;
@@ -138,11 +165,17 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
 
   onMount(() => {
     let unlisten: (() => void) | null = null;
-    api.onTranscript((e) => { if (e.session_id === p.sessionId && e.len > offset) void pull(); }).then((u) => { if (disposed) u(); else unlisten = u; });
-    onCleanup(() => { disposed = true; unlisten?.(); dropBlobs(); api.transcriptWatch(null).catch(() => {}); });
+    api.onTranscript((e) => { if (e.session_id === p.sessionId && e.len > cur.offset) void pull(); }).then((u) => { if (disposed) u(); else unlisten = u; });
+    onCleanup(() => { disposed = true; unlisten?.(); api.transcriptWatch(null).catch(() => {}); });
   });
-  createEffect(on(() => p.sessionId, (id) => {
-    offset = 0; dropBlobs(); builder = new ChatBuilder(); setChat(builder.state()); setTruncated(false); setError(null);
+  let shownPane = "";
+  createEffect(on(() => [p.sessionId, p.paneId] as const, ([id, pane]) => {
+    // A headless pane's id drops to "" for a moment while its live link
+    // reconnects; that is still the same conversation, so it stays on screen.
+    if (!id && pane === shownPane && cur.offset > 0) return;
+    shownPane = pane;
+    cur = id ? foldedChat(id) : { builder: new ChatBuilder(), offset: 0, truncated: false, blobs: [] };
+    setChat(cur.builder.state()); setTruncated(cur.truncated); setLoaded(cur.offset > 0); setError(null);
     if (id) api.transcriptWatch(id, serverOf(p.paneId)).catch((e) => setError(String(e)));
     void pull();
   }));
@@ -342,7 +375,7 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   // The reply being written, until the transcript has it.
   const streaming = createMemo(() => {
     const text = (live()?.streaming ?? "").trim();
-    if (!text) return "";
+    if (!text || !loaded()) return "";
     const items = chat().items;
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
