@@ -1,4 +1,4 @@
-import type { AgentStatus } from "./api";
+import type { AgentStatus, HarnessItem } from "./api";
 import type { RepoNode, SpaceNode } from "./tree";
 
 /**
@@ -127,4 +127,23 @@ export const isGitHub = (url: string) => /^(https?:\/\/([^@/]+@)?(www\.)?github\
 export function cloneLine(s: { phase?: string; percent?: number | null }): string {
   const phase = (s.phase ?? "").trim() || "Cloning";
   return typeof s.percent === "number" ? `${phase} · ${s.percent}%` : `${phase}…`;
+}
+
+// ---- personal harness ------------------------------------------------------------------
+
+/** Kinds that may travel between machines (settings, MCP and hooks stay). */
+const TRAVELS = new Set(["claude_md", "skill", "agent", "command", "rule"]);
+
+/** The item as a path under `~/.claude` (`skills/x` for a skill's folder), or null when it stays. */
+export function harnessRel(item: HarnessItem, personalRoot: string): string | null {
+  if (!TRAVELS.has(item.kind)) return null;
+  const norm = (p: string) => p.replace(/^\\\\\?\\/, "").replace(/[\\/]+/g, "/").replace(/\/$/, "");
+  const root = norm(personalRoot);
+  let path = norm(item.path);
+  if (!path.toLowerCase().startsWith(root.toLowerCase() + "/")) return null;
+  let rel = path.slice(root.length + 1);
+  if (item.kind === "skill") rel = rel.replace(/\/SKILL\.md$/i, "");
+  if (item.kind === "claude_md" && rel !== "CLAUDE.md") return null;
+  path = rel;
+  return path;
 }

@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
-import { api, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type AccountList, type Tab, type Pane, type Workspace, type Account, type TreeAction, type ActionOptions, UNMANAGED, zoneOf, usageOf, accountLabel } from "./api";
+import { api, type HarnessItem, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type AccountList, type Tab, type Pane, type Workspace, type Account, type TreeAction, type ActionOptions, UNMANAGED, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SidebarSection, type SwitchError } from "./components/Sidebar";
 import ServerMenu, { dotOf, type Scope } from "./components/ServerMenu";
 import Prefs from "./components/Prefs";
@@ -14,7 +14,8 @@ import { agentOf, syncAgents } from "./agentStore";
 import KeyBar from "./components/KeyBar";
 import ContextMenu, { type MenuItem, type MenuState } from "./components/ContextMenu";
 import TransferDialog, { type TransferState } from "./components/TransferDialog";
-import { exportParams, removeParams, repoOf, type Plan, type TBranch, type TRepo } from "./transfer";
+import { exportParams, harnessRel, removeParams, repoOf, type Plan, type TBranch, type TRepo } from "./transfer";
+import HarnessTransferDialog, { type HarnessPick } from "./components/HarnessTransferDialog";
 import { runTransfer } from "./jobs";
 import { buildTree, type RepoNode } from "./tree";
 import Palette, { type PaletteItem } from "./components/Palette";
@@ -525,6 +526,53 @@ export default function App() {
       if (!xfer()) showError(`transfer: ${m}`);
     });
   };
+  // ---- COPY TO / MOVE TO for the personal harness (~/.claude of this computer) ----
+  type HarnessXfer = { mode: "copy" | "move"; items: HarnessPick[]; only?: string; from: { id: string; name: string }; to: { id: string; name: string } };
+  const [hx, setHx] = createSignal<HarnessXfer | null>(null);
+  const [hxState, setHxState] = createSignal<TransferState | null>(null);
+  /** This computer's deck-server: the personal harness HARNESS shows is its machine's. */
+  const localDeck = () => connected().find((s) => !s.remote && s.kind === "deck-server");
+  const personalPicks = (): HarnessPick[] => {
+    const r = harness()?.find((x) => x.personal);
+    if (!r) return [];
+    return r.items.flatMap((i) => { const rel = harnessRel(i, r.root); return rel ? [{ rel, kind: i.kind, name: i.name }] : []; });
+  };
+  const harnessMenu = (e: MouseEvent, item?: HarnessItem) => {
+    const r = harness()?.find((x) => x.personal);
+    const rel = item && r ? harnessRel(item, r.root) : null;
+    const title = item ? item.name.toUpperCase() : "PERSONAL";
+    if (item && !rel) { setMenu({ x: e.clientX, y: e.clientY, title, items: [{ label: "STAYS ON THIS MACHINE", hint: "settings, MCP and hooks do not travel", disabled: true }] }); return; }
+    const src = localDeck();
+    const items: MenuItem[] = src
+      ? transferItems(src.id, (mode, to) => {
+          if (hxState() && !hxState()!.error && !hxState()!.done) { showError("a harness transfer is already running"); return; }
+          setHxState(null);
+          setHx({ mode, items: personalPicks(), only: rel ?? undefined, from: { id: src.id, name: src.name }, to });
+        })
+      : [{ label: "COPY TO · MOVE TO", hint: "needs deck-server on this computer", disabled: true }];
+    setMenu({ x: e.clientX, y: e.clientY, title, items });
+  };
+  const startHarnessTransfer = (items: string[], onConflict: "overwrite" | "skip" | "keep_both") => {
+    const x = hx();
+    if (!x) return;
+    const move = x.mode === "move";
+    setHxState({ step: { phase: "Starting", percent: 0 } });
+    runTransfer({
+      kind: "harness", from: x.from.id, to: x.to.id, fromName: x.from.name, toName: x.to.name,
+      exportParams: { kind: "harness", items }, onConflict, move, removeParams: { kind: "harness", items },
+      onStep: (step) => setHxState({ step }),
+    }).then((arrived) => {
+      const n = (k: string) => ((arrived[k] as unknown[] | undefined) ?? []).length;
+      const text = `${move ? "Moved" : "Copied"} to ${x.to.name}: ${n("copied")} copied${n("renamed") ? ` (${n("renamed")} kept as -2)` : ""}${n("skipped") ? `, ${n("skipped")} skipped` : ""}.`;
+      setHxState({ step: { phase: "Done", percent: 100 }, done: text });
+      if (move) refetchHarness();
+      if (!hx()) api.notify("Harness transfer done", text).catch(() => {});
+    }).catch((e) => {
+      const m = String(e).replace(/^Error: /, "").replace(/^the server refused deck\.[\w.]+: /, "");
+      setHxState((st) => ({ step: st?.step ?? { phase: "", percent: 0 }, error: m }));
+      if (!hx()) showError(`harness transfer: ${m}`);
+    });
+  };
   // RENAME for a space / tab / pane: Deck's prompt → `*.rename {label}`.
   const [ask, setAsk] = createSignal<{ title: string; value: string; ok: (v: string) => void } | null>(null);
   const rename = (kind: "workspace" | "tab" | "pane", id: string, current: string) =>
@@ -833,7 +881,7 @@ export default function App() {
       </header>
 
       <Show when={view() === "harness"}>
-        <HarnessView repos={harness()} error={harnessError()} groups={groups()} onGroups={saveGroups} onRefresh={() => refetchHarness()} />
+        <HarnessView repos={harness()} error={harnessError()} groups={groups()} onGroups={saveGroups} onRefresh={() => refetchHarness()} onPersonalMenu={harnessMenu} />
       </Show>
       <Show when={view() === "uplink"}>
         <UplinkView updates={uplink()} error={uplinkError()} onRemove={(id) => api.uplinkRemove(id).then((r) => setUplink(r.updates)).catch((e) => setUplinkError(String(e)))} onRefresh={() => refetchUplink()} />
@@ -938,6 +986,10 @@ export default function App() {
       <Show when={xfer()}>{(x) => (
         <TransferDialog mode={x().mode} scope={x().scope} repo={x().repo} branch={x().branch} session={x().session} from={x().from} to={x().to}
           state={xferState()} onStart={startTransfer} onClose={() => setXfer(null)} />
+      )}</Show>
+      <Show when={hx()}>{(x) => (
+        <HarnessTransferDialog mode={x().mode} items={x().items} only={x().only} from={x().from} to={x().to}
+          state={hxState()} onStart={startHarnessTransfer} onClose={() => setHx(null)} />
       )}</Show>
       <Show when={wtBox()}>{(w) => { const t = w(); return <NewWorktreeBox repo={t.repo} onCreate={(b, base) => createWorktree(t.root, b, base, t.server)} onClose={() => setWtBox(null)} />; }}</Show>
       <Show when={ask()}>{(q) => <PromptBox title={q().title} value={q().value} placeholder="name" ok={q().ok} onClose={() => setAsk(null)} />}</Show>

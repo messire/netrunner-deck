@@ -17,6 +17,8 @@ interface Props {
   groups: RepoGroup[];
   onGroups: (groups: RepoGroup[]) => void;
   onRefresh: () => void;
+  /** Right-click on PERSONAL or one of its items (COPY TO / MOVE TO another server). */
+  onPersonalMenu?: (e: MouseEvent, item?: HarnessItem) => void;
 }
 
 const md = (text: string): string => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, { USE_PROFILES: { html: true } });
@@ -81,7 +83,8 @@ export default function HarnessView(p: Props) {
     const full = () => p.repos?.find((x) => x.key === q.r.key) ?? q.r;
     return (
       <>
-        <div class={`arow repo hrepo ${isOpen() ? "open" : ""} ${q.r.personal ? "personal" : ""}`} onClick={() => toggle(q.r.key)} title={q.r.root}>
+        <div class={`arow repo hrepo ${isOpen() ? "open" : ""} ${q.r.personal ? "personal" : ""}`} onClick={() => toggle(q.r.key)} title={q.r.root}
+          onContextMenu={(e) => { if (q.r.personal && p.onPersonalMenu) { e.preventDefault(); p.onPersonalMenu(e); } }}>
           <span class="gem" classList={{ root: q.r.personal }} />
           <span class={`nm ${q.r.personal ? "pn" : "rn"}`}>{q.r.name}</span>
           <span class="path mono">{q.r.root}</span>
@@ -108,7 +111,8 @@ export default function HarnessView(p: Props) {
               <div class="hkind">
                 <div class="hkl">{g.label} <span class="mono">{g.items.length}</span></div>
                 <For each={g.items}>{(it) => (
-                  <div class={`arow sess hitem ${current()?.path === it.path ? "sel" : ""}`} onClick={() => setCurrent(it)} title={it.description ?? it.path}>
+                  <div class={`arow sess hitem ${current()?.path === it.path ? "sel" : ""}`} onClick={() => setCurrent(it)} title={it.description ?? it.path}
+                    onContextMenu={(e) => { if (q.r.personal && p.onPersonalMenu) { e.preventDefault(); p.onPersonalMenu(e, it); } }}>
                     <span class="nm">{it.name}</span>
                     <Show when={it.local}><span class="src">LOCAL</span></Show>
                     <For each={it.tags}>{(t) => <button class={`chip ${tags().has(t) ? "on" : ""}`} onClick={(e) => { e.stopPropagation(); toggleTag(t); }}>#{t}</button>}</For>

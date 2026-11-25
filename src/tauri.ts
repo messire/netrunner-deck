@@ -375,6 +375,13 @@ const fake = (() => {
       case "transfer_relay_status": { const t = Date.now() - (window as any).__deckRelay; const size = 3_400_000; return { sent: Math.min(size, Math.round(size * t / 2000)), size, done: t >= 2000, error: null }; }
       case "transfer_open": console.info("[stand-in] transfer_open", JSON.stringify(args)); return { resumed: (args.sessions as unknown[]).length };
       case "open_external": console.info("[stand-in] open", args.url); return null;
+      case "harness_scan": return [{ key: "personal", name: "Personal", root: "C:/Users/me/.claude", personal: true, exists: true, items: [
+        { kind: "claude_md", name: "CLAUDE.md", path: "C:/Users/me/.claude/CLAUDE.md", size: 1200, mtime_ms: Date.now(), local: false, tags: [] },
+        { kind: "settings", name: "settings.json", path: "C:/Users/me/.claude/settings.json", size: 300, mtime_ms: Date.now(), local: false, tags: [] },
+        { kind: "skill", name: "deploy", path: "C:/Users/me/.claude/skills/deploy/SKILL.md", size: 900, mtime_ms: Date.now(), local: false, description: "ship it", tags: ["ops"] },
+        { kind: "agent", name: "reviewer", path: "C:/Users/me/.claude/agents/reviewer.md", size: 700, mtime_ms: Date.now(), local: false, tags: [] },
+      ] }];
+      case "harness_read": return "# stand-in\n\nfile text";
       default: throw new Error(`browser stand-in: unknown command ${cmd}`);
     }
   };

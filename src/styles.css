@@ -784,3 +784,5 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .xfer-done{border:1px solid var(--grn);color:var(--grn);padding:6px 10px;font:13px var(--ft)}
 .xfer-progress{display:flex;align-items:center;gap:10px}
 .menu.sub{z-index:51}
+.xfer-mode.conflict{flex-wrap:wrap;row-gap:4px}
+.xfer-mode label{white-space:nowrap}

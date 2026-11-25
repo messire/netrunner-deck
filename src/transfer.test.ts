@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Agent, Pane, Tab, Tree, Workspace } from "./api";
+import type { Agent, HarnessItem, Pane, Tab, Tree, Workspace } from "./api";
 import { buildTree, type RepoNode } from "./tree";
 import {
-  busyOf, choiceForBranch, cloneLine, everything, exportParams, isGitHub, isGitUrl, planOf, removalText, removeParams, repoNameOf, repoOf,
+  busyOf, choiceForBranch, cloneLine, everything, exportParams, harnessRel, isGitHub, isGitUrl, planOf, removalText, removeParams, repoNameOf, repoOf,
 } from "./transfer";
 
 const ws = (id: string, label: string, extra: Partial<Workspace> = {}): Workspace => ({
@@ -106,5 +106,19 @@ describe("clone addresses", () => {
   it("progress reads as phase and percent", () => {
     expect(cloneLine({ phase: "Receiving objects", percent: 45 })).toBe("Receiving objects · 45%");
     expect(cloneLine({ phase: "", percent: null })).toBe("Cloning…");
+  });
+});
+
+describe("personal harness items", () => {
+  const item = (kind: string, path: string): HarnessItem => ({ kind, name: "x", path, size: 1, mtime_ms: 0, local: false, tags: [] });
+  const root = "C:/Users/me/.claude";
+  it("travel as paths under ~/.claude; settings and MCP stay", () => {
+    expect(harnessRel(item("skill", "C:/Users/me/.claude/skills/deploy/SKILL.md"), root)).toBe("skills/deploy");
+    expect(harnessRel(item("agent", "C:\\Users\\me\\.claude\\agents\\reviewer.md"), root)).toBe("agents/reviewer.md");
+    expect(harnessRel(item("command", "C:/Users/me/.claude/commands/git/sync.md"), root)).toBe("commands/git/sync.md");
+    expect(harnessRel(item("claude_md", "C:/Users/me/.claude/CLAUDE.md"), root)).toBe("CLAUDE.md");
+    expect(harnessRel(item("settings", "C:/Users/me/.claude/settings.json"), root)).toBeNull();
+    expect(harnessRel(item("hook", "C:/Users/me/.claude/hooks/x.sh"), root)).toBeNull();
+    expect(harnessRel(item("agent", "D:/elsewhere/agents/a.md"), root)).toBeNull();
   });
 });
