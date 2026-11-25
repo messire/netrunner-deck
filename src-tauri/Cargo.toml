@@ -23,6 +23,8 @@ tauri-plugin-window-state = "2.5.0"
 tauri-plugin-notification = "2.8.0"
 tauri-plugin-updater = "2"
 tauri-plugin-clipboard-manager = "2"
+# The machine work the bridge answers on its `deck:machine` channel.
+deck-accounts = { path = "../server/crates/deck-accounts" }
 
 [profile.release]
 codegen-units = 1

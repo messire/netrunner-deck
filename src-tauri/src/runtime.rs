@@ -102,8 +102,9 @@ pub trait Runtime: Send + Sync {
     fn repos_list(&self) -> Result<Value>;
     /// deck-server's `deck.fs.<method>` (stat, mkdir) on its machine.
     fn fs_call(&self, method: &str, params: Value) -> Result<Value>;
-    /// deck-server's work on its own machine (`deck.git.*`, `deck.github.*`,
-    /// `deck.transfer.*`): `method` is the full method name.
+    /// Work on the server's machine (`deck.git.*`, `deck.github.*`,
+    /// `deck.transfer.*`), answered by that machine's bridge: `method` is the
+    /// full method name.
     fn machine_call(&self, method: &str, params: Value) -> Result<Value>;
 }
 
@@ -634,7 +635,14 @@ impl Runtime for HerdrRuntime {
     }
 
     fn machine_call(&self, method: &str, params: Value) -> Result<Value> {
-        herdr::call(&self.endpoint, method, params)
+        // The bridge of the server's machine does it, whatever the server is
+        // (deck-server or Herdr): same connection, its `deck:machine` channel.
+        if deck_accounts::machine::is_machine_method(method) {
+            herdr::call(&self.endpoint.machine_channel(), method, params)
+        } else {
+            // `deck.server.info` is about the server itself.
+            herdr::call(&self.endpoint, method, params)
+        }
     }
 }
 

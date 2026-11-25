@@ -488,12 +488,26 @@ impl Transfer {
             "harness" => None,
             other => return Err(format!("unknown transfer kind {other}")),
         };
-        self.import_start_at(kind, target)
+        let worktrees = params
+            .get("worktrees")
+            .and_then(Value::as_str)
+            .filter(|w| !w.is_empty())
+            .map(PathBuf::from);
+        let id = self.import_start_at(kind, target)?;
+        if let (Some(w), Some(j)) = (worktrees, id.get("job").and_then(Value::as_str)) {
+            self.jobs
+                .get(j)?
+                .set_extra("worktrees_dir", json!(w.to_string_lossy()));
+        }
+        Ok(id)
     }
 
     fn import_start_at(&self, kind: &str, target: Option<PathBuf>) -> crate::Result<Value> {
         if let Some(p) = &target {
-            free_folder(p)?;
+            // The same repository may already be there: the branch joins it.
+            if !is_repo_root(p) {
+                free_folder(p)?;
+            }
         }
         std::fs::create_dir_all(&self.places.work)
             .map_err(io_err("cannot create the transfer folder"))?;
@@ -575,7 +589,10 @@ impl Transfer {
             .and_then(Value::as_str)
             .unwrap_or("skip")
             .to_string();
-        let places = self.places.clone();
+        let mut places = self.places.clone();
+        if let Some(w) = progress.extra.get("worktrees_dir").and_then(Value::as_str) {
+            places.worktrees = PathBuf::from(w);
+        }
         let staging = self.staging(&id);
         job.set_phase("Unpacking", Some(0));
         // The job thread ends the job; this one only starts it.
@@ -755,6 +772,16 @@ fn export_repo<W: Write>(
         }
     }
     let has_commits = git_in(&repo, &["rev-parse", "--verify", "-q", "HEAD"]).is_ok();
+    // Root commits: the target recognises the same repository by them.
+    let roots: Vec<String> = if has_commits {
+        git_text(&repo, &["rev-list", "--max-parents=0", "--all"])
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    } else {
+        Vec::new()
+    };
     let name = Path::new(&main)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -844,6 +871,7 @@ fn export_repo<W: Write>(
         "kind": "repo",
         "name": name,
         "source_root": main,
+        "roots": roots,
         "whole": whole,
         "bundle": bundle,
         "remotes": remotes,
@@ -1000,11 +1028,18 @@ fn import_repo(
     staging: &Path,
     target: &Path,
 ) -> crate::Result<()> {
-    free_folder(target)?;
+    let existing = is_repo_root(target);
+    if !existing {
+        free_folder(target)?;
+    }
     let manifest = unpack(job, pack_path, staging)?;
     let made_target = !target.exists();
     let mut made: Vec<PathBuf> = Vec::new();
-    let r = place_repo(job, places, &manifest, staging, target, &mut made);
+    let r = if existing {
+        join_repo(job, places, &manifest, staging, target, &mut made)
+    } else {
+        place_repo(job, places, &manifest, staging, target, &mut made)
+    };
     if r.is_err() {
         for p in made.iter().rev() {
             let _ = std::fs::remove_dir_all(p);
@@ -1144,10 +1179,20 @@ fn place_repo(
         placed.push(json!({ "path": dir.to_string_lossy(), "branch": branch, "root": n == 0 }));
     }
     job.set_extra("worktrees", Value::Array(placed));
+    place_sessions(job, places, manifest, staging, target, &pairs)
+}
 
-    // Sessions under their new folders.
+/// The sessions of a pack under their new folders, paths inside rewritten.
+fn place_sessions(
+    job: &Job,
+    places: &Places,
+    manifest: &Value,
+    staging: &Path,
+    target: &Path,
+    pairs: &[(String, String)],
+) -> crate::Result<()> {
     job.set_phase("Placing sessions", Some(85));
-    let map = PathMap::new(&pairs);
+    let map = PathMap::new(pairs);
     let projects = places.claude_home.join("projects");
     let mut sessions = Vec::new();
     for s in manifest
@@ -1195,6 +1240,235 @@ fn place_repo(
     }
     job.set_extra("sessions", Value::Array(sessions));
     Ok(())
+}
+
+/// A git repository's top folder (it has `.git`).
+fn is_repo_root(p: &Path) -> bool {
+    p.join(".git").exists()
+}
+
+/// A new folder for a worktree of `branch` under `<worktrees>/<repo>/`.
+fn worktree_dir(places: &Places, name: &str, branch: &str) -> crate::Result<PathBuf> {
+    let base = places.worktrees.join(name);
+    let mut dir = base.join(branch_slug(branch));
+    let mut k = 2;
+    while dir.exists() {
+        dir = base.join(format!("{}-{k}", branch_slug(branch)));
+        k += 1;
+    }
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent).map_err(io_err(parent.display()))?;
+    }
+    Ok(dir)
+}
+
+fn apply_changes(staging: &Path, index: u64, dir: &Path, branch: &str) -> crate::Result<()> {
+    let patch = staging.join(format!("wt/{index}/changes.patch"));
+    if patch.is_file() {
+        git_in(
+            dir,
+            &[
+                "apply",
+                "--binary",
+                "--whitespace=nowarn",
+                &patch.to_string_lossy(),
+            ],
+        )
+        .map_err(|e| format!("the uncommitted changes of {branch} did not apply: {e}"))?;
+    }
+    let files = staging.join(format!("wt/{index}/files"));
+    if files.is_dir() {
+        copy_tree(&files, dir)?;
+    }
+    Ok(())
+}
+
+/// The same repository is already at `target`: its history gets what was
+/// sent, each branch becomes a worktree of it in the worktrees folder (the
+/// one the server that shows it uses, so Herdr lists it in its own "open
+/// worktree"), unless the branch is already checked out there at the same
+/// commit. Nothing of what was there is overwritten or removed.
+fn join_repo(
+    job: &Job,
+    places: &Places,
+    manifest: &Value,
+    staging: &Path,
+    target: &Path,
+    made: &mut Vec<PathBuf>,
+) -> crate::Result<()> {
+    job.set_phase("Joining the repository there", Some(45));
+    let theirs: Vec<String> = git_text(target, &["rev-list", "--max-parents=0", "--all"])
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let ours = string_list(manifest, "roots");
+    let urls = |v: &[Value]| -> Vec<String> {
+        v.iter()
+            .filter_map(|r| r.get("url").and_then(Value::as_str))
+            .map(|u| u.trim_end_matches(".git").to_lowercase())
+            .collect()
+    };
+    let sent_urls = urls(
+        manifest
+            .get("remotes")
+            .and_then(Value::as_array)
+            .map(|a| a.as_slice())
+            .unwrap_or_default(),
+    );
+    let their_urls: Vec<String> =
+        git_text(target, &["config", "--get-regexp", r"^remote\..*\.url$"])
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                l.split_once(' ')
+                    .map(|(_, u)| u.trim_end_matches(".git").to_lowercase())
+            })
+            .collect();
+    let same =
+        ours.iter().any(|r| theirs.contains(r)) || sent_urls.iter().any(|u| their_urls.contains(u));
+    if !same {
+        return Err(format!(
+            "{} is another repository — pick another name",
+            target.display()
+        ));
+    }
+    let bundle = staging.join("repo.bundle");
+    if !bundle.is_file() {
+        return Err("nothing was sent to add to the repository there (it has no commits)".into());
+    }
+    git_in(
+        target,
+        &[
+            "fetch",
+            "-q",
+            &bundle.to_string_lossy(),
+            "+refs/heads/*:refs/deck-transfer/*",
+        ],
+    )?;
+    for r in manifest
+        .get("remotes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let (Some(n), Some(u)) = (
+            r.get("name").and_then(Value::as_str),
+            r.get("url").and_then(Value::as_str),
+        ) {
+            let _ = git_in(target, &["remote", "add", n, u]);
+        }
+    }
+    let checkouts = parse_worktrees(&git_text(target, &["worktree", "list", "--porcelain"])?);
+    let name = manifest
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("repo");
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut placed: Vec<Value> = Vec::new();
+    if let Some(src) = manifest.get("source_root").and_then(Value::as_str) {
+        pairs.push((src.to_string(), target.to_string_lossy().into_owned()));
+    }
+    let wts: Vec<&Value> = manifest
+        .get("worktrees")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    let result = (|| -> crate::Result<()> {
+        for (i, wt) in wts.iter().enumerate() {
+            let branch = wt.get("branch").and_then(Value::as_str).unwrap_or("main");
+            let index = wt.get("index").and_then(Value::as_u64).unwrap_or(i as u64);
+            job.set_phase(
+                &format!("Adding {branch}"),
+                Some(50 + (30 * i / wts.len().max(1)) as u8),
+            );
+            let sent = git_text(
+                target,
+                &["rev-parse", &format!("refs/deck-transfer/{branch}")],
+            )
+            .map_err(|_| format!("{branch} was not in what was sent"))?;
+            let local = git_text(
+                target,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "-q",
+                    &format!("refs/heads/{branch}"),
+                ],
+            )
+            .ok();
+            let out = checkouts
+                .iter()
+                .find(|c| c.branch.as_deref() == Some(branch));
+            match (&local, out) {
+                (None, _) => {
+                    git_in(target, &["branch", branch, &sent])?;
+                }
+                (Some(l), _) if *l == sent => {}
+                (Some(l), None)
+                    if git_in(target, &["merge-base", "--is-ancestor", l, &sent]).is_ok() =>
+                {
+                    git_in(target, &["branch", "-f", branch, &sent])?;
+                }
+                (Some(_), Some(c)) => {
+                    return Err(format!(
+                        "{branch} is checked out at {} there with other commits — commit or switch it there first",
+                        c.path
+                    ))
+                }
+                (Some(_), None) => {
+                    return Err(format!(
+                        "{branch} has other commits there than the ones sent — rename or merge it there first"
+                    ))
+                }
+            }
+            let dir = match out {
+                Some(c) => {
+                    let dirty = !git_text(Path::new(&c.path), &["status", "--porcelain"])
+                        .unwrap_or_default()
+                        .is_empty();
+                    let sends_changes = staging.join(format!("wt/{index}/changes.patch")).is_file()
+                        || staging.join(format!("wt/{index}/files")).is_dir();
+                    if dirty && sends_changes {
+                        return Err(format!(
+                            "{branch} is checked out at {} there with its own uncommitted changes",
+                            c.path
+                        ));
+                    }
+                    PathBuf::from(&c.path)
+                }
+                None => {
+                    let dir = worktree_dir(places, name, branch)?;
+                    git_in(
+                        target,
+                        &["worktree", "add", "-q", &dir.to_string_lossy(), branch],
+                    )?;
+                    made.push(dir.clone());
+                    dir
+                }
+            };
+            apply_changes(staging, index, &dir, branch)?;
+            if let Some(old) = wt.get("path").and_then(Value::as_str) {
+                pairs.push((old.to_string(), dir.to_string_lossy().into_owned()));
+            }
+            placed.push(json!({ "path": dir.to_string_lossy(), "branch": branch, "root": same_path(&dir.to_string_lossy(), &target.to_string_lossy()) }));
+        }
+        Ok(())
+    })();
+    // The fetched refs were only a way in.
+    for r in git_text(
+        target,
+        &["for-each-ref", "--format=%(refname)", "refs/deck-transfer"],
+    )
+    .unwrap_or_default()
+    .lines()
+    {
+        let _ = git_in(target, &["update-ref", "-d", r]);
+    }
+    result?;
+    job.set_extra("worktrees", Value::Array(placed));
+    job.set_extra("joined", json!(true));
+    place_sessions(job, places, manifest, staging, target, &pairs)
 }
 
 /// A free name next to `dest`: `name-2`, `name-2.md`, …

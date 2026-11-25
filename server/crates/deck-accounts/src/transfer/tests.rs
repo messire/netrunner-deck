@@ -351,9 +351,12 @@ fn a_repository_with_its_worktrees_and_sessions_moves() {
     assert!(git(&repo, &["branch", "--list", "feat/x"]).is_empty());
     assert!(!proj.join(format!("{SID}.jsonl")).exists());
 
-    // A taken folder is refused.
+    // A folder taken by something that is not a repository is refused.
+    let taken = dst_root.join("notes");
+    std::fs::create_dir_all(&taken).unwrap();
+    std::fs::write(taken.join("x.md"), "x").unwrap();
     assert!(dst
-        .import_start_at("repo", Some(target.clone()))
+        .import_start_at("repo", Some(taken))
         .unwrap_err()
         .contains("already taken"));
 
@@ -504,6 +507,135 @@ fn personal_harness_items_copy_with_a_conflict_choice() {
     );
     assert!(!home.join("skills/deploy").exists() && !home.join("CLAUDE.md").exists());
     assert!(home.join(".credentials.json").exists());
+    let _ = std::fs::remove_dir_all(&src_root);
+    let _ = std::fs::remove_dir_all(&dst_root);
+}
+
+/// A branch sent to a machine that already has the repository joins it as a
+/// worktree in that server's worktrees folder; the checkout there is untouched.
+#[test]
+fn a_branch_joins_the_same_repository_already_there() {
+    let src_root = temp("jsrc");
+    let dst_root = temp("jdst");
+    let src = Transfer::new(places(&src_root));
+    let dst = Transfer::new(places(&dst_root));
+    let repo = src_root.join("atlas");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    commit(&repo, "first");
+    let top = git(&repo, &["rev-parse", "--show-toplevel"]);
+    // The target got the whole repository earlier, and has local work on main.
+    let target = dst_root.join("atlas");
+    let first = relay(
+        &src,
+        &json!({ "kind": "repo", "repo": top, "whole": true }),
+        &dst,
+        "repo",
+        Some(target.clone()),
+        "skip",
+    );
+    assert_eq!(first["state"], json!("done"), "{first}");
+    std::fs::write(target.join("local.txt"), "mine\n").unwrap();
+    // A new branch on the source, with a session.
+    let feat = src_root.join("wt-feat");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/y",
+            &feat.to_string_lossy(),
+        ],
+    );
+    std::fs::write(feat.join("f.txt"), "feat\n").unwrap();
+    commit(&feat, "feat");
+    std::fs::write(feat.join("wip.txt"), "wip\n").unwrap();
+    let proj = src_root
+        .join(".claude")
+        .join("projects")
+        .join(project_dir_name(&feat.to_string_lossy()));
+    std::fs::create_dir_all(&proj).unwrap();
+    let line = json!({"type": "user", "cwd": feat.to_string_lossy()}).to_string();
+    std::fs::write(proj.join(format!("{SID}.jsonl")), format!("{line}\n")).unwrap();
+    let feat_top = git(&feat, &["rev-parse", "--show-toplevel"]);
+    let export = json!({
+        "kind": "repo", "repo": top, "whole": false,
+        "worktrees": [{ "path": feat_top, "branch": "feat/y" }],
+        "sessions": [{ "session_id": SID, "cwd": feat.to_string_lossy() }],
+    });
+    // Herdr's worktrees folder on the target.
+    let herdr_wt = dst_root.join("herdr-worktrees");
+    let job = src.export_start(&export).unwrap()["job"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let size = wait(&src, &job)["size"].as_u64().unwrap();
+    let imp = dst
+        .import_start(&json!({ "kind": "repo", "path": target.to_string_lossy(), "worktrees": herdr_wt.to_string_lossy() }))
+        .unwrap()["job"].as_str().unwrap().to_string();
+    let mut off = 0u64;
+    loop {
+        let c = src
+            .export_read(&json!({ "job": job, "offset": off }))
+            .unwrap();
+        let d = c["data"].as_str().unwrap();
+        dst.import_write(&json!({ "job": imp, "offset": off, "data": d }))
+            .unwrap();
+        off += base64::engine::general_purpose::STANDARD
+            .decode(d)
+            .unwrap()
+            .len() as u64;
+        if c["eof"] == json!(true) {
+            break;
+        }
+    }
+    dst.import_commit(&json!({ "job": imp, "size": size }))
+        .unwrap();
+    let done = wait(&dst, &imp);
+    assert_eq!(done["state"], json!("done"), "{done}");
+    assert_eq!(done["joined"], json!(true));
+    let wt = PathBuf::from(done["worktrees"][0]["path"].as_str().unwrap());
+    assert!(wt.starts_with(herdr_wt.join("atlas")), "{}", wt.display());
+    assert_eq!(
+        std::fs::read_to_string(wt.join("f.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "feat\n"
+    );
+    assert!(wt.join("wip.txt").is_file(), "uncommitted work came along");
+    assert!(
+        target.join("local.txt").is_file(),
+        "the checkout there is untouched"
+    );
+    let listed = git(&target, &["worktree", "list", "--porcelain"]);
+    assert!(listed.contains("branch refs/heads/feat/y"), "{listed}");
+    assert!(git(&target, &["for-each-ref", "refs/deck-transfer"]).is_empty());
+    let new_cwd = done["sessions"][0]["cwd"].as_str().unwrap();
+    assert!(dst_root
+        .join(".claude")
+        .join("projects")
+        .join(project_dir_name(new_cwd))
+        .join(format!("{SID}.jsonl"))
+        .is_file());
+
+    // Another repository under that name is refused.
+    let other = dst_root.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    std::fs::write(other.join("x"), "x").unwrap();
+    commit(&other, "x");
+    let again = relay(&src, &export, &dst, "repo", Some(other.clone()), "skip");
+    assert_eq!(again["state"], json!("failed"));
+    assert!(
+        again["message"]
+            .as_str()
+            .unwrap()
+            .contains("another repository"),
+        "{again}"
+    );
     let _ = std::fs::remove_dir_all(&src_root);
     let _ = std::fs::remove_dir_all(&dst_root);
 }

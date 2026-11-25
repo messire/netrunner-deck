@@ -262,8 +262,8 @@ pub fn open_arrived(
     Ok(resume)
 }
 
-/// [`open_arrived`] on `server`; sessions resume in the background once
-/// their pane's agent is up.
+/// [`open_arrived`] on `server` (deck-server or Herdr); sessions resume in
+/// the background.
 pub fn open_on(
     app: &AppHandle,
     server: Option<&str>,
@@ -273,15 +273,30 @@ pub fn open_on(
     let rt = crate::servers::runtime_for(app, server)?;
     let resume = open_arrived(&*rt, &worktrees, &sessions)?;
     let n = resume.len();
+    // deck-server: every pane is already a headless Claude, told which
+    // conversation to open. Herdr: a pane is a shell; `claude --resume` is
+    // typed into it, as ARCHIVE's restore does.
+    let headless = rt.agent_call("list", json!({})).is_ok();
     std::thread::spawn(move || {
+        if !headless {
+            std::thread::sleep(Duration::from_millis(1500));
+        }
         for (pane, sid) in resume {
-            if let Err(e) = crate::quickhacks::agent_call_when_ready(
-                &*rt,
-                &pane,
-                "resume",
-                json!({ "pane_id": pane, "session_id": sid }),
-                Duration::from_secs(30),
-            ) {
+            let r = if headless {
+                crate::quickhacks::agent_call_when_ready(
+                    &*rt,
+                    &pane,
+                    "resume",
+                    json!({ "pane_id": pane, "session_id": sid }),
+                    Duration::from_secs(30),
+                )
+            } else {
+                rt.pane_send_text(&pane, &format!("claude --resume {sid}"))
+                    .and_then(|_| rt.pane_send_keys(&pane, &["enter"]))
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            };
+            if let Err(e) = r {
                 tracing::warn!(%e, "transferred session not resumed");
             }
         }

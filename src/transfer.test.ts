@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Agent, HarnessItem, Pane, Tab, Tree, Workspace } from "./api";
 import { buildTree, type RepoNode } from "./tree";
 import {
-  busyOf, choiceForBranch, cloneLine, everything, exportParams, harnessRel, isGitHub, isGitUrl, planOf, removalText, removeParams, repoNameOf, repoOf,
+  busyOf, choiceForBranch, cloneLine, inPlace, machineOf, everything, exportParams, harnessRel, isGitHub, isGitUrl, planOf, removalText, removeParams, repoNameOf, repoOf,
 } from "./transfer";
 
 const ws = (id: string, label: string, extra: Partial<Workspace> = {}): Workspace => ({
@@ -85,6 +85,21 @@ describe("transfer plans from the sidebar's tree", () => {
     expect(removalText(planOf(r, { whole: false, branches: new Set(["w1"]), sessions: new Set() }), "laptop", "vdi")).toMatch(/^Nothing is removed from laptop/);
     expect(removeParams(planOf(r, choiceForBranch(r.branches[1])))).toEqual({
       kind: "repo", repo: "C:\\w\\atlas", whole: false, worktrees: [{ path: "C:\\wt\\atlas\\feat" }], sessions: ["s-feat"],
+    });
+  });
+});
+
+describe("servers and machines", () => {
+  it("servers on one machine share it", () => {
+    expect(machineOf({ remote: false })).toBe("local");
+    expect(machineOf({})).toBe("local");
+    expect(machineOf({ remote: true, machine: "me@vm" })).toBe("me@vm");
+  });
+  it("a transfer on one machine only opens what is there", () => {
+    const r = repo();
+    expect(inPlace(planOf(r, choiceForBranch(r.branches[1])))).toEqual({
+      worktrees: [{ path: "C:\\wt\\atlas\\feat", root: false }],
+      sessions: [{ id: "s-feat", cwd: "C:\\wt\\atlas\\feat" }],
     });
   });
 });

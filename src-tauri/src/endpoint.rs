@@ -224,6 +224,20 @@ impl Endpoint {
         }
     }
 
+    /// The bridge of this server's machine itself (its `deck:machine`
+    /// channel, `deck_accounts::machine`): the machine's own work for Deck,
+    /// whether the server there is deck-server or Herdr.
+    pub fn machine_channel(&self) -> Endpoint {
+        let socket = deck_accounts::machine::CHANNEL.to_string();
+        match self {
+            Endpoint::Local(_) => Endpoint::Local(PathBuf::from(socket)),
+            Endpoint::Ssh { host, .. } => Endpoint::Ssh {
+                host: host.clone(),
+                socket,
+            },
+        }
+    }
+
     /// The socket path as the bridge on that machine opens it.
     fn socket(&self) -> String {
         match self {

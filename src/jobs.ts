@@ -38,6 +38,8 @@ export interface TransferRun {
   exportParams: Record<string, unknown>;
   /** A repository's new folder on the target (`~/name`). */
   path?: string;
+  /** The target server's kind: its worktrees go where that server keeps its own. */
+  targetKind?: "herdr" | "deck-server";
   onConflict?: "overwrite" | "skip" | "keep_both";
   move: boolean;
   removeParams?: Record<string, unknown>;
@@ -66,7 +68,7 @@ export async function runTransfer(o: TransferRun): Promise<MachineJob> {
     const packed = ended(await waitJob(() => api.machine(o.from, `${t}status`, { job: exportJob }),
       (s) => step(`${s.phase || "Packing"} on ${o.fromName}`, span(0, 25, s.percent))), "packing");
     const size = Number(packed.size ?? 0);
-    const started = await api.machine<{ job: string; path?: string }>(o.to, `${t}import.start`, { kind: o.kind, ...(o.path ? { path: o.path } : {}) });
+    const started = await api.machine<{ job: string; path?: string }>(o.to, `${t}import.start`, { kind: o.kind, ...(o.path ? { path: o.path } : {}), ...(o.targetKind ? { for: o.targetKind } : {}) });
     importJob = started.job;
     step(`Sending to ${o.toName}`, 25);
     const { relay } = await api.transferRelay(o.from, o.to, exportJob, importJob);

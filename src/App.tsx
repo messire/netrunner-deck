@@ -14,7 +14,7 @@ import { agentOf, syncAgents } from "./agentStore";
 import KeyBar from "./components/KeyBar";
 import ContextMenu, { type MenuItem, type MenuState } from "./components/ContextMenu";
 import TransferDialog, { type TransferState } from "./components/TransferDialog";
-import { exportParams, harnessRel, removeParams, repoOf, type Plan, type TBranch, type TRepo } from "./transfer";
+import { exportParams, harnessRel, inPlace, machineOf, removeParams, repoOf, type Plan, type TBranch, type TRepo } from "./transfer";
 import HarnessTransferDialog, { type HarnessPick } from "./components/HarnessTransferDialog";
 import { runTransfer } from "./jobs";
 import { buildTree, type RepoNode } from "./tree";
@@ -468,11 +468,23 @@ export default function App() {
   /** The sidebar's repository node a space belongs to. */
   const repoNodeOf = (workspaceId: string): RepoNode | null =>
     buildTree(fullTree()).find((r): r is RepoNode => r.kind === "repo" && r.spaces.some((s) => s.id === workspaceId)) ?? null;
-  /** Other connected deck-servers a transfer from `from` can go to. */
-  const transferTargets = (from: string) => connected().filter((s) => s.id !== from && s.kind === "deck-server" && !isDown(s.id));
-  const transferItems = (from: string, open: (mode: "copy" | "move", to: { id: string; name: string }) => void): MenuItem[] => {
-    if (!onDeckServer(from)) return [{ label: "COPY TO · MOVE TO", hint: "needs deck-server here", disabled: true }];
-    const sub = (mode: "copy" | "move"): MenuItem[] => transferTargets(from).map((s) => ({ label: s.name.toUpperCase(), hint: s.remote ? "another machine" : "this machine", run: () => open(mode, { id: s.id, name: s.name }) }));
+  /**
+   * Every other connected server a transfer from `from` can go to — Herdr or
+   * deck-server: the files are the work of Deck's bridge on each machine.
+   * `otherMachine` keeps only servers on another machine (the harness).
+   */
+  const serverView = (id: string) => connected().find((s) => s.id === id);
+  const transferTargets = (from: string, otherMachine = false) => {
+    const src = serverView(from);
+    return connected().filter((s) => s.id !== from && !isDown(s.id) && (!otherMachine || !src || machineOf(s) !== machineOf(src)));
+  };
+  const transferItems = (from: string, open: (mode: "copy" | "move", to: { id: string; name: string }) => void, otherMachine = false): MenuItem[] => {
+    const src = serverView(from);
+    const sub = (mode: "copy" | "move"): MenuItem[] => transferTargets(from, otherMachine).map((s) => ({
+      label: s.name.toUpperCase(),
+      hint: `${s.kind}${src && machineOf(s) === machineOf(src) ? " · this machine" : " · another machine"}`,
+      run: () => open(mode, { id: s.id, name: s.name }),
+    }));
     return [{ label: "COPY TO", hint: "keeps it here", items: sub("copy") }, { label: "MOVE TO", hint: "removes it here after", items: sub("move") }];
   };
   const xferRunning = () => { const st = xferState(); return !!st && !st.error && !st.done; };
@@ -508,11 +520,20 @@ export default function App() {
       }
     };
     setXferState({ step: { phase: "Starting", percent: 0 } });
-    runTransfer({
-      kind: "repo", from: x.from.id, to: x.to.id, fromName: x.from.name, toName: x.to.name,
-      exportParams: exportParams(plan), path, move, removeParams: removeParams(plan), beforeRemove: closeOnSource,
-      onStep: (step) => setXferState({ step }),
-    }).then(async (arrived) => {
+    const src = serverView(x.from.id), dst = serverView(x.to.id);
+    // Same machine: nothing moves; the other server opens the same checkouts.
+    const sameMachine = !!src && !!dst && machineOf(src) === machineOf(dst);
+    const work = sameMachine
+      ? (async () => {
+          if (move) { setXferState({ step: { phase: `Closing on ${x.from.name}`, percent: 50 } }); await closeOnSource(); }
+          return { path: plan.repo, ...inPlace(plan) } as Record<string, unknown>;
+        })()
+      : runTransfer({
+          kind: "repo", from: x.from.id, to: x.to.id, fromName: x.from.name, toName: x.to.name, targetKind: dst?.kind,
+          exportParams: exportParams(plan), path, move, removeParams: removeParams(plan), beforeRemove: closeOnSource,
+          onStep: (step) => setXferState({ step }),
+        });
+    work.then(async (arrived) => {
       const worktrees = (arrived.worktrees as { path: string; root: boolean }[] | undefined) ?? [];
       const sessions = (arrived.sessions as { id: string; cwd: string }[] | undefined) ?? [];
       await api.transferOpen(x.to.id, worktrees, sessions).catch((e) => showError(`opening on ${x.to.name}: ${String(e)}`));
@@ -530,8 +551,8 @@ export default function App() {
   type HarnessXfer = { mode: "copy" | "move"; items: HarnessPick[]; only?: string; from: { id: string; name: string }; to: { id: string; name: string } };
   const [hx, setHx] = createSignal<HarnessXfer | null>(null);
   const [hxState, setHxState] = createSignal<TransferState | null>(null);
-  /** This computer's deck-server: the personal harness HARNESS shows is its machine's. */
-  const localDeck = () => connected().find((s) => !s.remote && s.kind === "deck-server");
+  /** A server on this computer: its machine's bridge packs the personal harness HARNESS shows. */
+  const localDeck = () => connected().find((s) => !s.remote);
   const personalPicks = (): HarnessPick[] => {
     const r = harness()?.find((x) => x.personal);
     if (!r) return [];
@@ -547,9 +568,9 @@ export default function App() {
       ? transferItems(src.id, (mode, to) => {
           if (hxState() && !hxState()!.error && !hxState()!.done) { showError("a harness transfer is already running"); return; }
           setHxState(null);
-          setHx({ mode, items: personalPicks(), only: rel ?? undefined, from: { id: src.id, name: src.name }, to });
-        })
-      : [{ label: "COPY TO · MOVE TO", hint: "needs deck-server on this computer", disabled: true }];
+          setHx({ mode, items: personalPicks(), only: rel ?? undefined, from: { id: src.id, name: "this computer" }, to });
+        }, true)
+      : [{ label: "COPY TO · MOVE TO", hint: "connect a server on this computer", disabled: true }];
     setMenu({ x: e.clientX, y: e.clientY, title, items });
   };
   const startHarnessTransfer = (items: string[], onConflict: "overwrite" | "skip" | "keep_both") => {

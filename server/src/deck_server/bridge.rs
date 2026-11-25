@@ -22,6 +22,11 @@
 //! The socket path is the server's `herdr.sock` path; on Windows the bridge
 //! opens it as the named pipe `\\.\pipe\<path>`, as Herdr names it.
 //!
+//! One name is not a socket: `deck:machine` is the bridge itself, answering
+//! the machine's own work for Deck — clone, GitHub sign-in, COPY TO / MOVE
+//! TO (`deck_accounts::machine`) — so a machine with only Herdr can do it
+//! too, over this same connection, without Herdr knowing.
+//!
 //! The bridge ends when stdin closes (Deck or ssh went away); its channels close.
 
 use std::collections::HashMap;
@@ -145,6 +150,46 @@ fn connect(path: &str) -> io::Result<Conn> {
     })
 }
 
+/// The `deck:machine` channel: each request line is answered by
+/// `deck_accounts::machine` on a thread of its own (a long one only starts
+/// a job), the reply comes back on the channel like a socket's.
+fn machine_conn() -> io::Result<Conn> {
+    let (reader, writer) = io::pipe()?;
+    struct Lines {
+        buf: Vec<u8>,
+        out: Arc<Mutex<io::PipeWriter>>,
+    }
+    impl Write for Lines {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.buf.extend_from_slice(b);
+            while let Some(i) = self.buf.iter().position(|&x| x == b'\n') {
+                let line: Vec<u8> = self.buf.drain(..=i).collect();
+                let line = String::from_utf8_lossy(&line).into_owned();
+                let out = self.out.clone();
+                std::thread::spawn(move || {
+                    let reply = deck_accounts::machine::answer(&line);
+                    let mut w = out.lock().unwrap_or_else(PoisonError::into_inner);
+                    let _ = writeln!(w, "{reply}");
+                    let _ = w.flush();
+                });
+            }
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    Ok(Conn {
+        writer: Box::new(Lines {
+            buf: Vec::new(),
+            out: Arc::new(Mutex::new(writer)),
+        }),
+        reader: Some(Box::new(reader)),
+        closed: Arc::new(AtomicBool::new(false)),
+        shutdown: Box::new(|| {}),
+    })
+}
+
 /// Whether a channel's reader starts at open or after the request is sent.
 /// A Windows pipe handle opened for synchronous I/O serialises reads and
 /// writes, so a read waiting for the reply would hold the request back:
@@ -171,7 +216,11 @@ pub fn serve(mut input: impl BufRead, output: Box<dyn Write + Send>) -> io::Resu
             break;
         }
         match parse(&line) {
-            Frame::Open(c, path) => match connect(&path) {
+            Frame::Open(c, path) => match if path == deck_accounts::machine::CHANNEL {
+                machine_conn()
+            } else {
+                connect(&path)
+            } {
                 Ok(conn) => {
                     lock(&channels).insert(c, conn);
                     if !READ_AFTER_REQUEST {
@@ -287,6 +336,23 @@ mod tests {
         assert_eq!(parse(r#"{"c":3,"close":true}"#), Frame::Close(3));
         assert_eq!(parse("nope"), Frame::Bad);
         assert_eq!(parse(r#"{"open":"/x"}"#), Frame::Bad);
+    }
+
+    #[test]
+    fn the_machine_channel_answers_like_a_socket() {
+        let mut conn = machine_conn().unwrap();
+        let mut reader = BufReader::new(conn.reader.take().unwrap());
+        conn.writer
+            .write_all(b"{\"id\":\"7\",\"method\":\"deck.transfer.status\",\"params\":{\"job\":\"none\"}}\n")
+            .unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["id"], json!("7"));
+        assert!(
+            v["error"]["message"].as_str().unwrap().contains("no job"),
+            "{line}"
+        );
     }
 
     #[test]

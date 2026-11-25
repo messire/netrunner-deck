@@ -8,20 +8,27 @@ accounts).
 
 ## Decision
 
-Deck never touches a disk or runs git, not even on its own machine: every
-clone, sign-in and transfer is a `deck.*` method of the server of the
-machine concerned, reached over its one connection like `deck.fs.*`. The
-work lives in `server/crates/deck-accounts` (`clone`, `github`, `transfer`,
-`pack`, `jobs`, `proc`) and is answered by `server/src/api/machine.rs`
-before Herdr's typed parse. Deck calls it through one Tauri command
-(`machine_call`, an allow-list in `src-tauri/src/machine.rs`).
+Deck never touches a disk or runs git from its own code paths: every
+clone, sign-in and transfer is work of the machine concerned, asked as a
+`deck.*` method over the same single connection as everything else.
+
+It is answered by **Deck's bridge on that machine** (ADR 0002): besides
+server sockets, a bridge opens one more channel, `deck:machine`, which is
+the bridge itself running `deck_accounts::machine` (`clone`, `github`,
+`transfer`, `pack`, `jobs`, `proc` in `server/crates/deck-accounts`). The
+bridge is there on every machine Deck reaches — built into Deck for its own
+machine, `deck-server bridge` over ssh for another — so this works the
+same whether the server there is deck-server or Herdr, and Herdr is never
+asked or changed. Deck's `machine_call` sends these methods to
+`Endpoint::machine_channel()` of the server's machine; deck-server also
+answers them on its own API (and `deck.server.info` about itself).
 
 Anything long is a **job**: `*.start` returns `{job}` at once, the work runs
 on its own thread, `*.status {job}` returns `{state, phase, percent,
-message, …}`. A job outlives the dialog that started it; Deck's polling
-loops (`src/jobs.ts`) are not tied to a component either, so what was
-started still finishes (a clone still opens, a transfer still opens on the
-target).
+message, …}`. A job lives in the bridge (or server) process that started it
+and outlives the dialog that started it; Deck's polling loops
+(`src/jobs.ts`) are not tied to a component either. A job ends with its
+bridge (Deck quitting, ssh dropping).
 
 git runs without a window and never asks (`proc::git`):
 `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, ssh in `BatchMode` (the
@@ -89,6 +96,19 @@ Deck then opens the worktrees as spaces and resumes the sessions there
 (`transfer_open`, `deck.agent.resume`).
 
 A busy session (working, or waiting for an answer) refuses the transfer.
+
+Any server to any server. The target's kind decides where new worktrees go
+(`import.start {for}`): Herdr's or deck-server's `[worktrees] directory`
+from its `config.toml`, default `~/.herdr/worktrees/{repo}/{branch}`, so
+Herdr lists them in its own "open worktree". When the same repository is
+already at `~/{name}` (a shared root commit or remote), the sent branches
+join it as worktrees (a branch already there at the same commit is used
+where it is checked out; one with other commits is refused) and nothing
+there is overwritten. Deck then opens the worktrees with the target's own
+`worktree.open` and resumes each session: `deck.agent.resume` on
+deck-server, a tab with `claude --resume <id>` typed on Herdr. Between two
+servers on the same machine nothing moves: the target opens the same
+checkouts and transcripts, and a move only closes them on the source.
 
 A harness pack carries items of the personal `~/.claude` only
 (`CLAUDE.md`, `skills/`, `agents/`, `commands/`, `rules/`,

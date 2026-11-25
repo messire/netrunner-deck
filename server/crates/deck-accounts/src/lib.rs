@@ -35,6 +35,7 @@ pub mod clone;
 pub mod github;
 mod http;
 pub mod jobs;
+pub mod machine;
 pub mod pack;
 pub mod proc;
 pub mod transfer;

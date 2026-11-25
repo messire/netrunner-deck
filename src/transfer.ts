@@ -102,6 +102,19 @@ export const removeParams = (p: Plan) => ({
   sessions: p.sessions.map((s) => s.session_id),
 });
 
+/** The machine a server runs on: `local` for this computer, else its `user@host`. */
+export const machineOf = (s: { remote?: boolean; machine?: string | null }) => (s.remote ? s.machine ?? "remote" : "local");
+
+/**
+ * What opens on the target after a transfer when source and target share a
+ * machine: nothing moves, the same checkouts and transcripts are opened by
+ * the other server.
+ */
+export const inPlace = (p: Plan) => ({
+  worktrees: p.worktrees.map((w) => ({ path: w.path, root: w.root })),
+  sessions: p.sessions.map((s) => ({ id: s.session_id, cwd: s.cwd })),
+});
+
 // ---- clone addresses ---------------------------------------------------------------
 
 /** A git address to clone: https/http/ssh/git URL or scp-like `user@host:path`. */
