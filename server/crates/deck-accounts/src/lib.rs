@@ -38,6 +38,7 @@ pub mod jobs;
 pub mod machine;
 pub mod pack;
 pub mod proc;
+pub mod secrets;
 pub mod transfer;
 pub use http::{Curl, Http, HttpRequest, HttpResponse};
 

@@ -349,6 +349,12 @@ const fake = (() => {
             return i < phases.length ? { state: "running", phase: phases[i][0], percent: phases[i][1], path: j.extra.path } : { state: "done", phase: "Resolving deltas", percent: 100, path: j.extra.path };
           }
           case "deck.server.info": return args.server === "deck-server/try" ? { version: "0.9.5", commit: null, updates: false } : { version: "0.10.0", commit: "70314e7295e0", updates: true };
+          case "deck.secrets.read": {
+            const env = ((window as any).__deckEnv ??= new Map<string, string>([["deck-server/try", "# fake values\nFAKE_TOKEN=not-a-secret\nexport FAKE_URL=\"http://example.invalid/a b\"\n"]])) as Map<string, string>;
+            const text = env.get(String(args.server));
+            return { path: "/home/me/.claude/.env", exists: text != null, text: text ?? "" };
+          }
+          case "deck.secrets.write": ((window as any).__deckEnv as Map<string, string>).set(String(args.server), String(p.text)); return { path: "/home/me/.claude/.env" };
           case "deck.github.status": return { available: true, signed_in: gh.signedIn, user: gh.signedIn ? "octo" : null };
           case "deck.github.logout": gh.signedIn = false; return { available: true, signed_in: false, user: null };
           case "deck.github.login.start": gh.polls = 0; return { login_id: "gh-1" };

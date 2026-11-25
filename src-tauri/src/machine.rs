@@ -39,6 +39,8 @@ pub const METHODS: &[&str] = &[
     "deck.transfer.status",
     "deck.transfer.cancel",
     "deck.transfer.finish",
+    "deck.secrets.read",
+    "deck.secrets.write",
 ];
 
 /// One chunk of a relay (raw bytes; base64 on the wire).

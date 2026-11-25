@@ -796,6 +796,16 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .conn-row{display:flex;align-items:center;gap:12px;font:13px var(--ft);color:var(--txt)}
 .conn-kind{font:11px var(--fm);letter-spacing:1px;color:var(--cy);min-width:70px}
 .conn-state b{color:var(--grn);font-weight:600}
+.sec-h{display:flex;align-items:center;gap:10px}
+.sec-h .sec-path{font:11px var(--fm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.prefs .sec-table{width:100%;table-layout:fixed}
+.prefs .sec-table th:nth-child(1){width:34%}.prefs .sec-table th:nth-child(2){width:auto}.prefs .sec-table th:nth-child(3){width:44px}
+.prefs .sec-table td{padding:4px 8px;vertical-align:middle}
+.sec-table input{width:100%;box-sizing:border-box;background:#0B0609;border:1px solid var(--line);color:var(--cy);font:12.5px var(--fm);padding:4px 6px;outline:none;min-width:0}
+.sec-table input:focus{border-color:var(--cy)}
+.sec-table input.invalid{border-color:var(--red);color:var(--red)}
+.sec-table .sec-val{display:flex;gap:6px;align-items:center}
+.sec-table .sec-eye{flex:none;padding-left:8px;padding-right:8px}
 .pnav a{cursor:pointer}
 .keys .build{color:var(--mut);opacity:.75}
 .kind.stale{color:var(--org);border-color:var(--org);margin-left:6px}

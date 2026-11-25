@@ -1,6 +1,7 @@
 //! The work Deck asks a machine to do on its own disk, with its own `git`:
 //! clone (`deck.git.clone.*`), GitHub sign-in (`deck.github.*`) and the two
-//! ends of COPY TO / MOVE TO (`deck.transfer.*`).
+//! ends of COPY TO / MOVE TO (`deck.transfer.*`), and `~/.claude/.env`
+//! (`deck.secrets.*`).
 //!
 //! Answered by Deck's bridge on that machine (`deck_server/bridge.rs`: the
 //! channel `deck:machine`), so it works on every machine Deck reaches —
@@ -123,6 +124,7 @@ pub fn is_machine_method(method: &str) -> bool {
     method.starts_with("deck.git.")
         || method.starts_with("deck.github.")
         || method.starts_with("deck.transfer.")
+        || method.starts_with("deck.secrets.")
 }
 
 /// One request: the result, or the error's words.
@@ -173,6 +175,9 @@ pub fn call(method: &str, params: &Value) -> crate::Result<Value> {
             "finish" => t.finish(&text(params, "job")?),
             other => Err(format!("unknown method deck.transfer.{other}")),
         };
+    }
+    if let Some(m) = method.strip_prefix("deck.secrets.") {
+        return crate::secrets::call(m, params);
     }
     Err(format!("unknown method {method}"))
 }
@@ -235,6 +240,7 @@ mod tests {
         .unwrap();
         assert_eq!(r["error"]["code"], json!("machine_error"));
         assert!(is_machine_method("deck.github.status"));
+        assert!(is_machine_method("deck.secrets.read"));
         assert!(!is_machine_method("deck.accounts.list"));
     }
 }
