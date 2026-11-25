@@ -302,6 +302,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 
 /* ---- chat view (transcript-based) ---------------------------------------- */
 .chat .th .abtn{margin-left:10px;padding:0 10px;height:29px;line-height:1;display:inline-flex;align-items:center}
+.chat{grid-template-rows:40px 1fr}
 .chat .th{padding-right:16px}
 /* permission mode chip: default (muted) · accept edits (green) · plan (cyan) · bypass (red) */
 .mode{margin-left:12px;padding:0 8px;height:26px;line-height:1;display:inline-flex;align-items:center;border:1px solid currentColor;background:transparent;font:600 11px var(--fh);letter-spacing:1px;cursor:pointer;color:var(--mut);white-space:nowrap}
@@ -450,7 +451,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .msg.agent.live .bub{opacity:.85}
 .msg.agent.live .when{color:var(--grn)}
 
-.model-pop{position:absolute;right:12px;top:40px;min-width:320px;max-height:50vh;overflow:auto;background:var(--pan);border:1px solid var(--cy);box-shadow:0 0 24px rgba(0,0,0,.6);z-index:30}
+.model-pop{position:absolute;right:12px;top:44px;min-width:320px;max-height:50vh;overflow:auto;background:var(--pan);border:1px solid var(--cy);box-shadow:0 0 24px rgba(0,0,0,.6);z-index:30}
 .model-pop .slash-it{grid-template-columns:auto 1fr}
 .model-pop .micro{padding:8px 12px}
 .chat-blocked{margin:4px 0;padding:6px 10px;border:1px solid var(--org);color:var(--org);font-size:14px;letter-spacing:1px;cursor:pointer;background:rgba(255,166,43,.08)}
