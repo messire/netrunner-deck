@@ -793,8 +793,14 @@ export default function App() {
     let un3: (() => void) | undefined;
     api.onArchive(() => refetchArchive()).then((u) => (un3 = u));
     const timer = setInterval(() => { refetchTree(); refetchAccounts(); }, 15000);
+    // A release shows as UPDATE within minutes: every 10 minutes, and when the
+    // window comes back to the front (at most once a minute).
     checkUpdate();
-    const updTimer = setInterval(checkUpdate, 4 * 3600_000);
+    let lastUpdCheck = Date.now();
+    const updTimer = setInterval(() => { lastUpdCheck = Date.now(); checkUpdate(); }, 10 * 60_000);
+    const onFocusUpd = () => { if (Date.now() - lastUpdCheck > 60_000) { lastUpdCheck = Date.now(); checkUpdate(); } };
+    window.addEventListener("focus", onFocusUpd);
+    onCleanup(() => window.removeEventListener("focus", onFocusUpd));
     // Capture phase: Deck's keys are decided before xterm's textarea sees them.
     window.addEventListener("keydown", onKey, true);
     onCleanup(() => { un1?.(); un2?.(); un3?.(); clearInterval(timer); clearInterval(updTimer); refetchTreeSoon.cancel(); window.removeEventListener("keydown", onKey, true); clearTimeout(errorTimer); });
