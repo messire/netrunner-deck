@@ -962,7 +962,8 @@ export default function App() {
         onOpenPane={(id) => { setSelectedPane(id); refetchTree(); }} onError={showError} server={targetServer()} />
       </Show>
 
-      <KeyBar tree={tree()} selectedPane={currentPane()} account={activeAccount()} waiting={waiting()} />
+      <KeyBar tree={tree()} selectedPane={currentPane()} account={activeAccount()} waiting={waiting()}
+        server={(() => { const id = accountsServer(); const s = connected().find((x) => x.id === id); return s ? { name: s.name, kind: s.kind, version: s.status.version ?? null } : undefined; })()} />
 
       <Show when={menu()}>{(m) => <ContextMenu menu={m()} onClose={() => setMenu(null)} />}</Show>
       <Show when={srvMenu() && view() === "deck"}>

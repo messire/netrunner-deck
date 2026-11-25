@@ -2,6 +2,9 @@
 
 Versions follow the rule in [README → Versioning](README.md#versioning): patch for fixes only, minor for new features (and, while 0.x, breaking changes), major from 1.0.0 for breaking changes.
 
+## Unreleased
+- The bottom bar shows this build (Deck version and commit, `dev` for a dev build) and the version of the selected session's server.
+
 ## [0.8.0] — 2026-11-25
 - Clone from OPEN REPOSITORY: paste a git URL (https, ssh, `git@host:…`) and the server of that machine clones it into `~/{name}` (editable; a new or empty folder) with its own git and credentials, showing the phase and percent, then opens it as a new space. The clone goes on if the dialog is closed.
 - GitHub sign-in per machine with the official GitHub CLI: when a github.com clone is refused, the dialog offers "Sign in to GitHub on {machine}". The server gets `gh` if the machine has none (official release, checksum verified, in its own data dir), runs `gh auth login --web`; Deck shows the one-time code and opens the link, you approve as your GitHub user, `gh` becomes git's credential helper there and the clone retries by itself. Claude's own git commands on that machine work too. PREFERENCES › CONNECTIONS shows per machine who it is signed in to GitHub as, with SIGN IN / SIGN OUT.
