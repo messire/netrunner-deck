@@ -264,11 +264,15 @@ pub fn workspaces_in(session_json: &Value, seen_ms: u64) -> Vec<WorkspaceRecord>
     out
 }
 
+/// Last segment of a path written on any OS (`\` or `/`): a server's
+/// session file may name Windows paths while this code runs on Linux.
 pub fn basename(p: &str) -> String {
-    Path::new(p)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| p.to_string())
+    p.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(p)
+        .to_string()
 }
 
 /// Snapshot file names carry a nanosecond timestamp: `session-<ns>-<pid>-<n>.json`.
