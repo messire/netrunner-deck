@@ -564,36 +564,67 @@ async fn worktree_create(
 }
 
 // ---- uplink (git behind/ahead, pull, what came in) ---------------------------
+//
+// The git work runs on the server's machine (`deck.uplink.*` through its
+// bridge), where the checkouts are; Deck keeps the log of pulls.
 
-/// Behind/ahead/dirty for the given checkouts (local, no network).
+/// `method` of a machine on `server`'s machine, off the async runtime.
+async fn on_machine(
+    reg: &servers::Registry,
+    server: Option<String>,
+    method: &'static str,
+    params: Value,
+) -> Result<Value, String> {
+    let rt = reg.runtime(server.as_deref())?;
+    blocking(move || rt.machine_call(method, params).map_err(|e| e.to_string())).await
+}
+
+/// Behind/ahead/dirty for the given checkouts of `server` (no network).
 #[tauri::command]
 async fn uplink_sync(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     paths: Vec<String>,
 ) -> Result<std::collections::HashMap<String, uplink::Sync>, String> {
-    blocking(move || Ok::<_, String>(uplink::sync_many(&paths))).await
+    let v = on_machine(&reg, server, "deck.uplink.sync", json!({ "paths": paths })).await?;
+    serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
-/// `git fetch` for the given repository roots (network; errors per root are returned, not raised).
+/// `git fetch` for the given repository roots of `server` (network; errors
+/// per root are returned, not raised).
 #[tauri::command]
 async fn uplink_fetch(
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     roots: Vec<String>,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    blocking(move || {
-        let mut errs = std::collections::HashMap::new();
-        for r in &roots {
-            if let Err(e) = uplink::fetch(r) {
-                errs.insert(r.clone(), e);
-            }
-        }
-        Ok::<_, String>(errs)
-    })
-    .await
+    let v = on_machine(&reg, server, "deck.uplink.fetch", json!({ "roots": roots })).await?;
+    serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
-/// `git pull --ff-only` in a checkout; the update (commits, PR links) is logged and returned.
+/// `git pull --ff-only` in a checkout of `server`; the update (commits, PR
+/// links) is logged with its server and returned.
 #[tauri::command]
-async fn uplink_pull(app: AppHandle, repo: String, path: String) -> Result<uplink::Update, String> {
-    let u = blocking(move || uplink::pull(&repo, &path)).await?;
+async fn uplink_pull(
+    app: AppHandle,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    repo: String,
+    path: String,
+) -> Result<uplink::Update, String> {
+    let id = server
+        .clone()
+        .or_else(|| reg.primary_id())
+        .ok_or("no server is connected")?;
+    let v = on_machine(
+        &reg,
+        Some(id.clone()),
+        "deck.uplink.pull",
+        json!({ "repo": repo, "path": path }),
+    )
+    .await?;
+    let mut u: uplink::Update = serde_json::from_value(v).map_err(|e| e.to_string())?;
+    u.server = Some(id);
     app.state::<uplink::Store>().push(u.clone())?;
     let _ = app.emit("deck://uplink", "changed");
     Ok(u)
@@ -616,35 +647,71 @@ fn uplink_remove(app: AppHandle, id: String) -> Result<uplink::Saved, String> {
 
 // ---- harness (Claude Code configuration per repository) --------------------
 
-/// Personal (`~/.claude`) first, then the given repositories' Claude Code files.
+/// Personal (`~/.claude`) first, then the given repositories' Claude Code
+/// files, as `server`'s machine has them.
 #[tauri::command]
 async fn harness_scan(
     app: AppHandle,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     repos: Vec<harness::RepoRef>,
 ) -> Result<Vec<harness::HarnessRepo>, String> {
-    let (list, roots) = blocking(move || Ok::<_, String>(harness::scan(&repos))).await?;
-    *app.state::<harness::Roots>()
+    let id = server
+        .clone()
+        .or_else(|| reg.primary_id())
+        .ok_or("no server is connected")?;
+    let refs: Vec<Value> = repos
+        .iter()
+        .map(|r| json!({ "key": r.key, "name": r.name, "root": r.root }))
+        .collect();
+    let v = on_machine(
+        &reg,
+        Some(id.clone()),
+        "deck.harness.scan",
+        json!({ "repos": refs }),
+    )
+    .await?;
+    let list: Vec<harness::HarnessRepo> =
+        serde_json::from_value(v.get("repos").cloned().unwrap_or_default())
+            .map_err(|e| e.to_string())?;
+    let roots = list
+        .iter()
+        .map(|r| std::path::PathBuf::from(&r.root))
+        .collect();
+    app.state::<harness::Roots>()
         .0
         .lock()
-        .map_err(|_| "roots poisoned".to_string())? = roots;
+        .map_err(|_| "roots poisoned".to_string())?
+        .insert(id, roots);
     Ok(list)
 }
 
 /// Tag the untagged skills/agents/commands/rules of one repo (shadow claude -p),
-/// writing `tags:` into their frontmatter; `deck://harness` when done.
+/// writing `tags:` into their frontmatter; `deck://harness` when done. Only
+/// for a server on this computer: the files are written here.
 #[tauri::command]
 async fn harness_classify(
     app: AppHandle,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
     key: String,
     items: Vec<harness::Item>,
 ) -> Result<bool, String> {
+    let id = server
+        .or_else(|| reg.primary_id())
+        .ok_or("no server is connected")?;
+    if reg.is_remote(&id) {
+        return Err("CLASSIFY writes files on this computer only".into());
+    }
     // Only files under a scanned root are ever written, whatever the caller lists.
     let roots = app
         .state::<harness::Roots>()
         .0
         .lock()
         .map_err(|_| "roots poisoned".to_string())?
-        .clone();
+        .get(&id)
+        .cloned()
+        .unwrap_or_default();
     let items: Vec<harness::Item> = items
         .into_iter()
         .filter(|i| harness::is_under_roots(&i.path, &roots))
@@ -652,23 +719,47 @@ async fn harness_classify(
     Ok(harness::classify(app, key, items))
 }
 
-/// Text of one file listed by `harness_scan`.
+/// Text of one file listed by `harness_scan` of `server`.
 #[tauri::command]
-async fn harness_read(app: AppHandle, path: String) -> Result<String, String> {
-    let roots = app
+async fn harness_read(
+    app: AppHandle,
+    reg: State<'_, servers::Registry>,
+    server: Option<String>,
+    path: String,
+) -> Result<String, String> {
+    let id = server
+        .or_else(|| reg.primary_id())
+        .ok_or("no server is connected")?;
+    let roots: Vec<String> = app
         .state::<harness::Roots>()
         .0
         .lock()
         .map_err(|_| "roots poisoned".to_string())?
-        .clone();
-    blocking(move || harness::read(&path, &roots)).await
+        .get(&id)
+        .map(|r| r.iter().map(|p| p.to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    let v = on_machine(
+        &reg,
+        Some(id),
+        "deck.harness.read",
+        json!({ "path": path, "roots": roots }),
+    )
+    .await?;
+    Ok(v.get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
 }
 
 // ---- session archive (cold storage) ---------------------------------------
 
+/// The archive of `server` (`None`: the primary one).
 #[tauri::command]
-async fn archive_list(app: AppHandle) -> Result<Vec<archive::Entry>, String> {
-    blocking(move || Ok::<_, String>(archive::list(&app))).await
+async fn archive_list(
+    app: AppHandle,
+    server: Option<String>,
+) -> Result<Vec<archive::Entry>, String> {
+    blocking(move || archive::list(&app, server.as_deref())).await
 }
 
 /// Remember the workspace (label, checkout, Claude session ids), close it in
@@ -691,7 +782,7 @@ async fn archive_close(
     .await
 }
 
-/// Reopen the archived space in Herdr and `claude --resume` each session in its own tab.
+/// Reopen the archived space on its server and resume each session in its own tab.
 #[tauri::command]
 async fn archive_restore(
     app: AppHandle,
@@ -706,9 +797,18 @@ async fn archive_restore(
 async fn archive_delete(
     app: AppHandle,
     id: String,
+    server: Option<String>,
     remove_worktree: Option<bool>,
 ) -> Result<Value, String> {
-    blocking(move || archive::delete(&app, &id, remove_worktree.unwrap_or(false))).await
+    blocking(move || {
+        archive::delete(
+            &app,
+            server.as_deref(),
+            &id,
+            remove_worktree.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -725,8 +825,12 @@ async fn archive_groups_set(
 }
 
 #[tauri::command]
-async fn archive_summarize(app: AppHandle, id: String) -> Result<(), String> {
-    archive::resummarize(&app, &id)
+async fn archive_summarize(
+    app: AppHandle,
+    id: String,
+    server: Option<String>,
+) -> Result<(), String> {
+    archive::resummarize(&app, server.as_deref(), &id)
 }
 
 /// `deck.accounts.<method>` on `server`: the Claude Code accounts of that

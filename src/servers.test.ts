@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Tree } from "./api";
 import { buildTree } from "./tree";
 import { connectedServers, hintOf, machineErrorOf, machineOfServer, machinesOf, validateHostForm, filterTree, keepDown, localId, mergeTrees, migrateKey, offeredServers, serverOf, splitId, tagDeep, tagId, type ServerView } from "./servers";
+import { labelOf } from "./servers";
 
 const one = (label: string, repo?: string): Tree => ({
   workspaces: [{ workspace_id: "w1", number: 1, label, focused: true, pane_count: 1, tab_count: 1, active_tab_id: "w1:t1", agent_status: "idle",
@@ -134,5 +135,13 @@ describe("machinesOf", () => {
     expect(machineOfServer(servers, ms, "dev@box.example.com/herdr")?.id).toBe("dev@box.example.com/deck-server");
     expect(machineOfServer(servers, ms, "herdr")?.key).toBe("local");
     expect(machineOfServer(servers, ms, "nope")).toBeUndefined();
+  });
+});
+
+describe("labelOf", () => {
+  it("adds a non-default session to the name", () => {
+    expect(labelOf({ name: "deck@localhost", session: "try" })).toBe("deck@localhost · try");
+    expect(labelOf({ name: "deck-server · try", session: "try" })).toBe("deck-server · try");
+    expect(labelOf({ name: "deck-server", session: null })).toBe("deck-server");
   });
 });

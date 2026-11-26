@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -201,14 +201,6 @@ impl Endpoint {
         match self {
             Endpoint::Local(path) => format!("{LOCAL}{}", path.to_string_lossy()),
             Endpoint::Ssh { host, socket } => format!("{}:{socket}", host.key()),
-        }
-    }
-
-    /// The local socket path; `None` for a remote server.
-    pub fn local_path(&self) -> Option<&Path> {
-        match self {
-            Endpoint::Local(p) => Some(p),
-            Endpoint::Ssh { .. } => None,
         }
     }
 
@@ -551,7 +543,6 @@ mod tests {
         );
         assert_eq!(Endpoint::parse(&e.address()), Some(e.clone()));
         assert!(e.is_remote());
-        assert_eq!(e.local_path(), None);
         let p = Endpoint::parse("ssh://box:2222/s.sock").unwrap();
         assert_eq!(
             p,

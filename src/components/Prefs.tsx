@@ -1,9 +1,12 @@
 import { For, Show, createResource, createSignal, onCleanup, onMount } from "solid-js";
 import { api } from "../api";
-import { dotOf, hintOf, machineErrorOf, machineOfServer, machinesOf, type Probed, type ServerView, type ServersView } from "../servers";
+import { dotOf, hintOf, labelOf, machineErrorOf, machineOfServer, machinesOf, type Probed, type ServerView, type ServersView } from "../servers";
 import AddHostDialog from "./AddHostDialog";
 import Connections from "./Connections";
 import Secrets from "./Secrets";
+import { MODE_HINT, MODE_TITLE, PERMISSION_MODES } from "../agent";
+import { modelChoices, type ChatDefaults } from "../chatDefaults";
+import type { NotifyKind, NotifySettings } from "../notify";
 
 /**
  * PREFERENCES (Ctrl+,): a modal panel with sections on the left. SERVERS:
@@ -27,13 +30,22 @@ export default function Prefs(p: {
   onAddHost: (user: string, host: string, port: number, sockets: string[]) => Promise<void>;
   /** The selected session's server: SECRETS opens on its machine. */
   active?: string | null;
+  /** NOTIFICATIONS: which agent events raise a Windows notification, and the sound. */
+  notify: NotifySettings;
+  onNotify: (s: NotifySettings) => void;
+  onTestSound: (kind: NotifyKind) => void;
+  /** CHAT: what every new chat starts with (null = the CLI's own default). */
+  chatDefaults: ChatDefaults;
+  onChatDefaults: (d: ChatDefaults) => void;
+  /** Models the open sessions listed, for the CHAT model picker. */
+  models: string[];
   onClose: () => void;
 }) {
   let panel!: HTMLDivElement;
   let addBtn!: HTMLButtonElement;
   const [renaming, setRenaming] = createSignal<string | null>(null);
   const [adding, setAdding] = createSignal(false);
-  const [section, setSection] = createSignal<"servers" | "connections" | "secrets">("servers");
+  const [section, setSection] = createSignal<"servers" | "connections" | "secrets" | "chat" | "notifications">("servers");
   /** The row whose REMOVE MACHINE waits for a second click. */
   const [armed, setArmed] = createSignal<string | null>(null);
   const rows = () => p.view?.servers ?? [];
@@ -86,7 +98,7 @@ export default function Prefs(p: {
         </td>
         <td class="who">
           <Show when={renaming() === s().id} fallback={
-            <span class="nm" title="double-click to rename" onDblClick={() => setRenaming(s().id)}><span class={`dot ${dotOf(s())}`} /> {s().name}</span>}>
+            <span class="nm" title="double-click to rename" onDblClick={() => setRenaming(s().id)}><span class={`dot ${dotOf(s())}`} /> {labelOf(s())}</span>}>
             <input class="ren" value={s().name} aria-label="server name" ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}
                    onKeyDown={(e) => {
                      if (e.key === "Enter") { p.onRename(s().id, e.currentTarget.value); setRenaming(null); }
@@ -135,8 +147,9 @@ export default function Prefs(p: {
           <a class={section() === "servers" ? "on" : ""} aria-current={section() === "servers" ? "page" : undefined} onClick={() => setSection("servers")}>SERVERS</a>
           <a class={section() === "connections" ? "on" : ""} aria-current={section() === "connections" ? "page" : undefined} onClick={() => setSection("connections")}>CONNECTIONS</a>
           <a class={section() === "secrets" ? "on" : ""} aria-current={section() === "secrets" ? "page" : undefined} onClick={() => setSection("secrets")}>SECRETS</a>
+          <a class={section() === "chat" ? "on" : ""} aria-current={section() === "chat" ? "page" : undefined} onClick={() => setSection("chat")}>CHAT</a>
           <a class="soon">VIEW · soon</a>
-          <a class="soon">NOTIFICATIONS · soon</a>
+          <a class={section() === "notifications" ? "on" : ""} aria-current={section() === "notifications" ? "page" : undefined} onClick={() => setSection("notifications")}>NOTIFICATIONS</a>
         </nav>
         <Show when={section() === "connections"}>
           <div class="pbody">
@@ -147,6 +160,49 @@ export default function Prefs(p: {
               <button class="btn" aria-label="close" onClick={close}>✕</button>
             </div>
             <Connections servers={machines()} />
+          </div>
+        </Show>
+        <Show when={section() === "notifications"}>
+          <div class="pbody">
+            <div class="phead">
+              <h3>NOTIFICATIONS</h3>
+              <span class="micro">agents on every connected server · only for a session you are not looking at</span>
+              <span class="sp" />
+              <button class="btn" aria-label="close" onClick={close}>✕</button>
+            </div>
+            <div class="chat-defaults notify-set">
+              <span class="lbl">NEEDS YOU</span>
+              <span class="row-sw"><button class="sw" role="switch" aria-checked={p.notify.request} aria-label="notify when an agent needs you" onClick={() => p.onNotify({ ...p.notify, request: !p.notify.request })} /><span class="micro">a question or a permission prompt is waiting</span></span>
+              <span class="lbl">DONE</span>
+              <span class="row-sw"><button class="sw" role="switch" aria-checked={p.notify.done} aria-label="notify when an agent finishes its turn" onClick={() => p.onNotify({ ...p.notify, done: !p.notify.done })} /><span class="micro">an agent finished its turn</span></span>
+              <span class="lbl">SOUND</span>
+              <span class="row-sw"><button class="sw" role="switch" aria-checked={p.notify.sound} aria-label="play a sound with notifications" onClick={() => p.onNotify({ ...p.notify, sound: !p.notify.sound })} />
+                <button class="btn" onClick={() => p.onTestSound("request")}>▶ NEEDS YOU</button><button class="btn" onClick={() => p.onTestSound("done")}>▶ DONE</button></span>
+            </div>
+            <p class="micro">Windows shows the notification; clicking it brings Deck to the front on that session. Herdr's own sounds, same as in its TUI.</p>
+          </div>
+        </Show>
+        <Show when={section() === "chat"}>
+          <div class="pbody">
+            <div class="phead">
+              <h3>CHAT</h3>
+              <span class="micro">what every new chat starts with · CLI DEFAULT leaves it to Claude Code</span>
+              <span class="sp" />
+              <button class="btn" aria-label="close" onClick={close}>✕</button>
+            </div>
+            <div class="chat-defaults">
+              <label for="def-mode">PERMISSION MODE</label>
+              <select id="def-mode" class="asel" value={p.chatDefaults.mode ?? ""} onChange={(e) => p.onChatDefaults({ ...p.chatDefaults, mode: e.currentTarget.value || null })}>
+                <option value="">CLI DEFAULT</option>
+                <For each={[...PERMISSION_MODES]}>{(m) => <option value={m}>{MODE_TITLE[m]} — {MODE_HINT[m]}</option>}</For>
+              </select>
+              <label for="def-model">MODEL</label>
+              <select id="def-model" class="asel" value={p.chatDefaults.model ?? ""} onChange={(e) => p.onChatDefaults({ ...p.chatDefaults, model: e.currentTarget.value || null })}>
+                <option value="">CLI DEFAULT</option>
+                <For each={modelChoices(p.models, p.chatDefaults.model)}>{(m) => <option value={m}>{m.toUpperCase()}</option>}</For>
+              </select>
+            </div>
+            <p class="micro">Applied once, when a new chat opens on a deck-server. A chat already open keeps what it has; its header pickers still change it.</p>
           </div>
         </Show>
         <div class="pbody" hidden={section() !== "secrets"}>

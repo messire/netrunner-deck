@@ -35,6 +35,10 @@ pub struct Hack {
     pub description: Option<String>,
     #[serde(default)]
     pub argument_hint: Option<String>,
+    /// The server whose harness it was pinned from, where it runs (`None`:
+    /// pinned before hacks had a server, from this computer's harness).
+    #[serde(default)]
+    pub server: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import { api, type HarnessRepo, type Tree } from "../api";
 import { slashCurrent, slashItems, slashMatches, slashQuery } from "../slash";
 import Think from "./Think";
+import { codeBody, codeSpans } from "../codespans";
 import { ChatBuilder, backgroundTasks, fmtDuration, parseLine, turnFooters, type Block, type ChatItem, type ChatState, type ToolCall } from "../transcript";
 import { MODE_LABEL, cliMode, inputHint, menuOf, type CliMenu, type InputHint } from "../dialogue";
 import { IMAGE_PASTE_KEY } from "../keys";
@@ -307,7 +308,11 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   };
   // A new session in the same pane starts with an empty agent input; a tab switch keeps the pane's own (see `keep`).
   createEffect(on(() => [p.paneId, p.sessionId] as const, ([pane], prev) => { if (prev?.[0] === pane) setPasted([]); }, { defer: true }));
-  const grow = () => { input.style.height = ""; input.style.height = `${Math.min(input.scrollHeight, 180)}px`; };
+  const grow = () => { input.style.height = ""; input.style.height = `${Math.min(input.scrollHeight, 180)}px`; syncHl(); };
+  // Code spans in the draft get a chip painted behind the textarea's own text
+  // (a textarea cannot style parts of its text); the layer scrolls with it.
+  let hl!: HTMLDivElement;
+  const syncHl = () => { if (hl && input) hl.scrollTop = input.scrollTop; };
 
   // Activity line under the log while the agent works (Herdr's status, the
   // same signal the sidebar uses): a pulsing marker, a verb and the elapsed
@@ -499,15 +504,15 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
           <div class="chat-pending">
             <For each={pasted()}>{(src, i) => (
               <div class="pend">
-                <img src={src} onClick={() => setZoom(src)} title="click to view" />
-                <Show when={i() === pasted().length - 1}><button class="x" title="remove (Backspace)" onClick={dropLastImage}>✕</button></Show>
+                <img class="thumb" src={src} onClick={() => setZoom(src)} title="click to view" />
+                <Show when={i() === pasted().length - 1}><button class="x" title="remove (Backspace)" onClick={dropLastImage}>×</button></Show>
               </div>
             )}</For>
           </div>
         </Show>
         <div class="chat-input">
           <span class="chat-prompt">❯</span>
-          <Show when={pasted().length}><span class="chat-chip" title={headless() ? "sent with the message" : "in the agent's input; Enter sends"}>{pasted().map((_, i) => `[Image #${i + 1}]`).join(" ")}</span></Show>
+          <Show when={!headless() && pasted().length}><span class="chat-chip" title={headless() ? "sent with the message" : "in the agent's input; Enter sends"}>{pasted().map((_, i) => `[Image #${i + 1}]`).join(" ")}</span></Show>
           <div class="chat-field">
             <Show when={slashOpen()}>
               <div class="slash-pop">
@@ -529,8 +534,9 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
               </div>
             )}</Show>
             <Show when={ghost()}>{(g) => <div class="ghost">{g()} <kbd onClick={takeGhost} title="take the suggestion (or press Tab)">TAB</kbd></div>}</Show>
+            <div class="chat-hl" ref={hl} aria-hidden="true"><For each={codeSpans(draft())}>{(s) => (s.kind === "text" ? s.text : <mark>{s.text}</mark>)}</For>{"\n"}</div>
             <textarea ref={input} rows={1} value={draft()} placeholder={ghost() ? "" : "message"}
-              onInput={(e) => { setDraft(e.currentTarget.value); histAt = -1; grow(); }} onKeyDown={onKey} onPaste={onPaste} spellcheck={false} />
+              onInput={(e) => { setDraft(e.currentTarget.value); histAt = -1; grow(); }} onScroll={syncHl} onKeyDown={onKey} onPaste={onPaste} spellcheck={false} />
           </div>
         </div>
         <div class="chat-hints">
@@ -553,6 +559,15 @@ export default function ChatView(p: { paneId: string; sessionId: string; tree?: 
   );
 }
 
+/** The user's own text: plain, except `inline code` and ```fenced``` blocks, shown like the agent's. */
+function UserText(p: { text: string }) {
+  // A block is its own line, so the newlines around it would only add blank lines.
+  const spans = () => codeSpans(p.text).map((s, i, all) => (s.kind !== "text" ? s : {
+    ...s, text: s.text.replace(all[i - 1]?.kind === "block" ? /^\n/ : /^(?!)/, "").replace(all[i + 1]?.kind === "block" ? /\n$/ : /$(?!)/, ""),
+  }));
+  return <For each={spans()}>{(s) => (s.kind === "text" ? s.text : s.kind === "code" ? <code>{codeBody(s)}</code> : <pre class="ublock"><code>{codeBody(s)}</code></pre>)}</For>;
+}
+
 function Item(p: { it: ChatItem }) {
   const it = p.it;
   switch (it.kind) {
@@ -560,8 +575,8 @@ function Item(p: { it: ChatItem }) {
       return (
         <div class="msg user"><div class="bub">
           <div class="who">YOU <span class="when">{clock(it.ts)}</span></div>
-          <Show when={it.text}><pre class="utext">{it.text}</pre></Show>
-          <Show when={it.images.length}><div class="chat-thumbs"><For each={it.images}>{(src) => (src ? <img src={src} onClick={() => setZoom(src)} title="click to view" /> : <span class="chat-note">· image ·</span>)}</For></div></Show>
+          <Show when={it.text}><div class="utext"><UserText text={it.text} /></div></Show>
+          <Show when={it.images.length}><div class="chat-thumbs"><For each={it.images}>{(src) => (src ? <img class="thumb" src={src} onClick={() => setZoom(src)} title="click to view" /> : <span class="thumb none">image</span>)}</For></div></Show>
         </div></div>
       );
     case "assistant":

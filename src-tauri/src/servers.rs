@@ -471,6 +471,9 @@ pub struct ServerView {
     pub remote: bool,
     /// That machine (`user@host[:port]`), the key REMOVE takes.
     pub machine: Option<String>,
+    /// The server's session when it is not its app's default one (`try` of
+    /// `deck-server/try`), so two sessions on one machine never look alike.
+    pub session: Option<String>,
     pub status: Status,
 }
 
@@ -620,13 +623,27 @@ impl Registry {
             .map(|s| s.id.clone())
     }
 
-    /// Config dir of a connected server (its `session.json`), for the
-    /// archive. Only a server on this machine has one Deck can read.
-    pub fn config_dir(&self, server: Option<&str>) -> Option<PathBuf> {
-        let id = server.map(str::to_string).or_else(|| self.primary_id())?;
+    /// Whether `server` is on another machine.
+    pub fn is_remote(&self, server: &str) -> bool {
+        self.lock()
+            .live
+            .get(server)
+            .map(|l| l.endpoint.is_remote())
+            .unwrap_or(false)
+    }
+
+    /// The session dir of `server` on its own machine (where its
+    /// `session.json` is), as that machine spells it: the archive asks the
+    /// machine to read it there.
+    pub fn session_dir(&self, server: &str) -> Option<String> {
         let st = self.lock();
-        let socket = st.live.get(&id)?.endpoint.local_path()?.to_path_buf();
-        socket.parent().map(Path::to_path_buf)
+        match &st.live.get(server)?.endpoint {
+            Endpoint::Local(p) => p.parent().map(|d| d.to_string_lossy().into_owned()),
+            Endpoint::Ssh { socket, .. } => socket
+                .rsplit_once('/')
+                .map(|(dir, _)| dir.to_string())
+                .filter(|d| !d.is_empty()),
+        }
     }
 
     pub fn view(&self) -> ServersView {
@@ -658,6 +675,7 @@ impl Registry {
                 new: false,
                 remote: endpoint.is_remote(),
                 machine: machine_of(&endpoint),
+                session: place.session.clone(),
                 status,
             });
         }
@@ -676,6 +694,7 @@ impl Registry {
                 new: true,
                 remote: f.endpoint.is_remote(),
                 machine: machine_of(&f.endpoint),
+                session: f.place.session.clone(),
                 status: f.status.clone(),
             });
         }

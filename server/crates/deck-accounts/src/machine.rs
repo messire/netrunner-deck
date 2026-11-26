@@ -125,6 +125,9 @@ pub fn is_machine_method(method: &str) -> bool {
         || method.starts_with("deck.github.")
         || method.starts_with("deck.transfer.")
         || method.starts_with("deck.secrets.")
+        || method.starts_with("deck.harness.")
+        || method.starts_with("deck.uplink.")
+        || method.starts_with("deck.archive.")
 }
 
 /// One request: the result, or the error's words.
@@ -178,6 +181,15 @@ pub fn call(method: &str, params: &Value) -> crate::Result<Value> {
     }
     if let Some(m) = method.strip_prefix("deck.secrets.") {
         return crate::secrets::call(m, params);
+    }
+    if let Some(m) = method.strip_prefix("deck.harness.") {
+        return crate::harness::call(m, params);
+    }
+    if let Some(m) = method.strip_prefix("deck.uplink.") {
+        return crate::uplink::call(m, params);
+    }
+    if let Some(m) = method.strip_prefix("deck.archive.") {
+        return crate::archive::call(m, params);
     }
     Err(format!("unknown method {method}"))
 }

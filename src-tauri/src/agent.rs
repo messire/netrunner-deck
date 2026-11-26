@@ -74,11 +74,13 @@ pub fn watch(app: &AppHandle, server: Option<String>, pane_id: String) {
         let watches = app.state::<Watches>();
         let mut map = watches.0.lock().unwrap_or_else(|e| e.into_inner());
         let k = key(server.as_deref(), &pane_id);
-        if map.contains_key(&k) {
-            return;
-        }
+        // A webview that reloaded asks again and must get the session from
+        // its start (init: session id, model, mode): the stream that is
+        // already running for the old page stops and a fresh one replays.
         let stop = Arc::new(AtomicBool::new(false));
-        map.insert(k, stop.clone());
+        if let Some(old) = map.insert(k, stop.clone()) {
+            old.store(true, Ordering::Relaxed);
+        }
         stop
     };
     let app = app.clone();

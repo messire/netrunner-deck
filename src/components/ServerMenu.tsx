@@ -1,5 +1,5 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
-import { dotOf, type ServerView } from "../servers";
+import { dotOf, labelOf, type ServerView } from "../servers";
 export { dotOf } from "../servers";
 
 /** What the deck tab shows: every connected server, or one. */
@@ -60,7 +60,7 @@ export default function ServerMenu(p: {
         <button role="menuitemradio" aria-checked={p.scope === s.id} onClick={() => pick(() => p.onScope(s.id))} title={s.status.error ?? s.address}>
           <span class="chk">{p.scope === s.id ? "✓" : ""}</span>
           <span class={`dot ${dotOf(s)}`} />
-          <span class="txt"><span class="nm">{s.name}</span><span class="sub">{s.status.state === "offline" ? "OFFLINE" : versionOf(s)}</span></span>
+          <span class="txt"><span class="nm">{labelOf(s)}</span><span class="sub">{s.status.state === "offline" ? "OFFLINE" : versionOf(s)}</span></span>
           <span class="cnt">{p.panes(s.id)}{i() < 9 ? ` · Alt+${i() + 1}` : ""}</span>
         </button>
       )}</For>
@@ -71,7 +71,7 @@ export default function ServerMenu(p: {
           <button role="menuitem" class="offer" onClick={() => pick(() => p.onConnect(s.id))} title={s.status.error ?? s.address}>
             <span class="chk" />
             <span class={`dot off ${s.new ? "new" : ""}`} />
-            <span class="txt"><span class="nm">{s.name}</span><span class="sub">{s.status.state === "offline" ? "no access" : versionOf(s)}</span></span>
+            <span class="txt"><span class="nm">{labelOf(s)}</span><span class="sub">{s.status.state === "offline" ? "no access" : versionOf(s)}</span></span>
             <span class="cnt cy">+ CONNECT</span>
           </button>
         )}</For>

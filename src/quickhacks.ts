@@ -36,3 +36,36 @@ export function worktreeChoices(list: WorktreeInfo[]): WorktreeInfo[] {
 
 /** Tab label for a launched hack: `/name · branch`. */
 export const launchLabel = (hack: Hack, wt: WorktreeInfo) => `/${hack.name} · ${wt.branch ?? wt.label}`;
+
+/**
+ * Pure. The harness item a hack runs on a server, if that server's harness
+ * has it: the same `/name` and kind, personal or in the repository of the
+ * same name. `undefined` while the harness is not read; `null` when missing.
+ */
+export function hackItemIn(hack: Hack, harness: HarnessRepo[] | undefined): HarnessItem | null | undefined {
+  if (!harness) return undefined;
+  const repos = harness.filter((r) => (hack.source === "personal" ? r.personal : !r.personal && r.name === hack.repo_name));
+  for (const r of repos) {
+    const it = hackable(r.items).find((i) => i.kind === hack.kind && slashName(i) === hack.name);
+    if (it) return it;
+  }
+  return null;
+}
+
+/**
+ * Pure. COPY TO / MOVE TO for a pinned hack: the hack lands on server `to`
+ * (pointing at that server's file when its harness has the same entry). A
+ * copy is a new hack next to the old one; a move re-homes it. A hack the
+ * target already has (same `/name`, kind and source) is not doubled.
+ */
+export function transferHack(hacks: Hack[], id: string, to: string, move: boolean, target: HarnessRepo[] | undefined): Hack[] {
+  const h = hacks.find((x) => x.id === id);
+  if (!h) return hacks;
+  const item = hackItemIn(h, target);
+  const there: Hack = { ...h, server: to, path: item?.path ?? h.path, description: item?.description ?? h.description };
+  const twin = (x: Hack) => x.id !== h.id && x.server === to && x.name === h.name && x.kind === h.kind && x.source === h.source && (x.repo_name ?? null) === (h.repo_name ?? null);
+  if (move) return hacks.some(twin) ? hacks.filter((x) => x.id !== h.id) : hacks.map((x) => (x.id === h.id ? there : x));
+  if (hacks.some(twin)) return hacks;
+  const i = hacks.indexOf(h);
+  return [...hacks.slice(0, i + 1), { ...there, id: `${h.id}-${to.replace(/[^a-z0-9]/gi, "").slice(-8)}${Date.now().toString(36)}` }, ...hacks.slice(i + 1)];
+}

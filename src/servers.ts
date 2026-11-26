@@ -25,7 +25,15 @@ export interface ServerView {
   remote?: boolean;
   /** That machine, `user@host[:port]`: what REMOVE takes. */
   machine?: string | null;
+  /** The session when it is not the app's default one (`try` of `deck-server/try`). */
+  session?: string | null;
   status: ServerStatus;
+}
+
+/** Pure. The name with its non-default session (`deck@localhost · try`), unless the name already says it. */
+export function labelOf(s: Pick<ServerView, "name" | "session">): string {
+  const session = s.session?.trim();
+  return session && !s.name.toLowerCase().includes(session.toLowerCase()) ? `${s.name} · ${session}` : s.name;
 }
 /** A saved machine the last scan could not reach: one grey row. */
 export interface MachineDown { machine: string; error: string }

@@ -24,7 +24,7 @@ fn server_info() -> Value {
 }
 
 /// The reply line for a `deck.git.*`, `deck.github.*`, `deck.transfer.*`,
-/// `deck.secrets.*` or
+/// `deck.secrets.*`, `deck.harness.*`, `deck.uplink.*`, `deck.archive.*` or
 /// `deck.server.info` request; `None` for any other line.
 pub(crate) fn handle(line: &str) -> Option<String> {
     if line.contains("deck.server.info") {
@@ -37,7 +37,10 @@ pub(crate) fn handle(line: &str) -> Option<String> {
     if !(line.contains("deck.git.")
         || line.contains("deck.github.")
         || line.contains("deck.transfer.")
-        || line.contains("deck.secrets."))
+        || line.contains("deck.secrets.")
+        || line.contains("deck.harness.")
+        || line.contains("deck.uplink.")
+        || line.contains("deck.archive."))
     {
         return None;
     }

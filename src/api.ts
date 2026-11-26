@@ -156,6 +156,8 @@ export interface ArchiveEntry {
   status: "closed" | "restored";
   restored_at_ms?: number | null;
   restored_workspace_id?: string | null;
+  /** The server whose archive it is in. */
+  server?: string | null;
 }
 
 /** A user-made group of repositories in the ARCHIVE tree; repos in no group are in the main group. */
@@ -177,7 +179,8 @@ export interface MachineJob {
 }
 
 /** A harness entry pinned to the QUICKHACKS panel. */
-export interface Hack { id: string; name: string; kind: string; source: "personal" | "project"; repo_key?: string | null; repo_name?: string | null; path: string; description?: string | null; argument_hint?: string | null }
+/** `server`: the server whose harness it was pinned from (none: one on this computer, pinned before servers). */
+export interface Hack { id: string; name: string; kind: string; source: "personal" | "project"; repo_key?: string | null; repo_name?: string | null; path: string; description?: string | null; argument_hint?: string | null; server?: string | null }
 export interface HacksSaved { hacks: Hack[]; collapsed: boolean }
 export interface WorktreeInfo { path: string; branch?: string | null; is_bare: boolean; is_detached: boolean; is_prunable: boolean; is_linked_worktree: boolean; open_workspace_id?: string | null; label: string }
 export interface QuickhackEvent { run: string; stage: "workspace" | "shell" | "agent" | "prompt" | "done" | "error"; detail: unknown }
@@ -185,7 +188,7 @@ export interface QuickhackEvent { run: string; stage: "workspace" | "shell" | "a
 /** UPLINK: git state of a checkout and what a pull brought in. */
 export interface GitSync { branch?: string | null; upstream?: string | null; behind: number; ahead: number; dirty: boolean }
 export interface UplinkCommit { sha: string; title: string; pr?: number | null; url?: string | null; author: string; at_ms: number }
-export interface Update { id: string; repo: string; path: string; branch: string; from: string; to: string; at_ms: number; commits: UplinkCommit[]; seen: boolean }
+export interface Update { id: string; repo: string; path: string; branch: string; from: string; to: string; at_ms: number; commits: UplinkCommit[]; seen: boolean; server?: string | null }
 
 /** A line-aligned slice of a Claude Code transcript (`~/.claude/projects/…/<session>.jsonl`). */
 export interface TranscriptChunk { session_id: string; path: string; start: number; end: number; len: number; lines: string[] }
@@ -286,23 +289,25 @@ export const api = {
   /** Updater (M5): `null` when up to date; errors (offline, no release yet) are advisory. */
   updateCheck: () => invoke<UpdateInfo | null>("update_check"),
   updateInstall: () => invoke<void>("update_install"),
-  archiveList: () => invoke<ArchiveEntry[]>("archive_list"),
+  /** The archive of `server`'s machine (`deck.archive.*`), entries tagged with that server. */
+  archiveList: (server: string) => invoke<ArchiveEntry[]>("archive_list", { server: srv(server) }),
   archiveClose: (workspaceKey: string, closeGroup = false) => { const { server, id } = splitId(workspaceKey); return invoke<{ id: string | null }>("archive_close", { server: srv(server), workspaceId: id, closeGroup }); },
-  /** Reopen on `server` (`null` = the primary one); the returned workspace id is tagged. */
+  /** Reopen an entry of `server`'s archive on that server; the returned workspace id is tagged. */
   archiveRestore: async (id: string, server?: string | null) => {
     const r = await invoke<{ workspace_id: string; resumed: number }>("archive_restore", { id, server: srv(server) });
     return server ? tagDeep(server, r) : r;
   },
-  archiveDelete: (id: string, removeWorktree = false) => invoke<{ removed_worktree: string | null }>("archive_delete", { id, removeWorktree }),
-  archiveSummarize: (id: string) => invoke<void>("archive_summarize", { id }),
+  archiveDelete: (id: string, server: string, removeWorktree = false) => invoke<{ removed_worktree: string | null }>("archive_delete", { id, server: srv(server), removeWorktree }),
+  archiveSummarize: (id: string, server: string) => invoke<void>("archive_summarize", { id, server: srv(server) }),
   archiveGroupsGet: () => invoke<RepoGroup[]>("archive_groups_get"),
   archiveGroupsSet: (groups: RepoGroup[]) => invoke<RepoGroup[]>("archive_groups_set", { groups }),
   onArchive: (cb: () => void): Promise<UnlistenFn> => listen("deck://archive", () => cb()),
   /** http(s) links from chat/harness markdown open in the system browser, never in the webview. */
   openExternal: (url: string) => invoke<void>("open_external", { url }),
-  uplinkSync: (paths: string[]) => invoke<Record<string, GitSync>>("uplink_sync", { paths }),
-  uplinkFetch: (roots: string[]) => invoke<Record<string, string>>("uplink_fetch", { roots }),
-  uplinkPull: (repo: string, path: string) => invoke<Update>("uplink_pull", { repo, path }),
+  /** Git work runs on `server`'s machine, where its checkouts are (`deck.uplink.*`). */
+  uplinkSync: (server: string, paths: string[]) => invoke<Record<string, GitSync>>("uplink_sync", { server: srv(server), paths }),
+  uplinkFetch: (server: string, roots: string[]) => invoke<Record<string, string>>("uplink_fetch", { server: srv(server), roots }),
+  uplinkPull: (server: string, repo: string, path: string) => invoke<Update>("uplink_pull", { server: srv(server), repo, path }),
   uplinkList: () => invoke<{ updates: Update[] }>("uplink_list"),
   uplinkSeen: () => invoke<{ updates: Update[] }>("uplink_seen"),
   uplinkRemove: (id: string) => invoke<{ updates: Update[] }>("uplink_remove", { id }),
@@ -327,11 +332,11 @@ export const api = {
   },
   onQuickhack: (cb: (e: QuickhackEvent) => void): Promise<UnlistenFn> =>
     listen<QuickhackEvent>("deck://quickhack", (e) => { const s = runServer.get(e.payload.run); cb(s ? tagDeep(s, e.payload) : e.payload); }),
-  /** Personal (`~/.claude`) first, then the given repositories' Claude Code files. */
-  harnessScan: (repos: { key: string; name: string; root: string }[]) => invoke<HarnessRepo[]>("harness_scan", { repos }),
-  harnessRead: (path: string) => invoke<string>("harness_read", { path }),
-  /** Tag the untagged items of one repo (shadow claude -p → `tags:` in each file); false when already running. */
-  harnessClassify: (key: string, items: HarnessItem[]) => invoke<boolean>("harness_classify", { key, items }),
+  /** Personal (`~/.claude`) first, then the given repositories' Claude Code files, on `server`'s machine. */
+  harnessScan: (server: string, repos: { key: string; name: string; root: string }[]) => invoke<HarnessRepo[]>("harness_scan", { server: srv(server), repos }),
+  harnessRead: (server: string, path: string) => invoke<string>("harness_read", { server: srv(server), path }),
+  /** Tag the untagged items of one repo (shadow claude -p → `tags:` in each file); false when already running. This computer's servers only. */
+  harnessClassify: (server: string, key: string, items: HarnessItem[]) => invoke<boolean>("harness_classify", { server: srv(server), key, items }),
   onHarness: (cb: (e: { key: string; written?: number; error?: string }) => void): Promise<UnlistenFn> =>
     listen<{ key: string; written?: number; error?: string }>("deck://harness", (e) => cb(e.payload)),
   /** `from`: continue after this byte offset; `tail`: only the last N bytes (initial load). */

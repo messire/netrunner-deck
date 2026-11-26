@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
-use tauri::{AppHandle, Manager};
 
 use crate::endpoint::Endpoint;
 use crate::herdr;
@@ -23,12 +22,6 @@ pub use crate::herdr::Result;
 
 /// The runtime as Deck holds it (Tauri state, worker threads).
 pub type SharedRuntime = Arc<dyn Runtime>;
-
-/// The primary server's runtime (the first connected one; see
-/// `servers::Registry::primary`). Used where an action has no server of its own.
-pub fn of(app: &AppHandle) -> SharedRuntime {
-    app.state::<crate::servers::Registry>().primary()
-}
 
 /// What Deck asks of a server. Blocking: call from a worker thread, never
 /// from the main thread.

@@ -4,6 +4,17 @@ Versions follow the rule in [README → Versioning](README.md#versioning): patch
 
 ## Unreleased
 
+## [0.11.0] — 2026-11-27
+- HARNESS, UPLINK, ARCHIVE and QUICKHACKS follow the server picked on the deck tab: what they show comes from that server's machine (its `~/.claude`, its checkouts, its closed sessions), labelled DECK or HERDR. With ALL, each server is its own section that folds like the server sections of SESSIONS. Pulls and pinned hacks are kept per server; RESTORE, DELETE and WRITE act on the entry's own server.
+- QUICKHACKS: right-click a hack → COPY TO / MOVE TO another server. A hack whose skill or command that server's harness does not have is marked NOT IN THIS HARNESS.
+- A view whose server cannot answer shows why (an older deck-server says to update it) instead of SCANNING… forever.
+- SERVERS shows a non-default deck-server session's name next to the server (`deck@localhost · try`), so two sessions on one machine never look alike.
+- PREFERENCES › CHAT: default permission mode and model for every new chat (CLI DEFAULT leaves them to Claude Code).
+- PREFERENCES › NOTIFICATIONS: a Windows notification when an agent on any server needs you or finishes its turn, unless you are looking at that session; Herdr's sounds, each switch on its own. Coming back to Deck right after opens that session.
+- Chats keep their conversation after the page reloads (they showed "new session — nothing said yet").
+- Tidier chat: no blank lines inside lists, inline `code` shows as a chip while you type too, rounded image thumbnails, no `[Image #N]` chip in chat-only sessions.
+- Deck looks for a new release every 10 minutes and when its window comes back to the front.
+
 ## [0.10.1] — 2026-11-25
 - SECRETS lists every machine with a connected server, remote ones too (it showed only this PC), as tabs at the top; it opens on the selected session's machine. CONNECTIONS lists the same machines.
 - SECRETS: COPY TO ▾ merges the shown `.env` into another machine's by key (same keys replaced, new keys appended, the rest kept) after a confirmation "N new, M replaced on <machine>".

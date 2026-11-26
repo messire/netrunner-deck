@@ -331,14 +331,18 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .msg .who .when{color:var(--mut);font:11px var(--fm);margin-left:8px;letter-spacing:0}
 .msg .who .tag{color:var(--mut);font:11px var(--fm);margin-left:6px;letter-spacing:0;font-weight:400}
 .msg.agent.summary .mdtext{color:var(--mut)}
-.utext{margin:0;white-space:pre-wrap;font:inherit}
+.utext{margin:0;white-space:pre-wrap;font:inherit;overflow-wrap:anywhere}
+.utext .ublock{white-space:pre;margin:.3em 0}
 .mdtext>:first-child{margin-top:0}.mdtext>:last-child{margin-bottom:0}
-.mdtext p,.mdtext li{white-space:pre-wrap}
-.mdtext p{margin:0 0 .6em}.mdtext ul,.mdtext ol{margin:0 0 .6em;padding-left:1.4em}
+.mdtext{overflow-wrap:anywhere}
+.mdtext p{margin:0 0 .5em}.mdtext ul,.mdtext ol{margin:0 0 .5em;padding-left:1.4em}
+.mdtext li{margin:.12em 0}.mdtext li>p{margin:0}.mdtext li>ul,.mdtext li>ol{margin:.1em 0 .2em}
 .mdtext h1,.mdtext h2,.mdtext h3,.mdtext h4{margin:.6em 0 .3em;color:var(--cy);font-size:1.05em;letter-spacing:.5px}
-.mdtext code{font-family:var(--fm);font-size:.9em;background:rgba(0,0,0,.35);padding:0 4px;color:var(--cy)}
+.mdtext code,.utext code{font-family:var(--fm);font-size:.88em;background:rgba(103,224,227,.1);border:1px solid rgba(103,224,227,.22);border-radius:4px;padding:.05em .35em;color:var(--cy);white-space:break-spaces}
 .mdtext pre{background:rgba(0,0,0,.45);border:1px solid var(--line);padding:8px 10px;overflow:auto;margin:.4em 0 .6em}
-.mdtext pre code{background:none;padding:0;color:var(--txt)}
+.mdtext pre,.utext .ublock{border-radius:6px}
+.utext .ublock{background:rgba(0,0,0,.45);border:1px solid var(--line);padding:8px 10px;overflow:auto}
+.mdtext pre code,.utext .ublock code{background:none;border:0;border-radius:0;padding:0;color:var(--txt);white-space:pre}
 .mdtext a{color:var(--cy)}.mdtext table{border-collapse:collapse;margin:.4em 0}.mdtext td,.mdtext th{border:1px solid var(--line);padding:2px 8px}
 .mdtext blockquote{margin:.4em 0;padding-left:10px;border-left:2px solid var(--line);color:var(--mut)}
 .msg.tools{flex-direction:column;gap:3px;max-width:80%}
@@ -459,22 +463,25 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .chat-blocked{margin:4px 0;padding:6px 10px;border:1px solid var(--org);color:var(--org);font-size:14px;letter-spacing:1px;cursor:pointer;background:rgba(255,166,43,.08)}
 .chat-input{display:flex;gap:8px;align-items:flex-start;padding:6px 12px 8px 14px;border-top:1px solid var(--line)}
 .chat-prompt{color:var(--red);font-weight:700;padding-top:4px}
-.chat-thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
-.chat-thumbs img{max-width:220px;max-height:160px;border:1px solid var(--line);cursor:zoom-in;display:block}
-.chat-thumbs img:hover{border-color:var(--cy)}
+/* Image thumbnails (sent and pending): same-size rounded tiles, cropped to fill, like the Claude client. */
+.thumb{display:block;width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid rgba(155,232,234,.18);background:rgba(0,0,0,.35);cursor:zoom-in;transition:border-color .15s,filter .15s}
+.thumb:hover{border-color:var(--cy);filter:brightness(1.08)}
+.thumb.none{display:flex;align-items:center;justify-content:center;font:11px var(--fm);color:var(--mut);cursor:default}
+.chat-thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 /* Images pasted for the next message: a strip above the input, newest last; only the last can be removed. */
-.chat-pending{display:flex;gap:8px;padding:8px 14px 0;border-top:1px solid var(--line)}
+.chat-pending{display:flex;flex-wrap:wrap;gap:10px;padding:12px 14px 2px 34px;border-top:1px solid var(--line)}
 .chat-pending .pend{position:relative}
-.chat-pending img{max-height:72px;max-width:120px;border:1px solid var(--yel);display:block;cursor:zoom-in}
-.chat-pending .x{position:absolute;top:-6px;right:-6px;width:18px;height:18px;border:1px solid var(--red);background:#120A10;color:var(--red);font:700 11px var(--fm);line-height:1;cursor:pointer;padding:0}
-.chat-pending .x:hover{background:var(--red);color:#120A10}
+.chat-pending .thumb{width:72px;height:72px;border-radius:8px}
+.chat-pending .x{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;border:1px solid rgba(155,232,234,.35);background:#1b1219;color:var(--txt);font:600 14px/1 var(--ft);display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0 0 1px;opacity:0;transition:opacity .12s,background .12s,color .12s;box-shadow:0 1px 4px rgba(0,0,0,.6)}
+.chat-pending .pend:hover .x,.chat-pending .x:focus-visible{opacity:1}
+.chat-pending .x:hover{background:var(--red);border-color:var(--red);color:#120A10}
 .chat-pending+.chat-input{border-top:0}
 .veil.zoom{cursor:zoom-out;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:50}
 .veil.zoom img{max-width:94%;max-height:94%;border:1px solid var(--cy);box-shadow:0 0 30px rgba(103,224,227,.25)}
 .chat-chip{flex:none;margin-top:4px;padding:0 8px;border:1px solid var(--yel);color:var(--yel);font-size:12.5px;letter-spacing:1px;line-height:20px}
 .chat-field{flex:1;position:relative;min-width:0}
 /* The ghost text is decoration: clicks fall through to the textarea (caret placement); only the TAB badge takes it. */
-.chat-field .ghost{position:absolute;left:0;top:4px;right:0;color:var(--mut);font-size:14.5px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;font-family:var(--ft)}
+.chat-field .ghost{position:absolute;z-index:2;left:0;top:4px;right:0;color:var(--mut);font-size:14.5px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;font-family:var(--ft)}
 .chat-field .ghost kbd{pointer-events:auto;cursor:pointer;font:11px var(--fm);border:1px solid var(--line);padding:0 4px;color:var(--tcy);margin-left:6px;vertical-align:1px}
 .chat-field .ghost kbd:hover{border-color:var(--cy);color:var(--cy)}
 .slash-pop{position:absolute;left:-8px;right:0;bottom:calc(100% + 10px);max-height:46vh;overflow:auto;background:var(--pan);border:1px solid var(--cy);box-shadow:0 0 24px rgba(0,0,0,.6);z-index:20;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
@@ -501,7 +508,10 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .bg-l{color:var(--txt);overflow:hidden;text-overflow:ellipsis;min-width:0}
 .bg-tail{flex:none;color:var(--mut);margin-left:auto;padding-left:12px}
 .chat-panel div{overflow:hidden;text-overflow:ellipsis}
-.chat-input textarea{width:100%;resize:none;background:transparent;border:0;outline:0;color:var(--txt);font:inherit;font-size:16px;line-height:1.4;padding:4px 0;min-height:24px;max-height:180px}
+.chat-input textarea{position:relative;z-index:1;display:block;width:100%;resize:none;background:transparent;border:0;outline:0;color:var(--txt);font:inherit;font-size:16px;line-height:1.4;padding:4px 0;min-height:24px;max-height:180px;scrollbar-width:none}
+/* Mirror of the draft behind the textarea: same font and wrapping, text invisible, only code chips painted. */
+.chat-hl{position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none;color:transparent;font-size:16px;line-height:1.4;padding:4px 0;white-space:pre-wrap;overflow-wrap:break-word;word-break:normal}
+.chat-hl mark{color:transparent;background:rgba(103,224,227,.14);border-radius:4px;box-shadow:0 0 0 1px rgba(103,224,227,.3)}
 .chat-input textarea::placeholder{color:var(--mut)}
 
 /* ---- harness view ---------------------------------------------------------- */
@@ -543,7 +553,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .logo,.vtab,.plate,.th,.row .nm,.arow .nm,.arow .rn,.arow .wtn,.arow .gn,.arow.hrepo .pn,.bio .acc,.bio .tag,.hsec,.hkl,.zone,.dlgt,.msg .who,.fold b,.tool-head b,.abtn,.chat-blocked,.hvh .nm,.tab,.kbar b{font-family:var(--fh);font-weight:600}
 .row .nm,.arow .rn,.arow .gn,.arow.hrepo .pn,.vtab,.logo{font-weight:600}
 /* reading text */
-.msg .bub,.chat-input textarea,.mdtext,.hmd,.arow .desc,.hdesc,.msg.sys{font-family:var(--ft)}
+.msg .bub,.chat-input textarea,.chat-hl,.mdtext,.hmd,.arow .desc,.hdesc,.msg.sys{font-family:var(--ft)}
 .msg .bub{font-size:14.5px;line-height:1.55}
 .mdtext code,.mdtext pre,.tool-io,.hraw,.utext code{font-family:var(--fm)}
 
@@ -671,6 +681,17 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .srv-sec.down .row.srv{--pc:var(--red)}
 .srv-sec.down .row.srv .nm{color:var(--red)}
 .srv-sec.down .srv-body{opacity:.45;pointer-events:none}
+/* HARNESS / UPLINK / ARCHIVE / QUICKHACKS: the server they show, one section per server under ALL */
+.view-sec .row.srv{cursor:pointer;margin-left:16px}
+.view-sec .row.srv .srv-kind{color:var(--tcy);border:1px solid var(--line);padding:0 5px}
+.view-sec .row.srv .cnt{font:11px var(--fm);color:var(--mut)}
+.view-sec.down .srv-body{opacity:1;pointer-events:auto}
+.view-sec .src-err{color:var(--red);text-transform:none}
+.src-on{white-space:nowrap}.src-on b{color:var(--cy);font-weight:600}
+.hk-list .view-sec .row.srv{margin:4px 0 4px 14px;min-height:30px;padding:4px 8px 4px 12px;gap:8px}
+.hk-list .view-sec .srv-body{display:flex;flex-direction:column;gap:8px}
+.view-sec .srv-body[hidden]{display:none}
+.hk.missing{opacity:.6}.hk .hk-miss{color:var(--org);font-weight:600}
 .first-run{display:flex;flex-direction:column;gap:6px;padding:4px 0 10px}
 .first-run .row{cursor:pointer}
 .first-run > .btn{align-self:flex-start;margin-left:16px}
@@ -695,6 +716,11 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .prefs .pbody{padding:14px 18px 16px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 .prefs .phead{display:flex;align-items:center;gap:12px;margin-bottom:10px}
 .prefs .phead h3{margin:0;font-family:var(--fh);letter-spacing:2px;font-size:15px;color:var(--cy)}
+.prefs .chat-defaults{display:grid;grid-template-columns:170px minmax(0,420px);align-items:center;gap:12px 16px;margin:8px 0 14px}
+.prefs .chat-defaults label{font:600 11px var(--fm);letter-spacing:1.5px;color:var(--tcy)}
+.prefs .chat-defaults .asel{width:100%}
+.prefs .chat-defaults .lbl{font:600 11px var(--fm);letter-spacing:1.5px;color:var(--tcy)}
+.prefs .notify-set .row-sw{display:flex;align-items:center;gap:12px}
 .prefs .phead .sp{flex:1}
 .prefs table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
 .prefs th:nth-child(1){width:56px}.prefs th:nth-child(3){width:150px}.prefs th:nth-child(4){width:100px}.prefs th:nth-child(5){width:60px}.prefs th:nth-child(6){width:160px}

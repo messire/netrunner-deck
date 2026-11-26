@@ -31,8 +31,10 @@ use base64::Engine as _;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
+pub mod archive;
 pub mod clone;
 pub mod github;
+pub mod harness;
 mod http;
 pub mod jobs;
 pub mod machine;
@@ -40,6 +42,7 @@ pub mod pack;
 pub mod proc;
 pub mod secrets;
 pub mod transfer;
+pub mod uplink;
 pub use http::{Curl, Http, HttpRequest, HttpResponse};
 
 // ---- Claude Code's OAuth client (as the installed CLI uses it) ---------------

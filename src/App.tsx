@@ -1,10 +1,16 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
-import { api, type HarnessItem, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type AccountList, type Tab, type Pane, type Workspace, type Account, type TreeAction, type ActionOptions, UNMANAGED, zoneOf, usageOf, accountLabel } from "./api";
+import { api, type AgentStatus, type HarnessItem, type HarnessRepo, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type AccountList, type Tab, type Pane, type Workspace, type Account, type TreeAction, type ActionOptions, UNMANAGED, zoneOf, usageOf, accountLabel } from "./api";
 import Sidebar, { type SidebarSection, type SwitchError } from "./components/Sidebar";
 import ServerMenu, { dotOf, type Scope } from "./components/ServerMenu";
 import Prefs from "./components/Prefs";
 import { connectedServers, filterTree, keepDown, LEGACY_SERVERS, migrateKey, offeredServers, serverOf, type ServersView } from "./servers";
+import { loadNotify, notifyText, saveNotify, shouldNotify, transitions, type NotifyKind, type NotifySettings } from "./notify";
+import { agentStatus } from "./agent";
+import doneSound from "./assets/sounds/done.mp3";
+import requestSound from "./assets/sounds/request.mp3";
+import { defaultsParams, loadChatDefaults, newPanes, saveChatDefaults, type ChatDefaults } from "./chatDefaults";
+import { belongsTo, homeOf, shownServers, sourceError, sourcesOf } from "./sources";
 import TabBar, { Clock, Pulse } from "./components/TabBar";
 import TerminalView from "./components/TerminalView";
 import ChatView from "./components/ChatView";
@@ -28,6 +34,7 @@ import NewWorktreeBox from "./components/NewWorktreeBox";
 import HarnessView from "./components/HarnessView";
 import UplinkView from "./components/UplinkView";
 import { harnessRepos } from "./harness";
+import { hackItemIn, transferHack } from "./quickhacks";
 import { createLatestGate } from "./latest";
 import { debounceTrailing, outputPaneOf, routeEvent } from "./events";
 import { agentName, commands, hotkeyOf, nextBlockedPane, type Command } from "./actions";
@@ -88,12 +95,29 @@ export default function App() {
   /** The Claude session id behind a pane: a headless pane's own stream says it, otherwise Herdr's `agent_session`. */
   const claudeSession = (id: string) => {
     const x = tree()?.panes.find((p) => p.pane_id === id);
-    if (x && headless(id)) return agentOf(id)?.sessionId ?? null;
     const s = x?.agent_session;
+    // Headless: the session's own stream, else what the server recorded for the pane.
+    if (x && headless(id)) return agentOf(id)?.sessionId ?? (s?.kind === "id" && s.value ? s.value : null);
     return x && (x.agent ?? "").toLowerCase().includes("claude") && s?.kind === "id" && s.value ? s.value : null;
   };
   // One event stream per headless Claude pane in the tree (status, questions, live text).
   createEffect(() => { void syncAgents((tree()?.panes ?? []).filter((p) => headless(p.pane_id)).map((p) => p.pane_id)); });
+  // PREFERENCES › CHAT: a chat that opens on a deck-server gets the default
+  // model and mode once, as soon as its session takes them.
+  const [chatDefaults, setChatDefaults] = createSignal<ChatDefaults>(loadChatDefaults());
+  let seenPanes = new Map<string, Set<string>>();
+  const applyDefaults = (pane: string, tries = 20) => {
+    const params = defaultsParams(chatDefaults());
+    if (!params) return;
+    api.agentCall(pane, "set", params).catch(() => { if (tries > 1) setTimeout(() => applyDefaults(pane, tries - 1), 1500); });
+  };
+  createEffect(() => {
+    const panes = (fullTree()?.panes ?? []).filter((x) => serverKind(serverOf(x.pane_id)) === "deck-server").map((x) => ({ pane: x.pane_id, server: serverOf(x.pane_id) }));
+    if (!fullTree()) return;
+    const { fresh, seen } = newPanes(seenPanes, panes);
+    seenPanes = seen;
+    fresh.forEach((pane) => applyDefaults(pane));
+  });
   const [offline, setOffline] = createSignal<string | null>(null);
 
   // ---- servers (docs/plan/DECK-SERVERS-UI.md) --------------------------------
@@ -276,16 +300,31 @@ export default function App() {
       });
 
   // ---- ARCHIVE (cold storage): closed spaces that can be restored ----------
+  // HARNESS, UPLINK, ARCHIVE and QUICKHACKS follow the deck tab's scope: the
+  // data of each server comes from its own machine (sources.ts).
   type View = "deck" | "harness" | "archive" | "uplink";
   const [view, setViewRaw] = createSignal<View>((["harness", "archive", "uplink"] as const).find((v) => v === remembered("deck.view")) ?? "deck");
   const setView = (v: View) => { setViewRaw(v); remember("deck.view", v); };
-  const [archive, { refetch: refetchArchive }] = createResource<ArchiveEntry[] | undefined>(async (_, { value }) => {
-    try { return await api.archiveList(); } catch (e) { showError(`archive: ${e}`); return value; }
-  });
+  /** The servers HARNESS / UPLINK / ARCHIVE / QUICKHACKS show. */
+  const viewServers = createMemo(() => shownServers(connected(), shown()));
+  type PerServer<T> = Record<string, { data?: T; error?: string | null }>;
+  /** Fetch `get` for every server in `ids` at once; a failed one keeps its last data with the error. */
+  const perServer = async <T,>(ids: string[], prev: PerServer<T> | undefined, get: (id: string) => Promise<T>): Promise<PerServer<T>> => {
+    const out: PerServer<T> = {};
+    await Promise.all(ids.map(async (id) => {
+      try { out[id] = { data: await get(id) }; } catch (e) { out[id] = { data: prev?.[id]?.data, error: sourceError(e) }; }
+    }));
+    return out;
+  };
+  const connectedIds = () => (servers() ? JSON.stringify(connected().map((s) => s.id)) : false);
+  const [archives, { refetch: refetchArchive }] = createResource<PerServer<ArchiveEntry[]>, string | false>(connectedIds, (key, { value }) =>
+    perServer(JSON.parse(key as string) as string[], value, (id) => api.archiveList(id)));
+  const archiveSources = createMemo(() => sourcesOf(viewServers(), archives() ?? {}));
+  const archiveClosed = () => archiveSources().reduce((n, s) => n + (s.data ?? []).filter((e) => e.status === "closed").length, 0);
   const [archiveBusy, setArchiveBusy] = createSignal<string | null>(null);
   const [archiveError, setArchiveError] = createSignal<string | null>(null);
-  const archiveRun = (id: string, work: Promise<unknown>, after?: () => void) => {
-    setArchiveBusy(id);
+  const archiveRun = (key: string, work: Promise<unknown>, after?: () => void) => {
+    setArchiveBusy(key);
     setArchiveError(null);
     work.then(() => { after?.(); }).catch((e) => setArchiveError(String(e))).finally(() => { setArchiveBusy(null); refetchArchive(); });
   };
@@ -300,15 +339,16 @@ export default function App() {
         }
         showError(`archive: ${m}`);
       });
-  const archiveRestore = (id: string) =>
-    archiveRun(id, api.archiveRestore(id, targetServer()).then((r) => { setView("deck"); refetchTree(); return r; }));
+  // An entry comes back on the server whose archive it is in.
+  const archiveRestore = (server: string, id: string) =>
+    archiveRun(`${server}|${id}`, api.archiveRestore(id, server).then((r) => { setView("deck"); refetchTree(); return r; }));
   // Several sessions (a worktree or a whole repo) go one after another; the
   // table refreshes once at the end. The first failure stops the rest.
-  const archiveDeleteMany = (plan: { id: string; removeWorktree: boolean }[]) => {
+  const archiveDeleteMany = (server: string, plan: { id: string; removeWorktree: boolean }[]) => {
     if (!plan.length) return;
-    archiveRun(plan[0].id, (async () => { for (const step of plan) await api.archiveDelete(step.id, step.removeWorktree); })());
+    archiveRun(`${server}|${plan[0].id}`, (async () => { for (const step of plan) await api.archiveDelete(step.id, server, step.removeWorktree); })());
   };
-  const archiveSummarize = (id: string) => archiveRun(id, api.archiveSummarize(id));
+  const archiveSummarize = (server: string, id: string) => archiveRun(`${server}|${id}`, api.archiveSummarize(id, server));
   const [groups, { refetch: refetchGroups, mutate: setGroups }] = createResource<RepoGroup[]>(async () => {
     try { return await api.archiveGroupsGet(); } catch { return []; }
   }, { initialValue: [] });
@@ -316,51 +356,95 @@ export default function App() {
     setGroups(next);
     api.archiveGroupsSet(next).then((saved) => setGroups(saved)).catch((e) => { setArchiveError(String(e)); refetchGroups(); });
   };
-  const [harnessError, setHarnessError] = createSignal<string | null>(null);
-  // HARNESS: Claude Code config of the archive's repositories (+ ~/.claude); rescanned when the repo set changes.
-  const harnessRefs = createMemo(() => JSON.stringify(harnessRepos(archive() ?? [])));
-  const [harness, { refetch: refetchHarness }] = createResource(harnessRefs, async (refs) => {
-    try { setHarnessError(null); return await api.harnessScan(JSON.parse(refs)); } catch (e) { setHarnessError(String(e)); return []; }
+  // HARNESS: Claude Code config of each server's archive repositories (+ its
+  // ~/.claude), read on that server's machine; rescanned when a repo set changes.
+  const harnessRefs = createMemo(() => {
+    if (!servers()) return false as const;
+    const a = archives();
+    return JSON.stringify(connected().map((s) => [s.id, harnessRepos(a?.[s.id]?.data ?? [])]));
   });
+  const [harnesses, { refetch: refetchHarness }] = createResource<PerServer<HarnessRepo[]>, string | false>(harnessRefs, async (key, { value }) => {
+    const refs = new Map(JSON.parse(key as string) as [string, { key: string; name: string; root: string }[]][]);
+    return perServer([...refs.keys()], value, (id) => api.harnessScan(id, refs.get(id) ?? []));
+  });
+  const harnessSources = createMemo(() => sourcesOf(viewServers(), harnesses() ?? {}));
+  /** The harness of one server's machine (chat's slash commands, QUICKHACKS, OPEN REPOSITORY). */
+  const harnessOf = (server: string | null | undefined) => (server ? harnesses()?.[server]?.data : undefined);
 
-  // QUICKHACKS: pinned harness launchers (Deck's quickhacks.json).
+  // QUICKHACKS: pinned harness launchers (Deck's quickhacks.json), each of the server it was pinned from.
   const [hacksSaved, { mutate: setHacksSaved }] = createResource(() => api.quickhacksGet().catch(() => ({ hacks: [], collapsed: false })));
   const saveHacks = (next: { hacks: Hack[]; collapsed: boolean }) => {
     setHacksSaved(next);
     api.quickhacksSet(next).then((saved) => setHacksSaved(saved)).catch((e) => showError(String(e)));
   };
   const hacksWidth = () => (hacksSaved()?.collapsed ? 30 : hacksWidthRaw());
+  /** COPY TO / MOVE TO for a pinned hack: it lands on the other server (its harness entry there, when it has one). */
+  const hackMenu = (e: MouseEvent, h: Hack) => {
+    const from = h.server ?? homeOf(connected());
+    if (!from) return;
+    const items = transferItems(from, (mode, to) => {
+      const saved = hacksSaved();
+      if (!saved) return;
+      const next = transferHack(saved.hacks, h.id, to.id, mode === "move", harnessOf(to.id));
+      saveHacks({ ...saved, hacks: next });
+      const there = hackItemIn(h, harnessOf(to.id));
+      showError(`/${h.name} ${mode === "move" ? "moved" : "copied"} to ${to.name}${there === null ? " — not in its harness yet: copy the skill there too (HARNESS › PERSONAL › COPY TO)" : ""}`);
+    });
+    setMenu({ x: e.clientX, y: e.clientY, title: `/${h.name}`.toUpperCase(), items });
+  };
+  const hackSources = createMemo(() => viewServers().map((s) => ({
+    id: s.id, name: s.name, kind: s.kind, remote: !!s.remote,
+    data: { hacks: (hacksSaved()?.hacks ?? []).filter((h) => belongsTo(h, s, homeOf(connected()))), harness: harnessOf(s.id) },
+    error: s.status.state === "offline" ? s.status.error ?? "offline" : null,
+  })));
 
-  // UPLINK: behind/ahead per open checkout (local git, after each tree and
-  // every minute), `git fetch` of each repo root every 5 minutes, the pull log.
+  // UPLINK: behind/ahead per open checkout (git on that server's machine,
+  // after each tree and every minute), `git fetch` of each repo root every
+  // 5 minutes, the pull log (each pull tagged with its server).
   const [gitSync, setGitSync] = createSignal<Record<string, GitSync>>({});
-  const checkoutPaths = () => [...new Set((tree()?.workspaces ?? []).map((w) => w.worktree?.checkout_path).filter((x): x is string => !!x))];
-  const repoRoots = () => [...new Set((tree()?.workspaces ?? []).filter((w) => w.worktree && !w.worktree.is_linked_worktree).map((w) => w.worktree!.checkout_path).filter((x): x is string => !!x))];
+  /** Checkout paths of the open spaces per server (`roots`: main checkouts only). */
+  const checkoutsByServer = (roots: boolean) => {
+    const out = new Map<string, Set<string>>();
+    for (const w of fullTree()?.workspaces ?? []) {
+      const path = w.worktree?.checkout_path;
+      if (!path || (roots && w.worktree?.is_linked_worktree)) continue;
+      const id = serverOf(w.workspace_id);
+      if (!out.has(id)) out.set(id, new Set());
+      out.get(id)!.add(path);
+    }
+    return out;
+  };
   let syncAt = 0;
   const refreshSync = async (force = false) => {
     if (!force && Date.now() - syncAt < 20_000) return;
     syncAt = Date.now();
-    const paths = checkoutPaths();
-    if (!paths.length) return;
-    try { setGitSync(await api.uplinkSync(paths)); } catch { /* git missing or busy: keep the last state */ }
+    const parts = await Promise.all([...checkoutsByServer(false)].map(([id, paths]) =>
+      api.uplinkSync(id, [...paths]).catch(() => ({} as Record<string, GitSync>)))); // git missing or busy: nothing new for that server
+    setGitSync((prev) => Object.assign({ ...prev }, ...parts));
   };
-  createEffect(() => { if (tree()) void refreshSync(); });
+  const fetchRoots = () => Promise.all([...checkoutsByServer(true)].map(([id, roots]) => api.uplinkFetch(id, [...roots]).catch(() => ({})))).then(() => refreshSync(true));
+  createEffect(() => { if (fullTree()) void refreshSync(); });
   onMount(() => {
     const t1 = setInterval(() => void refreshSync(true), 60_000);
-    const t2 = setInterval(() => { const r = repoRoots(); if (r.length) api.uplinkFetch(r).then(() => refreshSync(true)).catch(() => {}); }, 5 * 60_000);
-    setTimeout(() => { const r = repoRoots(); if (r.length) api.uplinkFetch(r).then(() => refreshSync(true)).catch(() => {}); }, 8_000);
+    const t2 = setInterval(() => void fetchRoots(), 5 * 60_000);
+    setTimeout(() => void fetchRoots(), 8_000);
     onCleanup(() => { clearInterval(t1); clearInterval(t2); });
   });
   const [uplink, { refetch: refetchUplink, mutate: setUplink }] = createResource(() => api.uplinkList().then((r) => r.updates).catch(() => []));
   const [uplinkError, setUplinkError] = createSignal<string | null>(null);
-  const unseenUpdates = () => (uplink() ?? []).filter((u) => !u.seen).length;
+  const uplinkSources = createMemo(() => viewServers().map((s) => ({
+    id: s.id, name: s.name, kind: s.kind, remote: !!s.remote,
+    data: (uplink() ?? []).filter((u) => belongsTo(u, s, homeOf(connected()))),
+    error: null as string | null,
+  })));
+  const unseenUpdates = () => uplinkSources().reduce((n, s) => n + (s.data ?? []).filter((u) => !u.seen).length, 0);
   const pull = async (w: Workspace) => {
     const path = w.worktree?.checkout_path;
     if (!path) { showError("not a git checkout"); return; }
     const repo = w.worktree?.repo_name ?? w.label;
     showError(`pulling ${repo} · ${w.worktree?.branch ?? w.label}…`);
     try {
-      const u = await api.uplinkPull(repo, path);
+      const u = await api.uplinkPull(serverOf(w.workspace_id), repo, path);
       setUplinkError(null);
       refetchUplink();
       refreshSync(true);
@@ -436,7 +520,7 @@ export default function App() {
     const open = new Set((fullTree()?.workspaces ?? []).filter((w) => target === null || serverOf(w.workspace_id) === target).map((w) => norm(w.worktree?.checkout_path ?? "")).filter(Boolean));
     // A server on another machine: the folders Claude Code knows there, never this computer's.
     if (isRemote(target)) return (remoteFolders() ?? []).map((f) => ({ name: f.name, root: f.root, open: open.has(norm(f.root)) }));
-    return (harness() ?? []).filter((r) => !r.personal && r.exists).map((r) => ({ name: r.name, root: r.root, open: open.has(norm(r.root)) }));
+    return (harnessOf(target) ?? []).filter((r) => !r.personal && r.exists).map((r) => ({ name: r.name, root: r.root, open: open.has(norm(r.root)) }));
   };
   /** Opens `root` on the box's server; a failure is thrown for the box to show. */
   const openRepo = async (root: string) => {
@@ -547,30 +631,29 @@ export default function App() {
       if (!xfer()) showError(`transfer: ${m}`);
     });
   };
-  // ---- COPY TO / MOVE TO for the personal harness (~/.claude of this computer) ----
+  // ---- COPY TO / MOVE TO for the personal harness (~/.claude of a server's machine) ----
   type HarnessXfer = { mode: "copy" | "move"; items: HarnessPick[]; only?: string; from: { id: string; name: string }; to: { id: string; name: string } };
   const [hx, setHx] = createSignal<HarnessXfer | null>(null);
   const [hxState, setHxState] = createSignal<TransferState | null>(null);
-  /** A server on this computer: its machine's bridge packs the personal harness HARNESS shows. */
-  const localDeck = () => connected().find((s) => !s.remote);
-  const personalPicks = (): HarnessPick[] => {
-    const r = harness()?.find((x) => x.personal);
+  /** The personal harness of `server`'s machine, as HARNESS shows it; that machine's bridge packs it. */
+  const personalPicks = (server: string): HarnessPick[] => {
+    const r = harnessOf(server)?.find((x) => x.personal);
     if (!r) return [];
     return r.items.flatMap((i) => { const rel = harnessRel(i, r.root); return rel ? [{ rel, kind: i.kind, name: i.name }] : []; });
   };
-  const harnessMenu = (e: MouseEvent, item?: HarnessItem) => {
-    const r = harness()?.find((x) => x.personal);
+  const harnessMenu = (server: string, e: MouseEvent, item?: HarnessItem) => {
+    const r = harnessOf(server)?.find((x) => x.personal);
     const rel = item && r ? harnessRel(item, r.root) : null;
     const title = item ? item.name.toUpperCase() : "PERSONAL";
     if (item && !rel) { setMenu({ x: e.clientX, y: e.clientY, title, items: [{ label: "STAYS ON THIS MACHINE", hint: "settings, MCP and hooks do not travel", disabled: true }] }); return; }
-    const src = localDeck();
+    const src = connected().find((s) => s.id === server);
     const items: MenuItem[] = src
       ? transferItems(src.id, (mode, to) => {
           if (hxState() && !hxState()!.error && !hxState()!.done) { showError("a harness transfer is already running"); return; }
           setHxState(null);
-          setHx({ mode, items: personalPicks(), only: rel ?? undefined, from: { id: src.id, name: "this computer" }, to });
+          setHx({ mode, items: personalPicks(src.id), only: rel ?? undefined, from: { id: src.id, name: src.remote ? src.name : "this computer" }, to });
         }, true)
-      : [{ label: "COPY TO · MOVE TO", hint: "connect a server on this computer", disabled: true }];
+      : [{ label: "COPY TO · MOVE TO", hint: "that server is not connected", disabled: true }];
     setMenu({ x: e.clientX, y: e.clientY, title, items });
   };
   const startHarnessTransfer = (items: string[], onConflict: "overwrite" | "skip" | "keep_both") => {
@@ -806,22 +889,46 @@ export default function App() {
     onCleanup(() => { un1?.(); un2?.(); un3?.(); clearInterval(timer); clearInterval(updTimer); refetchTreeSoon.cancel(); window.removeEventListener("keydown", onKey, true); clearTimeout(errorTimer); });
   });
 
-  // M4: an agent that starts waiting for input while its pane is not on
-  // screen (or the window is in the background) raises an OS notification.
-  let lastStatus = new Map<string, string>();
+  // NOTIFICATIONS (notify.ts): an agent on any connected server that
+  // finishes its turn or starts waiting for the user, while its session is
+  // not the one in view (or Deck is in the background), raises a Windows
+  // notification and/or a sound. Getting the focus back soon after opens it.
+  const [notifySettings, setNotifySettings] = createSignal<NotifySettings>(loadNotify());
+  const sounds = { done: new Audio(doneSound), request: new Audio(requestSound) };
+  let lastStatus = new Map<string, AgentStatus>();
+  let pendingJump: { pane: string; at: number } | null = null;
   createEffect(() => {
     const t = fullTree();
     if (!t) return;
-    const now = new Map(t.agents.map((a) => [a.pane_id, a.agent_status] as const));
-    const onScreen = currentPane();
-    const focused = typeof document !== "undefined" && document.hasFocus();
-    for (const a of t.agents) {
-      const before = lastStatus.get(a.pane_id);
-      if (a.agent_status === "blocked" && before !== undefined && before !== "blocked" && (a.pane_id !== onScreen || !focused)) {
-        api.notify("Agent is waiting", `${agentName(t, a)} needs your input`).catch(() => {});
-      }
+    // A headless session's own stream knows its state before the tree does.
+    const now = new Map(t.agents.map((a) => {
+      const l = agentOf(a.pane_id);
+      return [a.pane_id, l ? agentStatus(l) : a.agent_status] as const;
+    }));
+    const look = { focused: typeof document !== "undefined" && document.hasFocus(), selected: currentPane(), deckView: view() === "deck" };
+    const s = notifySettings();
+    let sound: NotifyKind | null = null;
+    for (const { pane, kind } of transitions(lastStatus, now)) {
+      if (!shouldNotify(s, kind, pane, look)) continue;
+      const a = t.agents.find((x) => x.pane_id === pane);
+      const srv = connected().length > 1 ? ` @ ${connected().find((x) => x.id === serverOf(pane))?.name ?? serverOf(pane)}` : "";
+      const { title, body } = notifyText(kind, `${a ? agentName(t, a) : pane}${srv}`);
+      api.notify(title, body).catch(() => {});
+      if (!look.focused) pendingJump = { pane, at: Date.now() };
+      if (kind === "request" || !sound) sound = kind;
     }
+    if (sound && s.sound) { const a = sounds[sound]; a.currentTime = 0; a.play().catch(() => {}); }
     lastStatus = now;
+  });
+  onMount(() => {
+    // Clicking the notification brings Deck to the front: open that session.
+    const onFocusJump = () => {
+      const j = pendingJump;
+      pendingJump = null;
+      if (j && Date.now() - j.at < 120_000 && fullTree()?.panes.some((x) => x.pane_id === j.pane)) { setView("deck"); selectPane(j.pane); }
+    };
+    window.addEventListener("focus", onFocusJump);
+    onCleanup(() => window.removeEventListener("focus", onFocusJump));
   });
 
   const activeAccount = () => accounts()?.accounts.find((a) => a.active);
@@ -872,7 +979,7 @@ export default function App() {
           </button>
           <button class={`vtab ${view() === "harness" ? "on" : ""}`} onClick={() => setView("harness")} title="Claude Code configuration per repository">▞ HARNESS</button>
           <button class={`vtab ${view() === "uplink" ? "on" : ""}`} onClick={() => setView("uplink")} title="what git pull brought in">▞ UPLINK{unseenUpdates() ? ` · ${unseenUpdates()}` : ""}</button>
-          <button class={`vtab ${view() === "archive" ? "on" : ""}`} onClick={() => setView("archive")} title="closed spaces kept for restore">▞ ARCHIVE{(archive() ?? []).length ? ` · ${(archive() ?? []).filter((e) => e.status === "closed").length}` : ""}</button>
+          <button class={`vtab ${view() === "archive" ? "on" : ""}`} onClick={() => setView("archive")} title="closed spaces kept for restore">▞ ARCHIVE{archiveClosed() ? ` · ${archiveClosed()}` : ""}</button>
         </div>
         <span class={`micro link ${linkBad() ? "bad" : ""}`} title={connected().map((s) => `${s.name}: ${isDown(s.id) ? down()[s.id] ?? s.status.error ?? "offline" : s.status.state}`).join("\n")}>{linkLabel()}</span>
         <Show when={actionError()}>{(m) => <span class="micro toast" title={m()}>✕ {m()}</span>}</Show>
@@ -908,13 +1015,13 @@ export default function App() {
       </header>
 
       <Show when={view() === "harness"}>
-        <HarnessView repos={harness()} error={harnessError()} groups={groups()} onGroups={saveGroups} onRefresh={() => refetchHarness()} onPersonalMenu={harnessMenu} />
+        <HarnessView sources={harnessSources()} groups={groups()} onGroups={saveGroups} onRefresh={() => refetchHarness()} onPersonalMenu={harnessMenu} />
       </Show>
       <Show when={view() === "uplink"}>
-        <UplinkView updates={uplink()} error={uplinkError()} onRemove={(id) => api.uplinkRemove(id).then((r) => setUplink(r.updates)).catch((e) => setUplinkError(String(e)))} onRefresh={() => refetchUplink()} />
+        <UplinkView sources={uplinkSources()} error={uplinkError()} onRemove={(id) => api.uplinkRemove(id).then((r) => setUplink(r.updates)).catch((e) => setUplinkError(String(e)))} onRefresh={() => refetchUplink()} />
       </Show>
       <Show when={view() === "archive"}>
-        <ArchiveView entries={archive()} busy={archiveBusy()} error={archiveError()} onRestore={archiveRestore} onDeleteMany={archiveDeleteMany} onSummarize={archiveSummarize} onRefresh={() => refetchArchive()} groups={groups()} onGroups={saveGroups} />
+        <ArchiveView sources={archiveSources()} busy={archiveBusy()} error={archiveError()} onRestore={archiveRestore} onDeleteMany={archiveDeleteMany} onSummarize={archiveSummarize} onRefresh={() => refetchArchive()} groups={groups()} onGroups={saveGroups} />
       </Show>
       <Show when={view() === "deck"}>
       <Sidebar
@@ -965,10 +1072,10 @@ export default function App() {
             <Show when={headless(id())} fallback={
               <Show when={!termPanes().has(id()) && claudeSession(id())}
                 fallback={<TerminalView paneId={id()} tree={tree()} outputTick={outputTick()} onMenu={setMenu} chat={claudeSession(id()) ? () => setPaneView(id(), "chat") : undefined} />}>
-                {(sid) => <ChatView paneId={id()} sessionId={sid()} tree={tree()} outputTick={outputTick()} harness={harness()} onTerminal={() => setPaneView(id(), "term")} />}
+                {(sid) => <ChatView paneId={id()} sessionId={sid()} tree={tree()} outputTick={outputTick()} harness={harnessOf(serverOf(id()))} onTerminal={() => setPaneView(id(), "term")} />}
               </Show>
             }>
-              <ChatView paneId={id()} sessionId={claudeSession(id()) ?? ""} tree={tree()} outputTick={outputTick()} harness={harness()} agent={() => agentOf(id())}
+              <ChatView paneId={id()} sessionId={claudeSession(id()) ?? ""} tree={tree()} outputTick={outputTick()} harness={harnessOf(serverOf(id()))} agent={() => agentOf(id())}
                 machine={connected().find((s) => s.id === serverOf(id()))?.name}
                 signIn={() => (
                   // Shown while `signInNeeded` holds; the card itself is created once,
@@ -983,10 +1090,10 @@ export default function App() {
         </Show>
         <Show when={offline() && connected().length ? offline() : null}>{(m) => <div class="offline">◇ {connected().length > 1 ? "NO SERVER REACHABLE" : "HERDR OFFLINE"} — {m()}</div>}</Show>
       </main>
-      <QuickHacks hacks={hacksSaved()?.hacks ?? []} collapsed={hacksSaved()?.collapsed ?? false} harness={harness()}
+      <QuickHacks hacks={hacksSaved()?.hacks ?? []} sources={hackSources()} collapsed={hacksSaved()?.collapsed ?? false}
         onSave={(hacks) => saveHacks({ hacks, collapsed: hacksSaved()?.collapsed ?? false })}
         onCollapse={(collapsed) => saveHacks({ hacks: hacksSaved()?.hacks ?? [], collapsed })}
-        onOpenPane={(id) => { setSelectedPane(id); refetchTree(); }} onError={showError} server={targetServer()} />
+        onOpenPane={(id) => { setSelectedPane(id); refetchTree(); }} onError={showError} onHackMenu={hackMenu} />
       </Show>
 
       <KeyBar tree={tree()} selectedPane={currentPane()} account={activeAccount()} waiting={waiting()}
@@ -1005,7 +1112,11 @@ export default function App() {
           onRename={(id, name) => serverCall(api.serverRename(id, name))}
           onForget={(id) => serverCall(api.serverForget(id))} onRemoveHost={(m) => serverCall(api.serverRemoveHost(m))}
           onProbe={api.serverProbe} onAddHost={(u, h, port, sockets) => api.serverAddHost(u, h, port, sockets).then((v) => { setServers(v); setPrefsError(null); })}
-          active={accountsServer()} onClose={closePrefs} />
+          active={accountsServer()} notify={notifySettings()} onNotify={(n) => { setNotifySettings(n); saveNotify(n); }}
+          onTestSound={(k) => { const a = sounds[k]; a.currentTime = 0; a.play().catch(() => {}); }}
+          chatDefaults={chatDefaults()} onChatDefaults={(d) => { setChatDefaults(d); saveChatDefaults(d); }}
+          models={[...new Set((fullTree()?.panes ?? []).flatMap((x) => (agentOf(x.pane_id)?.models ?? []).map((m) => m.value)))]}
+          onClose={closePrefs} />
       </Show>
       <Show when={newTabFor()}>{(t) => { const target = t(); return <NewTabBox initial={remembered("deck.newTabKind") ?? "claude"} onPick={(k) => openTab(target, k)} onClose={() => setNewTabFor(null)} />; }}</Show>
       <Show when={repoBox()}><NewRepoBox known={knownRepos()} onPick={openRepo} onClose={() => setRepoBox(false)} check={checkFolder} create={createFolder}

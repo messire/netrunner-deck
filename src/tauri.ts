@@ -396,6 +396,22 @@ const fake = (() => {
         { kind: "agent", name: "reviewer", path: "C:/Users/me/.claude/agents/reviewer.md", size: 700, mtime_ms: Date.now(), local: false, tags: [] },
       ] }];
       case "harness_read": return "# stand-in\n\nfile text";
+      // Per-server views: the remote box answers like a deck-server older than this Deck.
+      case "archive_list": {
+        if (String(args.server).includes("build-box")) throw new Error("the server refused deck.archive.scan: not a deck machine method");
+        const now = Date.now();
+        return [{ id: `${args.server}-a1b2c3d4-0000-0000-0000-000000000000`.slice(-36), source: "claude", label: "netrunner-deck", cwd: "C:/Workspace/netrunner-deck", linked_worktree: false,
+          sessions: [{ tab_label: "", agent: "claude", session_id: "x", cwd: "C:/Workspace/netrunner-deck", resumable: true }],
+          last_active_ms: now - 3600_000, prompt: `a session on ${args.server}`, prompts: 3, summary_state: "none", status: "closed", server: args.server }];
+      }
+      case "archive_groups_get": return [];
+      case "uplink_list": case "uplink_seen": return { updates: [{ id: "u1", repo: "netrunner-deck", path: "C:/Workspace/netrunner-deck", branch: "main", from: "1db958d", to: "2ab34cd", at_ms: Date.now() - 600_000, commits: [], seen: true, server: "deck-server/try" }] };
+      case "uplink_sync": case "uplink_fetch": return {};
+      case "quickhacks_get": return { collapsed: false, hacks: [
+        { id: "h1", name: "deploy", kind: "skill", source: "personal", path: "C:/Users/me/.claude/skills/deploy/SKILL.md", description: "ship it" },
+        { id: "h2", name: "review", kind: "command", source: "personal", path: "/home/dev/.claude/commands/review.md", server: "dev@build-box.example.com/deck-server" },
+      ] };
+      case "quickhacks_set": return args.saved;
       default: throw new Error(`browser stand-in: unknown command ${cmd}`);
     }
   };
