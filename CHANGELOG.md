@@ -4,6 +4,12 @@ Versions follow the rule in [README → Versioning](README.md#versioning): patch
 
 ## Unreleased
 
+## [0.11.0] — 2026-11-26
+- Chat: agent replies no longer show blank lines between list items and after line breaks; lists and paragraphs are tight.
+- Chat: `inline code` is a highlighted chip, in the agent's replies and in your own messages (```fenced``` blocks too), and while you type it in the message input.
+- Chat: attached images are same-size rounded thumbnails, in messages and above the input; the remove button is a small round × shown on hover. The `[Image #N]` chip is gone from the input of chat-only sessions.
+- Deck looks for a new release every 10 minutes and when its window gets focus (was at start and every 4 hours).
+
 ## [0.10.1] — 2026-11-25
 - SECRETS lists every machine with a connected server, remote ones too (it showed only this PC), as tabs at the top; it opens on the selected session's machine. CONNECTIONS lists the same machines.
 - SECRETS: COPY TO ▾ merges the shown `.env` into another machine's by key (same keys replaced, new keys appended, the rest kept) after a confirmation "N new, M replaced on <machine>".
