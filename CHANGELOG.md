@@ -4,7 +4,8 @@ Versions follow the rule in [README → Versioning](README.md#versioning): patch
 
 ## Unreleased
 
-## [0.12.0] — 2026-11-27
+## [0.12.1] — 2026-11-27
+(0.12.0 was tagged but never published: its build failed a formatting check. Everything below is new since 0.11.1.)
 - PREFERENCES › SERVERS: STOP on a server on this computer (Herdr or deck-server) shuts it down after a second click (STOP SERVER?); its sessions and terminals end. Remote servers have no STOP.
 - A chat reopened by COPY TO / MOVE TO or RESTORE no longer shows WORKING forever: what a slash command such as `/model` printed, echoed back after a resume, is not a new turn (Deck and deck-server).
 - Windows notifications come from Netrunner Deck, with its name and icon, not from "Windows PowerShell" (also in a dev build).
