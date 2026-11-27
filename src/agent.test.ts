@@ -95,6 +95,8 @@ describe("applyMsg", () => {
   it("a tool result is not a new turn; a cancel closes the ask", () => {
     let a = applyMsg(emptyAgent(), { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } });
     expect(a.busy).toBe(false);
+    a = applyMsg(a, { type: "user", isReplay: true, message: { content: "<local-command-stdout>Set model to `opus`</local-command-stdout>" } });
+    expect(a.busy).toBe(false);
     a = applyMsg(a, { type: "control_request", request_id: "q", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "ls" } } });
     expect(agentStatus(a)).toBe("blocked");
     a = applyMsg(a, { type: "control_cancel_request", request_id: "q" });

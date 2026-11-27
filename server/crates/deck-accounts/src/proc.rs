@@ -62,11 +62,47 @@ pub fn ssh_command(existing: Option<String>) -> String {
     }
 }
 
+/// `git -C dir args…` with `dir` trusted for this one command: a checkout
+/// made by an elevated Herdr is owned by Administrators, and git refuses
+/// such a "dubious ownership" repository (then `git diff` even falls back
+/// to comparing two plain folders and prints its usage). Deck only ever
+/// runs git in folders the user picked, so that one folder is trusted.
+pub fn git_at(dir: &Path) -> Command {
+    let mut command = git();
+    command
+        .arg("-c")
+        .arg(format!("safe.directory={}", safe_directory(dir)))
+        .arg("-C")
+        .arg(dir);
+    command
+}
+
+/// `dir` as `safe.directory` wants it: forward slashes, no `\\?\` prefix.
+pub fn safe_directory(dir: &Path) -> String {
+    let s = dir.to_string_lossy();
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    s.replace('\\', "/").trim_end_matches('/').to_string()
+}
+
+/// The words of a git failure worth showing: its `fatal:` / `error:` line
+/// when there is one (never a usage dump), else the end of what it said.
+pub fn git_error(stderr: &str) -> String {
+    let lines = || stderr.lines().map(str::trim).filter(|l| !l.is_empty());
+    lines()
+        .find(|l| l.starts_with("fatal:") || l.starts_with("error:"))
+        .map(str::to_string)
+        .or_else(|| {
+            lines()
+                .next()
+                .filter(|l| l.starts_with("usage:"))
+                .map(|l| format!("git refused the command ({l})"))
+        })
+        .unwrap_or_else(|| tail(stderr, 600))
+}
+
 /// `git -C dir args…`, its output; a failure carries git's own words.
 pub fn git_in(dir: &Path, args: &[&str]) -> crate::Result<Output> {
-    let out = git()
-        .arg("-C")
-        .arg(dir)
+    let out = git_at(dir)
         .args(args)
         .output()
         .map_err(|e| format!("cannot run git: {e}"))?;
@@ -74,9 +110,10 @@ pub fn git_in(dir: &Path, args: &[&str]) -> crate::Result<Output> {
         Ok(out)
     } else {
         Err(format!(
-            "git {} failed: {}",
+            "git {} failed in {}: {}",
             args.first().copied().unwrap_or_default(),
-            tail(&String::from_utf8_lossy(&out.stderr), 600)
+            dir.display(),
+            git_error(&String::from_utf8_lossy(&out.stderr))
         ))
     }
 }
@@ -102,6 +139,22 @@ pub fn tail(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_git_failure_shows_its_fatal_line_not_a_usage_dump() {
+        let dump = "usage: git diff --no-index [<options>] <path> <path>\n\nDiff output format options\n    -p, --patch\n";
+        assert!(git_error(dump).starts_with("git refused the command (usage: git diff"));
+        let fatal = "warning: x\nfatal: detected dubious ownership in repository at 'C:/r'\nTo add an exception...";
+        assert_eq!(
+            git_error(fatal),
+            "fatal: detected dubious ownership in repository at 'C:/r'"
+        );
+        assert_eq!(git_error("something else"), "something else");
+        assert_eq!(
+            safe_directory(Path::new(r"\\?\C:\Users\me\wt\")),
+            "C:/Users/me/wt"
+        );
+    }
 
     #[test]
     fn ssh_never_asks() {

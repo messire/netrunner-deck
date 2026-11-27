@@ -23,6 +23,7 @@ export default function Prefs(p: {
   onScan: () => void;
   onConnect: (id: string) => void;
   onDisconnect: (id: string) => void;
+  onStop: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onForget: (id: string) => void;
   onRemoveHost: (machine: string) => void;
@@ -122,7 +123,14 @@ export default function Prefs(p: {
         </td>
         <td class="mono">{s().connected && s().status.state === "online" ? p.panes(s().id) : "—"}</td>
         <td class="act">
-          <Show when={armed() !== s().id}>
+          <Show when={!s().remote && s().status.state === "online" && armed() !== s().id}>
+            <Show when={armed() === `stop:${s().id}`} fallback={
+              <button class="btn" title="shut this server down: its sessions and terminals end" onClick={() => setArmed(`stop:${s().id}`)}>STOP</button>}>
+              <button class="btn danger" title="shut the server down now — every session and terminal in it ends" onBlur={() => setArmed(null)}
+                      ref={(el) => setTimeout(() => el.focus(), 0)} onClick={() => { setArmed(null); p.onStop(s().id); }}>STOP SERVER?</button>
+            </Show>
+          </Show>
+          <Show when={armed() !== s().id && armed() !== `stop:${s().id}`}>
             <Show when={!s().connected} fallback={
               <Show when={s().status.state === "offline"} fallback={<button class="btn" onClick={() => setRenaming(s().id)}>RENAME</button>}>
                 <button class="btn" onClick={p.onScan}>RETRY</button>

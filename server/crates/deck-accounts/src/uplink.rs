@@ -11,9 +11,7 @@ use serde_json::{json, Value};
 
 /// `git -C cwd args…` without a window or a prompt: stdout, or the error's words.
 pub fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let out = crate::proc::git()
-        .arg("-C")
-        .arg(cwd)
+    let out = crate::proc::git_at(std::path::Path::new(cwd))
         .args(args)
         .output()
         .map_err(|e| format!("git: {e}"))?;
@@ -23,7 +21,7 @@ pub fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
         Err(format!(
             "git {}: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
+            crate::proc::git_error(&String::from_utf8_lossy(&out.stderr))
         ))
     }
 }
@@ -122,8 +120,8 @@ pub fn sync_many(paths: &[String]) -> HashMap<String, Sync> {
 
 /// `git fetch --quiet --prune` for a repository root (network).
 pub fn fetch(root: &str) -> Result<(), String> {
-    let out = crate::proc::git()
-        .args(["-C", root, "fetch", "--quiet", "--prune"])
+    let out = crate::proc::git_at(std::path::Path::new(root))
+        .args(["fetch", "--quiet", "--prune"])
         .output()
         .map_err(|e| format!("git fetch: {e}"))?;
     if out.status.success() {
@@ -235,8 +233,8 @@ pub fn pull(repo: &str, path: &str) -> Result<Update, String> {
     let branch = git(path, &["rev-parse", "--abbrev-ref", "HEAD"])?
         .trim()
         .to_string();
-    let out = crate::proc::git()
-        .args(["-C", path, "pull", "--ff-only", "--quiet"])
+    let out = crate::proc::git_at(std::path::Path::new(path))
+        .args(["pull", "--ff-only", "--quiet"])
         .output()
         .map_err(|e| format!("git pull: {e}"))?;
     if !out.status.success() {

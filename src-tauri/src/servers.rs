@@ -831,6 +831,27 @@ impl Registry {
         Ok(())
     }
 
+    /// STOP of a server on this machine: Deck lets go of it, then asks it to
+    /// shut down (`server.stop`, which ends its panes too). Remote servers are
+    /// not stopped from here.
+    pub fn stop(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        let (endpoint, _) = self
+            .endpoint_of(&self.lock(), id)
+            .ok_or_else(|| format!("unknown server {id}"))?;
+        if endpoint.is_remote() {
+            return Err("only a server on this machine can be stopped".into());
+        }
+        self.disconnect(app, id)?;
+        crate::herdr::call(&endpoint, "server.stop", serde_json::json!({}))
+            .map_err(|e| e.to_string())?;
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            app.state::<Registry>().scan(&app);
+        });
+        Ok(())
+    }
+
     pub fn disconnect(&self, app: &AppHandle, id: &str) -> Result<(), String> {
         let mut st = self.lock();
         if let Some(s) = st.prefs.servers.iter_mut().find(|s| s.id == id) {
@@ -1161,6 +1182,16 @@ pub fn server_connect(app: AppHandle, id: String) -> Result<ServersView, String>
 pub fn server_disconnect(app: AppHandle, id: String) -> Result<ServersView, String> {
     app.state::<Registry>().disconnect(&app, &id)?;
     Ok(view_of(&app))
+}
+
+#[tauri::command]
+pub async fn server_stop(app: AppHandle, id: String) -> Result<ServersView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Registry>().stop(&app, &id)?;
+        Ok(view_of(&app))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

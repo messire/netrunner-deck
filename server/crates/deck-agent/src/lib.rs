@@ -507,12 +507,25 @@ fn is_user_turn(msg: &Value) -> bool {
         return false;
     }
     match msg.pointer("/message/content") {
-        Some(Value::String(_)) => true,
-        Some(Value::Array(blocks)) => !blocks
-            .iter()
-            .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result")),
+        Some(Value::String(text)) => !is_local_command_output(text),
+        Some(Value::Array(blocks)) => {
+            !blocks
+                .iter()
+                .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+                && !blocks.iter().any(|b| {
+                    b.get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_local_command_output)
+                })
+        }
         _ => false,
     }
+}
+
+/// What a slash command such as `/model` printed, echoed back as a user
+/// message (`--replay-user-messages`): no turn follows it.
+fn is_local_command_output(text: &str) -> bool {
+    text.trim_start().starts_with("<local-command-")
 }
 
 /// Follows the event stream and says what the pane's status is.

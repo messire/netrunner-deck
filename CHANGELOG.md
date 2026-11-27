@@ -4,6 +4,14 @@ Versions follow the rule in [README → Versioning](README.md#versioning): patch
 
 ## Unreleased
 
+## [0.12.0] — 2026-11-27
+- PREFERENCES › SERVERS: STOP on a server on this computer (Herdr or deck-server) shuts it down after a second click (STOP SERVER?); its sessions and terminals end. Remote servers have no STOP.
+- A chat reopened by COPY TO / MOVE TO or RESTORE no longer shows WORKING forever: what a slash command such as `/model` printed, echoed back after a resume, is not a new turn (Deck and deck-server).
+- Windows notifications come from Netrunner Deck, with its name and icon, not from "Windows PowerShell" (also in a dev build).
+- COPY TO / UPLINK work in checkouts made by an elevated Herdr (owned by Administrators): git no longer refuses them as "dubious ownership", and a git failure shows its `fatal:` line instead of a usage dump.
+- The title bar no longer shows the active account and its quota; ACCOUNTS in the sidebar has it.
+- Sidebar tags (ROOT, ⎇, ↓/↑ commits) are one height.
+
 ## [0.11.1] — 2026-11-27
 - COPY TO / MOVE TO of a whole repository no longer stops on a worktree that is not on a branch: detached, missing and scratch worktrees (an agent's throwaway checkout under the temp folder) are left out, and the rest is transferred.
 - deck-server names repositories right when its session file holds Windows paths.

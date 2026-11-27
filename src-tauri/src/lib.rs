@@ -237,13 +237,52 @@ fn action_request(
 /// `blocked` while its pane is not on screen); the OS shows it.
 #[tauri::command]
 async fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
-    use tauri_plugin_notification::NotificationExt;
-    app.notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-        .map_err(|e| e.to_string())
+    // Windows: always under Deck's own AppUserModelID (registered by
+    // `register_toast_identity`), also in a dev build, which the plugin would
+    // otherwise show as "Windows PowerShell".
+    #[cfg(windows)]
+    {
+        let _ = &app;
+        tauri_winrt_notification::Toast::new(TOAST_AUMID)
+            .title(&title)
+            .text1(&body)
+            .show()
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        use tauri_plugin_notification::NotificationExt;
+        app.notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The AppUserModelID Deck's toasts are shown under; the installer's Start
+/// menu shortcut carries the same one.
+#[cfg(windows)]
+const TOAST_AUMID: &str = "dev.messire.netrunner-deck";
+
+/// Gives `TOAST_AUMID` a name and an icon, so toasts read "Netrunner Deck"
+/// with Deck's icon: `HKCU\Software\Classes\AppUserModelId\<id>` plus a PNG
+/// of the icon in the data folder. Done on every start; cheap and idempotent.
+#[cfg(windows)]
+fn register_toast_identity(data_dir: &std::path::Path) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let icon = data_dir.join("notify-icon.png");
+    let _ = std::fs::create_dir_all(data_dir);
+    let _ = std::fs::write(&icon, include_bytes!("../icons/128x128.png"));
+    let key = format!(r"HKCU\Software\Classes\AppUserModelId\{TOAST_AUMID}");
+    for (name, value) in [("DisplayName", "Netrunner Deck".to_string()), ("IconUri", icon.display().to_string())] {
+        let _ = std::process::Command::new("reg")
+            .args(["add", &key, "/v", name, "/t", "REG_SZ", "/d", &value, "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
 }
 
 /// Frontend diagnostics (the pane view's consistency check, M2) appended to
@@ -1036,6 +1075,11 @@ pub fn run() {
         .setup(|app| {
             init_tracing(app.handle());
             let data_dir = data_dir(app.handle()).unwrap_or_else(std::env::temp_dir);
+            #[cfg(windows)]
+            {
+                let dir = data_dir.clone();
+                std::thread::spawn(move || register_toast_identity(&dir));
+            }
             app.manage(servers::Registry::open(&data_dir));
             app.manage(archive::Store::open(&data_dir));
             app.manage(transcript::Watch::default());
@@ -1106,6 +1150,7 @@ pub fn run() {
             servers::servers_seen,
             servers::server_connect,
             servers::server_disconnect,
+            servers::server_stop,
             servers::server_rename,
             servers::server_add,
             servers::server_forget,

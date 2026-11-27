@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { getCurrentWindow, inTauri } from "./tauri";
-import { api, type AgentStatus, type HarnessItem, type HarnessRepo, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type AccountList, type Tab, type Pane, type Workspace, type Account, type TreeAction, type ActionOptions, UNMANAGED, zoneOf, usageOf, accountLabel } from "./api";
+import { api, type AgentStatus, type HarnessItem, type HarnessRepo, type ArchiveEntry, type GitSync, type Hack, type RepoGroup, type UpdateInfo, type Tree, type AccountList, type Tab, type Pane, type Workspace, type Account, type TreeAction, type ActionOptions, UNMANAGED, usageOf, accountLabel } from "./api";
 import Sidebar, { type SidebarSection, type SwitchError } from "./components/Sidebar";
 import ServerMenu, { dotOf, type Scope } from "./components/ServerMenu";
 import Prefs from "./components/Prefs";
@@ -998,17 +998,6 @@ export default function App() {
         )}</Show>
         <span class="sp" />
         <Pulse tree={tree()} />
-        <Show when={activeAccount()} fallback={<div class="zone danger"><i />NO LINK</div>}>
-          {(a) => {
-            const u = usageOf(a());
-            // The colour is the quota zone (safe < 50 % < public < 80 % < restricted < 100 % = danger); the text is the numbers.
-            return (
-              <div class={`zone ${zoneOf(a())}`} title="active account · 5-hour and 7-day quota used">
-                <i />{accountLabel(a())}<span class="pct">5h {u.five ?? "--"}%</span><span class="pct">7d {u.week ?? "--"}%</span>
-              </div>
-            );
-          }}
-        </Show>
         <button class="gear" title="Preferences (Ctrl+,)" aria-label={`Preferences${anyDown() ? " — a server is unreachable" : ""}${offered().some((s) => s.new) ? " — new server found" : ""}`} onClick={() => (prefsOpen() ? closePrefs() : openPrefs())}>
           <span aria-hidden="true">⚙</span>
           <Show when={anyDown()}><i class="pip bad" /></Show>
@@ -1116,7 +1105,7 @@ export default function App() {
       </Show>
       <Show when={prefsOpen()}>
         <Prefs view={servers()} panes={panesOf} scanning={scanning()} error={prefsError()} onScan={scanServers}
-          onConnect={connectServer} onDisconnect={(id) => serverCall(api.serverDisconnect(id))}
+          onConnect={connectServer} onDisconnect={(id) => serverCall(api.serverDisconnect(id))} onStop={(id) => serverCall(api.serverStop(id))}
           onRename={(id, name) => serverCall(api.serverRename(id, name))}
           onForget={(id) => serverCall(api.serverForget(id))} onRemoveHost={(m) => serverCall(api.serverRemoveHost(m))}
           onProbe={api.serverProbe} onAddHost={(u, h, port, sockets) => api.serverAddHost(u, h, port, sockets).then((v) => { setServers(v); setPrefsError(null); })}

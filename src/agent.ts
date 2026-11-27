@@ -77,9 +77,12 @@ const note = (a: AgentLive, n: Note): Note[] => [...a.notes, n].slice(-MAX_NOTES
 /** A user turn echoed back (not a tool result). */
 function isUserTurn(msg: Record<string, unknown>): boolean {
   const content = rec(msg.message)?.content;
-  if (typeof content === "string") return true;
-  return Array.isArray(content) && !content.some((b) => rec(b)?.type === "tool_result");
+  if (typeof content === "string") return !isLocalCommandOutput(content);
+  return Array.isArray(content) && !content.some((b) => rec(b)?.type === "tool_result" || isLocalCommandOutput(str(rec(b)?.text)));
 }
+
+/** What a slash command such as `/model` printed, echoed back as a user message: no turn follows it. */
+const isLocalCommandOutput = (text: string): boolean => text.trimStart().startsWith("<local-command-");
 
 /** One event (`msg` of a `deck.agent.event`) applied to the state. */
 export function applyMsg(a: AgentLive, msg: Record<string, unknown>): AgentLive {

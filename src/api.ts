@@ -268,6 +268,7 @@ export const api = {
   serversSeen: () => invoke<ServersView>("servers_seen"),
   serverConnect: (id: string) => invoke<ServersView>("server_connect", { id }),
   serverDisconnect: (id: string) => invoke<ServersView>("server_disconnect", { id }),
+  serverStop: (id: string) => invoke<ServersView>("server_stop", { id }),
   serverRename: (id: string, name: string) => invoke<ServersView>("server_rename", { id, name }),
   serverAdd: (address: string) => invoke<ServersView>("server_add", { address }),
   serverForget: (id: string) => invoke<ServersView>("server_forget", { id }),

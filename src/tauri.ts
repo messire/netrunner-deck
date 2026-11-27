@@ -216,6 +216,7 @@ const fake = (() => {
       case "servers_scan": await new Promise((r) => setTimeout(r, 400)); return view();
       case "server_connect": { const s = srv(args.id); s.connected = true; return changed(); }
       case "server_disconnect": { const s = srv(args.id); s.connected = false; s.new = false; return changed(); }
+      case "server_stop": { const s = srv(args.id); s.connected = false; s.status = { state: "offline" } as typeof s.status; return changed(); }
       case "server_rename": { const s = srv(args.id); s.name = String(args.name).trim() || s.id; return changed(); }
       case "server_probe": { await new Promise((r) => setTimeout(r, 900)); return probe(String(args.user), String(args.host), Number(args.port)).map(({ key: _k, ...p }) => p); }
       case "server_add_host": {

@@ -2355,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "netrunner-deck"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "deck-accounts",
  "serde",
@@ -2366,6 +2366,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "tauri-winrt-notification",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",

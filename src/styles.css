@@ -185,8 +185,8 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .car{width:16px;height:22px;flex:none;border:0;background:transparent;padding:0;font:700 16px var(--fm);color:var(--cy);cursor:pointer;text-align:center;line-height:22px}
 .car.yel,.car.red,.car.cy{color:var(--cy)}.car.sp{cursor:default}
 .kids{margin-left:22px;position:relative}
-.badge{font:9px var(--fm);letter-spacing:1px;color:#FF6B7A;border:1px solid rgba(255,43,74,.45);padding:0 4px;line-height:12px;flex:none}
-.badge.root{border-color:#FF6B7A}
+.badge{font:9px var(--fm);letter-spacing:1px;color:#FF6B7A;border:1px solid rgba(255,43,74,.45);padding:0 4px;line-height:1;flex:none;box-sizing:border-box;height:16px;display:inline-flex;align-items:center}
+.badge.root{border-color:#FF6B7A;font-size:8px}
 .kind{font:10.5px var(--fm);color:var(--mut);width:36px;text-align:right;flex:none;letter-spacing:.5px;overflow:hidden}
 .row .add{opacity:0;width:14px;height:14px;border:1px dashed var(--line);background:transparent;color:var(--cy);font:700 12.5px var(--fm);line-height:1;padding:0;cursor:pointer;flex:none}
 .row:hover .add{opacity:1}.row .add:hover{border-color:var(--cy);border-style:solid}
@@ -634,7 +634,7 @@ body:before{content:"";position:fixed;inset:0;background-image:radial-gradient(#
 .upd-row{margin-left:48px;min-height:32px;padding:4px 12px 4px 14px;align-items:center}
 .upd-row .pr{width:84px;flex:none;color:var(--cy)}.upd-row .pr a{color:var(--cy);text-decoration:none;border-bottom:1px dotted var(--tcy)}.upd-row .pr a:hover{color:var(--yel);border-color:var(--yel)}
 .upd-row .author{color:var(--mut);flex:none;margin-left:12px}
-.git{font:600 11px var(--fm);padding:0 5px;border:1px solid currentColor;flex:none;letter-spacing:.5px}
+.git{font:600 11px var(--fm);padding:0 5px;border:1px solid currentColor;flex:none;letter-spacing:.5px;line-height:1;box-sizing:border-box;height:16px;display:inline-flex;align-items:center}
 .git.behind{color:var(--org)}.git.ahead{color:var(--cy)}
 .row.sel .git{color:#120A10!important;border-color:#120A10}
 

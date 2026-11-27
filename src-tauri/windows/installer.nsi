@@ -967,6 +967,7 @@ Section Uninstall
     Delete "${DECK_SERVER_DIR}\deck-server.old*.exe"
     RMDir "${DECK_SERVER_DIR}"
     DeleteRegKey HKCU "${DECK_KIND_KEY}"
+    DeleteRegKey HKCU "Software\Classes\AppUserModelId\${BUNDLEID}"
   ${EndIf}
 
   !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"

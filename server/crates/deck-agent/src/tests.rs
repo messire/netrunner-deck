@@ -176,6 +176,11 @@ fn tracker_user_turn_and_cancel() {
         idle.observe(&json!({"type":"user","message":{"content":[{"type":"tool_result"}]}})),
         None
     );
+    // Nor is what `/model` printed, replayed after a resume.
+    assert_eq!(
+        idle.observe(&json!({"type":"user","isReplay":true,"message":{"role":"user","content":"<local-command-stdout>Set model to `opus`</local-command-stdout>"}})),
+        None
+    );
     let req = json!({"type":"control_request","request_id":"q","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}});
     assert_eq!(t.observe(&req), Some(Status::Blocked));
     assert_eq!(
