@@ -277,7 +277,10 @@ fn register_toast_identity(data_dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(data_dir);
     let _ = std::fs::write(&icon, include_bytes!("../icons/128x128.png"));
     let key = format!(r"HKCU\Software\Classes\AppUserModelId\{TOAST_AUMID}");
-    for (name, value) in [("DisplayName", "Netrunner Deck".to_string()), ("IconUri", icon.display().to_string())] {
+    for (name, value) in [
+        ("DisplayName", "Netrunner Deck".to_string()),
+        ("IconUri", icon.display().to_string()),
+    ] {
         let _ = std::process::Command::new("reg")
             .args(["add", &key, "/v", name, "/t", "REG_SZ", "/d", &value, "/f"])
             .creation_flags(CREATE_NO_WINDOW)
