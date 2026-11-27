@@ -378,6 +378,14 @@ export default function App() {
     api.quickhacksSet(next).then((saved) => setHacksSaved(saved)).catch((e) => showError(String(e)));
   };
   const hacksWidth = () => (hacksSaved()?.collapsed ? 30 : hacksWidthRaw());
+  // A hack pinned before hacks had a server gets this computer's deck-server
+  // once, written down, instead of a guess on every start.
+  createEffect(() => {
+    const saved = hacksSaved();
+    const home = homeOf(connected());
+    if (!saved || !home || !saved.hacks.some((h) => !h.server)) return;
+    saveHacks({ ...saved, hacks: saved.hacks.map((h) => (h.server ? h : { ...h, server: home })) });
+  });
   /** COPY TO / MOVE TO for a pinned hack: it lands on the other server (its harness entry there, when it has one). */
   const hackMenu = (e: MouseEvent, h: Hack) => {
     const from = h.server ?? homeOf(connected());

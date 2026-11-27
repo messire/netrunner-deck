@@ -642,3 +642,32 @@ fn a_branch_joins_the_same_repository_already_there() {
     let _ = std::fs::remove_dir_all(&src_root);
     let _ = std::fs::remove_dir_all(&dst_root);
 }
+
+#[test]
+fn only_worktrees_on_a_branch_on_disk_and_outside_temp_travel() {
+    let wt = |path: &str, branch: Option<&str>| Worktree {
+        path: path.into(),
+        branch: branch.map(str::to_string),
+    };
+    let list = vec![
+        wt("/r", Some("main")),
+        wt("/wt/feat", Some("feat")),
+        wt("/wt/detached", None),
+        wt("/gone", Some("old")),
+        wt(
+            r"C:\Users\me\AppData\Local\Temp\claude\x\bundle2073",
+            Some("tmp"),
+        ),
+    ];
+    let (keep, skipped) = transferable(
+        list,
+        "/r",
+        Path::new("C:/Users/me/AppData/Local/Temp"),
+        |p| p != "/gone",
+    );
+    assert_eq!(
+        keep.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
+        vec!["/r", "/wt/feat"]
+    );
+    assert_eq!(skipped.len(), 3);
+}

@@ -4,6 +4,11 @@ Versions follow the rule in [README → Versioning](README.md#versioning): patch
 
 ## Unreleased
 
+## [0.11.1] — 2026-11-27
+- COPY TO / MOVE TO of a whole repository no longer stops on a worktree that is not on a branch: detached, missing and scratch worktrees (an agent's throwaway checkout under the temp folder) are left out, and the rest is transferred.
+- deck-server names repositories right when its session file holds Windows paths.
+- QUICKHACKS: a hack copied or moved to another server stays there. An older Deck running on the same data used to drop the hack's server, so copies fell back to this computer; Deck now keeps fields it does not know, and pins each old hack to this computer's deck-server once.
+
 ## [0.11.0] — 2026-11-27
 - HARNESS, UPLINK, ARCHIVE and QUICKHACKS follow the server picked on the deck tab: what they show comes from that server's machine (its `~/.claude`, its checkouts, its closed sessions), labelled DECK or HERDR. With ALL, each server is its own section that folds like the server sections of SESSIONS. Pulls and pinned hacks are kept per server; RESTORE, DELETE and WRITE act on the entry's own server.
 - QUICKHACKS: right-click a hack → COPY TO / MOVE TO another server. A hack whose skill or command that server's harness does not have is marked NOT IN THIS HARNESS.

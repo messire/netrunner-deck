@@ -316,6 +316,35 @@ pub fn parse_worktrees(porcelain: &str) -> Vec<Worktree> {
     out
 }
 
+/// The worktrees a transfer takes: on a branch, still on disk and not a
+/// scratch checkout under the temp dir (an agent's throwaway worktree that
+/// no session shows) unless the repository itself lives there. The others
+/// are left out and named in the second list.
+pub fn transferable(
+    list: Vec<Worktree>,
+    main: &str,
+    temp: &Path,
+    exists: impl Fn(&str) -> bool,
+) -> (Vec<Worktree>, Vec<String>) {
+    let temp = temp.to_string_lossy().replace('\\', "/").to_lowercase();
+    let temp = temp.trim_end_matches('/');
+    let in_temp = |p: &str| {
+        let p = p.replace('\\', "/").to_lowercase();
+        !temp.is_empty() && (p == temp || p.starts_with(&format!("{temp}/")))
+    };
+    let scratch = |p: &str| in_temp(p) && !in_temp(main);
+    let mut keep = Vec::new();
+    let mut skipped = Vec::new();
+    for wt in list {
+        if wt.branch.is_some() && exists(&wt.path) && !scratch(&wt.path) {
+            keep.push(wt);
+        } else {
+            skipped.push(wt.path);
+        }
+    }
+    (keep, skipped)
+}
+
 fn same_path(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
         let s = s.trim_start_matches(r"\\?\").replace('\\', "/");
@@ -774,13 +803,15 @@ fn export_repo<W: Write>(
     if chosen.is_empty() {
         return Err("nothing chosen to transfer".into());
     }
-    for wt in &chosen {
-        if wt.branch.is_none() {
-            return Err(format!(
-                "{} is not on a branch (detached HEAD) — check out a branch there first",
-                wt.path
-            ));
-        }
+    // A detached, missing or scratch worktree is left out, never the whole copy.
+    let (chosen, skipped) = transferable(chosen, &main, &std::env::temp_dir(), |p| {
+        Path::new(p).is_dir()
+    });
+    if chosen.is_empty() {
+        return Err(format!(
+            "nothing on a branch to transfer: {} is not on a branch (detached HEAD) — check out a branch there first",
+            skipped.join(", ")
+        ));
     }
     let has_commits = git_in(&repo, &["rev-parse", "--verify", "-q", "HEAD"]).is_ok();
     // Root commits: the target recognises the same repository by them.
@@ -887,6 +918,7 @@ fn export_repo<W: Write>(
         "bundle": bundle,
         "remotes": remotes,
         "worktrees": worktrees,
+        "skipped": skipped,
         "sessions": sessions,
     });
     w.add_bytes(MANIFEST, manifest.to_string().as_bytes())

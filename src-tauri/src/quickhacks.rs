@@ -39,6 +39,11 @@ pub struct Hack {
     /// pinned before hacks had a server, from this computer's harness).
     #[serde(default)]
     pub server: Option<String>,
+    /// Fields a newer Deck wrote: kept as they are, so running an older
+    /// Deck on the same data never drops them (a hack's `server` was lost
+    /// that way).
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -47,6 +52,9 @@ pub struct Saved {
     pub hacks: Vec<Hack>,
     #[serde(default)]
     pub collapsed: bool,
+    /// See [`Hack::extra`].
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 pub struct Store {
@@ -381,6 +389,16 @@ pub fn worktree_create(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_fields_of_a_newer_deck_survive_a_save() {
+        let text = r#"{"hacks":[{"id":"h","name":"x","kind":"skill","source":"personal","path":"/p","server":"s","pinned_by":"later"}],"collapsed":false,"view":"v"}"#;
+        let saved: Saved = serde_json::from_str(text).unwrap();
+        assert_eq!(saved.hacks[0].server.as_deref(), Some("s"));
+        let back = serde_json::to_value(&saved).unwrap();
+        assert_eq!(back["hacks"][0]["pinned_by"], "later");
+        assert_eq!(back["view"], "v");
+    }
 
     /// A folder that exists only on the server's machine (here: nowhere on
     /// this one) is still asked for: Deck never checks its own disk.
